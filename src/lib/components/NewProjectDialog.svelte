@@ -3,13 +3,18 @@
   import { editor } from "../stores/editor.svelte";
   import * as api from "../api";
   import type { TemplateInfo } from "../api";
+  import { getGuiPreset, guiPresets, type GuiPresetId } from "../guiPresets";
+  import { preferences } from "../stores/preferences.svelte";
 
   let { onclose }: { onclose: () => void } = $props();
 
+  const initialPreset = getGuiPreset(preferences.values.defaultPreset) ?? getGuiPreset("custom");
+
   let templates = $state<TemplateInfo[]>([]);
   let selectedTemplate = $state<string>("empty");
-  let width = $state(176);
-  let height = $state(166);
+  let selectedPreset = $state<GuiPresetId>(initialPreset?.id ?? "custom");
+  let width = $state(initialPreset?.width ?? 176);
+  let height = $state(initialPreset?.height ?? 166);
   let modTarget = $state<"forge" | "fabric" | "neoforge">("forge");
 
   $effect(() => {
@@ -18,6 +23,7 @@
 
   function selectTemplate(name: string) {
     selectedTemplate = name;
+    selectedPreset = "custom";
     const t = templates.find(t => t.name === name);
     if (t) {
       width = t.default_width;
@@ -25,8 +31,31 @@
     }
   }
 
+  function selectPreset(event: Event) {
+    selectedPreset = (event.currentTarget as HTMLSelectElement).value as GuiPresetId;
+    selectedTemplate = "empty";
+    const preset = getGuiPreset(selectedPreset);
+    if (preset) {
+      width = preset.width;
+      height = preset.height;
+    }
+  }
+
+  function updateDimension(dimension: "width" | "height", event: Event) {
+    const input = event.currentTarget as HTMLInputElement;
+    const value = Math.max(Number(input.min) || 16, Math.round(input.valueAsNumber || 16));
+    if (dimension === "width") {
+      width = value;
+    } else {
+      height = value;
+    }
+    selectedPreset = "custom";
+    selectedTemplate = "empty";
+  }
+
   async function handleCreate() {
-    await project.newProject("Untitled GUI", width, height, modTarget, selectedTemplate);
+    const template = selectedTemplate === "empty" ? undefined : selectedTemplate;
+    await project.newProject("Untitled GUI", width, height, modTarget, template);
     editor.resetView();
     onclose();
   }
@@ -64,10 +93,33 @@
     </div>
 
     <div class="form-row">
+      <label for="np-preset">Preset</label>
+      <select id="np-preset" value={selectedPreset} onchange={selectPreset}>
+        {#each guiPresets as preset}
+          <option value={preset.id}>{preset.label} ({preset.width}×{preset.height})</option>
+        {/each}
+      </select>
+    </div>
+
+    <div class="form-row">
       <label for="np-width">Width</label>
-      <input id="np-width" type="number" bind:value={width} min="16" max="1024" />
+      <input
+        id="np-width"
+        type="number"
+        value={width}
+        min="16"
+        max="1024"
+        oninput={(event) => updateDimension("width", event)}
+      />
       <label for="np-height">Height</label>
-      <input id="np-height" type="number" bind:value={height} min="16" max="1024" />
+      <input
+        id="np-height"
+        type="number"
+        value={height}
+        min="16"
+        max="1024"
+        oninput={(event) => updateDimension("height", event)}
+      />
     </div>
 
     <div class="form-row">

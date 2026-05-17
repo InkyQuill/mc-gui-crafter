@@ -5,9 +5,11 @@
   import NewProjectDialog from "./NewProjectDialog.svelte";
   import ExportDialog from "./ExportDialog.svelte";
   import ProjectTabs from "./ProjectTabs.svelte";
+  import PreferencesDialog from "./PreferencesDialog.svelte";
 
   let showNewDialog = $state(false);
   let showExportDialog = $state(false);
+  let showPreferencesDialog = $state(false);
 
   async function handleOpen() {
     const path = await api.showOpenDialog();
@@ -86,6 +88,17 @@
     <button onclick={() => editor.resetView()} title="Reset view">⊡</button>
   </div>
 
+  <div class="toolbar-group">
+    <button
+      class="icon-button"
+      onclick={() => showPreferencesDialog = true}
+      title="Preferences"
+      aria-label="Open preferences"
+    >
+      ⚙
+    </button>
+  </div>
+
   <ProjectTabs
     sessions={project.sessions}
     activeProjectId={project.activeProjectId}
@@ -104,6 +117,10 @@
 
 {#if showExportDialog}
   <ExportDialog onclose={() => showExportDialog = false} />
+{/if}
+
+{#if showPreferencesDialog}
+  <PreferencesDialog onclose={() => showPreferencesDialog = false} />
 {/if}
 
 <style>
@@ -162,6 +179,12 @@
     background: #0f3460;
     color: #e94560;
     border-color: #e94560;
+  }
+
+  .icon-button {
+    width: 28px;
+    padding: 4px 0;
+    text-align: center;
   }
 
   .zoom-label {

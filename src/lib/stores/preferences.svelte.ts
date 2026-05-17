@@ -67,6 +67,12 @@ function persistPreferences(values: EditorPreferences) {
   }
 }
 
+function applyTheme(theme: EditorPreferences["theme"]) {
+  if (typeof document === "undefined") return;
+
+  document.documentElement.dataset.theme = theme;
+}
+
 function loadPreferences(): EditorPreferences {
   return normalizePreferences(readStoredPreferences());
 }
@@ -74,13 +80,19 @@ function loadPreferences(): EditorPreferences {
 class PreferencesStore {
   values = $state<EditorPreferences>(loadPreferences());
 
+  constructor() {
+    applyTheme(this.values.theme);
+  }
+
   update(changes: Partial<EditorPreferences>) {
     this.values = normalizePreferences({ ...this.values, ...changes });
+    applyTheme(this.values.theme);
     persistPreferences(this.values);
   }
 
   reset() {
     this.values = { ...defaults };
+    applyTheme(this.values.theme);
     persistPreferences(this.values);
   }
 }
