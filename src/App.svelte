@@ -8,9 +8,11 @@
   import AnimationTimeline from "./lib/components/AnimationTimeline.svelte";
   import NewProjectDialog from "./lib/components/NewProjectDialog.svelte";
   import StatusBar from "./lib/components/StatusBar.svelte";
+  import StatusMessages from "./lib/components/StatusMessages.svelte";
   import StartPanel from "./lib/components/StartPanel.svelte";
   import { project } from "./lib/stores/project.svelte";
   import { editor } from "./lib/stores/editor.svelte";
+  import { status, readableError } from "./lib/stores/status.svelte";
   import * as api from "./lib/api";
 
   let showNewDialog = $state(false);
@@ -18,8 +20,13 @@
   async function handleOpenProject() {
     const path = await api.showOpenDialog();
     if (path) {
-      await project.openProject(path);
-      editor.resetView();
+      try {
+        await project.openProject(path);
+        editor.resetView();
+        status.success("Project opened.");
+      } catch (error) {
+        status.error(`Failed to open project: ${readableError(error)}`);
+      }
     }
   }
 
@@ -41,6 +48,7 @@
 
 <div class="app">
   <Toolbar />
+  <StatusMessages />
 
   <div class="workspace">
     <nav class="sidebar-left">

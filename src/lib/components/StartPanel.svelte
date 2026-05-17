@@ -2,6 +2,7 @@
   import * as api from "../api";
   import { editor } from "../stores/editor.svelte";
   import { project, ProjectStore } from "../stores/project.svelte";
+  import { status, readableError } from "../stores/status.svelte";
   import type { McpServerStatus, TemplateInfo } from "../api";
 
   let { onnew, onopen }: { onnew: () => void; onopen: () => void | Promise<void> } = $props();
@@ -35,14 +36,11 @@
         mcpStatus = status;
         mcpUnavailable = !status;
       })
-      .catch(() => {
+      .catch(error => {
         mcpUnavailable = true;
+        status.error(`Failed to read MCP status: ${readableError(error)}`);
       });
   });
-
-  function readableError(error: unknown): string {
-    return error instanceof Error ? error.message : String(error);
-  }
 
   function pathLabel(path: string): string {
     return path.split(/[\\/]/).pop() || path;
@@ -67,6 +65,7 @@
       editor.resetView();
     } catch (error) {
       rowErrors = { ...rowErrors, [path]: readableError(error) };
+      status.error(`Failed to open project: ${rowErrors[path]}`);
     } finally {
       if (openingPath === path) {
         openingPath = null;
@@ -88,6 +87,7 @@
       editor.resetView();
     } catch (error) {
       templateError = readableError(error);
+      status.error(`Failed to create project from template: ${templateError}`);
     } finally {
       creatingTemplate = null;
     }

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { project } from "../stores/project.svelte";
   import { editor } from "../stores/editor.svelte";
+  import { status, readableError } from "../stores/status.svelte";
   import * as api from "../api";
   import NewProjectDialog from "./NewProjectDialog.svelte";
   import ExportDialog from "./ExportDialog.svelte";
@@ -16,8 +17,13 @@
   async function handleOpen() {
     const path = await api.showOpenDialog();
     if (path) {
-      await project.openProject(path);
-      editor.resetView();
+      try {
+        await project.openProject(path);
+        editor.resetView();
+        status.success("Project opened.");
+      } catch (error) {
+        status.error(`Failed to open project: ${readableError(error)}`);
+      }
     }
   }
 
@@ -25,19 +31,34 @@
     if (!project.projectPath) {
       const path = await api.showSaveDialog();
       if (path) {
-        await project.saveProjectAs(path);
+        try {
+          await project.saveProjectAs(path);
+          status.success("Project saved.");
+        } catch (error) {
+          status.error(`Failed to save project: ${readableError(error)}`);
+        }
       } else {
         return;
       }
     } else {
-      await project.saveProject();
+      try {
+        await project.saveProject();
+        status.success("Project saved.");
+      } catch (error) {
+        status.error(`Failed to save project: ${readableError(error)}`);
+      }
     }
   }
 
   async function handleSaveAs() {
     const path = await api.showSaveDialog();
     if (path) {
-      await project.saveProjectAs(path);
+      try {
+        await project.saveProjectAs(path);
+        status.success("Project saved as.");
+      } catch (error) {
+        status.error(`Failed to save project as: ${readableError(error)}`);
+      }
     }
   }
 

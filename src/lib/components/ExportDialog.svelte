@@ -1,5 +1,6 @@
 <script lang="ts">
   import { project } from "../stores/project.svelte";
+  import { status, readableError } from "../stores/status.svelte";
   import * as api from "../api";
   import type { ModTarget } from "../types";
 
@@ -44,14 +45,21 @@
         project.activeProjectId ?? undefined,
       );
       resultFiles = files;
+      status.success(`Exported ${files.length} files.`);
     } catch (e) {
-      errorMsg = String(e);
+      errorMsg = readableError(e);
+      status.error(`Export failed: ${errorMsg}`);
     }
     exporting = false;
   }
 
-  function copyToClipboard(text: string) {
-    navigator.clipboard.writeText(text).catch(() => {});
+  async function copyToClipboard(text: string) {
+    try {
+      await navigator.clipboard.writeText(text);
+      status.success("Path copied.");
+    } catch (error) {
+      status.error(`Failed to copy path: ${readableError(error)}`);
+    }
   }
 
   function handleOverlayClick(event: MouseEvent) {

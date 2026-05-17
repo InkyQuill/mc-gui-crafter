@@ -1,11 +1,13 @@
 <script lang="ts">
   import { project, assetDataUrls } from "../stores/project.svelte";
+  import { status, readableError } from "../stores/status.svelte";
   import * as api from "../api";
   import PixelEditor from "./PixelEditor.svelte";
 
   let editingAsset = $state<string | null>(null);
 
   async function handleImport() {
+    let path: string | null = null;
     try {
       const dialog = await import("@tauri-apps/plugin-dialog");
       const result = await dialog.open({
@@ -13,7 +15,13 @@
         multiple: false,
       });
       if (!result) return;
-      const path = result as string;
+      path = result as string;
+    } catch {
+      openBrowserImport();
+      return;
+    }
+
+    try {
       const asset = await api.assetImport(path, project.activeProjectId ?? undefined);
       if (!project.assets.includes(asset.name)) {
         project.assets = [...project.assets, asset.name];
@@ -21,38 +29,63 @@
       assetDataUrls.set(asset.name, asset.data_url);
       await project.refreshSessions();
       await project.syncFromBackend();
-    } catch {
-      // Browser fallback: use file input
-      const input = document.createElement("input");
-      input.type = "file";
-      input.accept = "image/png";
-      input.onchange = async (e) => {
-        const file = (e.target as HTMLInputElement).files?.[0];
-        if (!file) return;
-        const reader = new FileReader();
-        reader.onload = () => {
-          const dataUrl = reader.result as string;
-          const name = `textures/${file.name.replace(/\.[^.]+$/, "")}.png`;
-          void api.assetImport(name, project.activeProjectId ?? undefined, dataUrl).then(async (asset) => {
-            if (!project.assets.includes(asset.name)) {
-              project.assets = [...project.assets, asset.name];
-            }
-            assetDataUrls.set(asset.name, asset.data_url);
-            await project.refreshSessions();
-            await project.syncFromBackend();
-          });
-        };
-        reader.readAsDataURL(file);
-      };
-      input.click();
+      status.success(`Imported ${displayName(asset.name)}.`);
+    } catch (error) {
+      status.error(`Failed to import asset: ${readableError(error)}`);
     }
   }
 
   async function handleRemove(name: string) {
-    await api.assetRemove(name);
-    project.assets = project.assets.filter(a => a !== name);
-    assetDataUrls.delete(name);
-    if (editingAsset === name) editingAsset = null;
+    try {
+      const removed = await api.assetRemove(name, project.activeProjectId ?? undefined);
+      if (!removed) {
+        status.warning(`${displayName(name)} was not found in this project.`);
+        return;
+      }
+      project.assets = project.assets.filter(a => a !== name);
+      assetDataUrls.delete(name);
+      if (editingAsset === name) editingAsset = null;
+      status.success(`Removed ${displayName(name)}.`);
+    } catch (error) {
+      status.error(`Failed to remove ${displayName(name)}: ${readableError(error)}`);
+    }
+  }
+
+  function openBrowserImport() {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = "image/png";
+    input.onchange = async (e) => {
+      const file = (e.target as HTMLInputElement).files?.[0];
+      if (!file) return;
+
+      const reader = new FileReader();
+      reader.onload = () => {
+        const dataUrl = reader.result as string;
+        const name = `textures/${file.name.replace(/\.[^.]+$/, "")}.png`;
+        void importBrowserAsset(name, dataUrl);
+      };
+      reader.onerror = () => {
+        status.error(`Failed to read ${file.name}.`);
+      };
+      reader.readAsDataURL(file);
+    };
+    input.click();
+  }
+
+  async function importBrowserAsset(name: string, dataUrl: string) {
+    try {
+      const asset = await api.assetImport(name, project.activeProjectId ?? undefined, dataUrl);
+      if (!project.assets.includes(asset.name)) {
+        project.assets = [...project.assets, asset.name];
+      }
+      assetDataUrls.set(asset.name, asset.data_url);
+      await project.refreshSessions();
+      await project.syncFromBackend();
+      status.success(`Imported ${displayName(asset.name)}.`);
+    } catch (error) {
+      status.error(`Failed to import asset: ${readableError(error)}`);
+    }
   }
 
   function displayName(fullPath: string): string {
@@ -75,14 +108,20 @@
         dataUrl={dataUrl}
         onclose={() => editingAsset = null}
         onsaved={async (newDataUrl: string) => {
-          const asset = await api.assetUpdate(
-            editingAsset!,
-            newDataUrl,
-            project.activeProjectId ?? undefined,
-          );
-          assetDataUrls.set(asset.name, asset.data_url);
-          await project.refreshSessions();
-          await project.syncFromBackend();
+          try {
+            const asset = await api.assetUpdate(
+              editingAsset!,
+              newDataUrl,
+              project.activeProjectId ?? undefined,
+            );
+            assetDataUrls.set(asset.name, asset.data_url);
+            await project.refreshSessions();
+            await project.syncFromBackend();
+            status.success(`Updated ${displayName(asset.name)}.`);
+          } catch (error) {
+            status.error(`Failed to update ${displayName(editingAsset!)}: ${readableError(error)}`);
+            throw error;
+          }
         }}
       />
     {/if}
