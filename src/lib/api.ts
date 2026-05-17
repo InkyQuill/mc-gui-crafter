@@ -12,8 +12,17 @@ import type {
 
 let tauriInvoke: ((cmd: string, args?: Record<string, unknown>) => Promise<unknown>) | null = null;
 
+function hasTauriRuntime(): boolean {
+  return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+}
+
 async function getInvoke() {
   if (tauriInvoke) return tauriInvoke;
+  if (!hasTauriRuntime()) {
+    tauriInvoke = mockInvoke;
+    return tauriInvoke;
+  }
+
   try {
     const tauri = await import("@tauri-apps/api/core");
     tauriInvoke = tauri.invoke;

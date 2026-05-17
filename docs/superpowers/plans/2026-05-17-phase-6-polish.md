@@ -505,23 +505,23 @@ Expected: frontend check/build passes with no warnings.
 - Modify: `src/App.svelte`
 - Test: `pnpm verify`
 
-- [ ] **Step 1: Normalize icon button dimensions**
+- [x] **Step 1: Normalize icon button dimensions**
 
 Use stable dimensions for toolbar icon buttons and project tab close buttons. Avoid text overflow in project names.
 
-- [ ] **Step 2: Normalize modal spacing**
+- [x] **Step 2: Normalize modal spacing**
 
 Use consistent title size, row spacing, button alignment, and border radius across New Project, Export, Preferences, Shortcuts, and Pixel Editor.
 
-- [ ] **Step 3: Add missing tooltips**
+- [x] **Step 3: Add missing tooltips**
 
 Every icon-only button gets `title` and accessible text or `aria-label`.
 
-- [ ] **Step 4: Verify responsive fit**
+- [x] **Step 4: Verify responsive fit**
 
 Run the app manually or use browser dev tooling if available. Check at least 1280x800 and a narrow 900x700 viewport. No overlapping toolbar/status/modal text.
 
-- [ ] **Step 5: Verify**
+- [x] **Step 5: Verify**
 
 Run:
 

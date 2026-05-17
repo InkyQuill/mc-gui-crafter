@@ -31,7 +31,7 @@
           <span class="dirty" aria-hidden="true">{session.is_dirty ? "●" : ""}</span>
           <span class="label">{labelFor(session)}</span>
         </button>
-        <button class="tab-close" onclick={() => onclose(session.id)} title="Close project" aria-label={`Close ${labelFor(session)}`}>
+        <button class="tab-close" onclick={() => onclose(session.id)} title={`Close ${labelFor(session)}`} aria-label={`Close ${labelFor(session)}`}>
           ×
         </button>
       </div>
@@ -43,7 +43,8 @@
   .project-tabs {
     display: flex;
     align-items: stretch;
-    min-width: 0;
+    flex: 1 1 120px;
+    min-width: 90px;
     overflow: hidden;
     border-left: 1px solid #0f3460;
   }
@@ -51,8 +52,9 @@
   .tab {
     display: flex;
     align-items: center;
-    min-width: 84px;
+    min-width: 72px;
     max-width: 180px;
+    flex: 1 1 132px;
     border-right: 1px solid #0f3460;
     background: #121a32;
   }
@@ -70,6 +72,7 @@
     color: #a0a0b0;
     font-family: inherit;
     cursor: pointer;
+    border-radius: 3px;
   }
 
   .tab-main {
@@ -83,17 +86,27 @@
   }
 
   .tab-close {
-    width: 24px;
-    flex: 0 0 24px;
+    width: 26px;
+    height: 26px;
+    flex: 0 0 26px;
     padding: 0;
     font-size: 14px;
     line-height: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
   }
 
   .tab-main:hover,
   .tab-close:hover {
     color: #e0e0e0;
     background: #0f3460;
+  }
+
+  .tab-main:focus-visible,
+  .tab-close:focus-visible {
+    outline: 2px solid #e94560;
+    outline-offset: -2px;
   }
 
   .dirty {

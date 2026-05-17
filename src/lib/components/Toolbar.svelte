@@ -118,7 +118,7 @@
 <header class="toolbar">
   <span class="logo">MCGUI Crafter</span>
 
-  <div class="toolbar-group">
+  <div class="toolbar-group file-actions">
     <button onclick={() => showNewDialog = true} title="New project">New</button>
     <button onclick={handleOpen} title="Open .mcgui">Open</button>
     <button onclick={handleSave} disabled={!project.isOpen} title="Save project">
@@ -132,19 +132,19 @@
     </button>
   </div>
 
-  <div class="toolbar-group">
-    <button onclick={handleUndo} disabled={!project.canUndo} title="Undo">↩</button>
-    <button onclick={handleRedo} disabled={!project.canRedo} title="Redo">↪</button>
+  <div class="toolbar-group icon-actions">
+    <button class="icon-button" onclick={handleUndo} disabled={!project.canUndo} title="Undo" aria-label="Undo">↩</button>
+    <button class="icon-button" onclick={handleRedo} disabled={!project.canRedo} title="Redo" aria-label="Redo">↪</button>
   </div>
 
   <div class="toolbar-group">
     <button onclick={toggleGrid} class:active={editor.showGrid} title="Toggle grid">
       Grid
     </button>
-    <button onclick={() => editor.zoomOut()} title="Zoom out">−</button>
+    <button class="icon-button" onclick={() => editor.zoomOut()} title="Zoom out" aria-label="Zoom out">−</button>
     <span class="zoom-label">{editor.zoom}×</span>
-    <button onclick={() => editor.zoomIn()} title="Zoom in">+</button>
-    <button onclick={() => editor.resetView()} title="Reset view">⊡</button>
+    <button class="icon-button" onclick={() => editor.zoomIn()} title="Zoom in" aria-label="Zoom in">+</button>
+    <button class="icon-button" onclick={() => editor.resetView()} title="Reset view" aria-label="Reset view">⊡</button>
   </div>
 
   <div class="toolbar-group">
@@ -198,12 +198,14 @@
   .toolbar {
     display: flex;
     align-items: center;
-    gap: 12px;
-    padding: 6px 12px;
+    gap: 8px;
+    padding: 5px 12px;
     background: #16213e;
     border-bottom: 1px solid #0f3460;
     height: 36px;
     flex-shrink: 0;
+    min-width: 0;
+    overflow: hidden;
     user-select: none;
   }
 
@@ -211,29 +213,51 @@
     font-weight: 700;
     color: #e94560;
     font-size: 13px;
-    margin-right: 8px;
+    margin-right: 4px;
+    flex: 0 0 auto;
+    white-space: nowrap;
   }
 
   .toolbar-group {
     display: flex;
+    align-items: center;
     gap: 2px;
-    padding: 0 8px;
+    padding: 0 6px;
     border-right: 1px solid #0f3460;
+    flex: 0 0 auto;
+    min-width: 0;
   }
 
   .toolbar-group:last-of-type {
     border-right: none;
   }
 
+  .file-actions {
+    max-width: clamp(220px, 34vw, 390px);
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .file-actions::-webkit-scrollbar {
+    display: none;
+  }
+
+  .icon-actions {
+    gap: 3px;
+  }
+
   button {
     background: transparent;
     border: 1px solid transparent;
     color: #a0a0b0;
-    padding: 4px 10px;
+    padding: 3px 10px;
     font-size: 12px;
     cursor: pointer;
     border-radius: 3px;
     font-family: inherit;
+    line-height: 1;
+    white-space: nowrap;
+    flex: 0 0 auto;
   }
 
   button:hover:not(:disabled) {
@@ -252,10 +276,19 @@
     border-color: #e94560;
   }
 
+  button:focus-visible {
+    outline: 2px solid #e94560;
+    outline-offset: 2px;
+  }
+
   .icon-button {
     width: 28px;
-    padding: 4px 0;
+    height: 24px;
+    padding: 0;
     text-align: center;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
   }
 
   .zoom-label {
@@ -264,6 +297,7 @@
     min-width: 28px;
     text-align: center;
     font-family: monospace;
+    flex: 0 0 28px;
   }
 
   .project-name {
@@ -274,5 +308,34 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    flex: 0 1 160px;
+    min-width: 0;
+  }
+
+  @media (max-width: 1120px) {
+    .project-name {
+      display: none;
+    }
+  }
+
+  @media (max-width: 940px) {
+    .toolbar {
+      gap: 6px;
+      padding-inline: 8px;
+    }
+
+    .logo {
+      max-width: 112px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .toolbar-group {
+      padding-inline: 4px;
+    }
+
+    .file-actions {
+      max-width: 260px;
+    }
   }
 </style>

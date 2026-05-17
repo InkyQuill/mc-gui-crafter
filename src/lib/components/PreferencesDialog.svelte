@@ -199,6 +199,7 @@
     align-items: center;
     justify-content: center;
     z-index: 1000;
+    padding: 16px;
   }
 
   .dialog {
@@ -207,6 +208,8 @@
     border: 1px solid #0f3460;
     border-radius: 8px;
     padding: 16px;
+    max-height: calc(100vh - 32px);
+    overflow: auto;
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
     outline: none;
   }
@@ -316,8 +319,8 @@
   }
 
   .close-btn {
-    width: 26px;
-    height: 26px;
+    width: 28px;
+    height: 28px;
     background: transparent;
     border: 1px solid transparent;
     color: #a0a0b0;

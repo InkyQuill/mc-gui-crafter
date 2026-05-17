@@ -217,7 +217,7 @@
               {#each preview.files as f (f)}
                 <li>
                   <code>{f}</code>
-                  <button class="copy-btn" onclick={() => copyToClipboard(f)} title="Copy path">⎘</button>
+                  <button class="copy-btn" onclick={() => copyToClipboard(f)} title="Copy path" aria-label={`Copy ${f}`}>⎘</button>
                 </li>
               {/each}
             </ul>
@@ -233,7 +233,7 @@
           {#each resultFiles as f (f)}
             <li>
               <code>{f}</code>
-              <button class="copy-btn" onclick={() => copyToClipboard(f)} title="Copy path">⎘</button>
+              <button class="copy-btn" onclick={() => copyToClipboard(f)} title="Copy path" aria-label={`Copy ${f}`}>⎘</button>
             </li>
           {/each}
         </ul>
@@ -259,17 +259,18 @@
     background: rgba(0,0,0,0.6);
     display: flex; align-items: center; justify-content: center;
     z-index: 1000;
+    padding: 16px;
   }
   .dialog {
+    width: min(560px, calc(100vw - 32px));
     background: #1a1a2e;
     border: 1px solid #0f3460;
-    border-radius: 8px; padding: 20px;
-    min-width: 480px; max-width: 560px;
-    max-height: min(720px, 90vh);
+    border-radius: 8px; padding: 16px;
+    max-height: calc(100vh - 32px);
     overflow: auto;
     box-shadow: 0 8px 32px rgba(0,0,0,0.5);
   }
-  h2 { font-size: 16px; color: #e0e0e0; margin-bottom: 16px; }
+  h2 { font-size: 15px; color: #e0e0e0; margin: 0 0 12px; }
   h3 { font-size: 12px; color: #a0a0b0; margin: 12px 0 6px; }
   .form { display: flex; flex-direction: column; gap: 10px; }
   .form-row { display: flex; align-items: center; gap: 8px; }
@@ -279,7 +280,7 @@
     color: #e0e0e0; padding: 5px 8px; font-size: 12px;
     font-family: monospace; border-radius: 4px;
   }
-  input:focus, select:focus { outline: none; border-color: #e94560; }
+  input:focus, select:focus { outline: 2px solid #e94560; outline-offset: 2px; }
   .pick-btn {
     flex: 1; background: #0f3460; border: 1px solid #1a5aa0;
     color: #a0b0d0; padding: 5px 8px; font-size: 12px;
@@ -311,6 +312,10 @@
   .copy-btn {
     background: transparent; border: none; color: #505060;
     font-size: 12px; cursor: pointer;
+    width: 26px; height: 26px; padding: 0;
+    border-radius: 3px;
+    display: inline-flex; align-items: center; justify-content: center;
+    flex: 0 0 26px;
   }
   .copy-btn:hover { color: #e0e0e0; }
   .error { color: #e94560; font-size: 12px; margin-top: 8px; }
@@ -326,4 +331,5 @@
     background: #e94560; border: 1px solid #e94560; color: #12121f; font-weight: 600;
   }
   .export-btn:disabled { opacity: 0.4; cursor: default; }
+  button:focus-visible { outline: 2px solid #e94560; outline-offset: 2px; }
 </style>

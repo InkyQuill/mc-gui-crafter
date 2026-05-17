@@ -176,21 +176,23 @@
             type="button"
             class:active={zoom === option.value}
             aria-pressed={zoom === option.value}
+            aria-label={`Set zoom to ${option.label}`}
+            title={`Set zoom to ${option.label}`}
             onclick={() => zoom = option.value}
           >
             {option.label}
           </button>
         {/each}
       </div>
-      <button class="pe-close" onclick={onclose}>×</button>
+      <button class="pe-close" onclick={onclose} title="Close" aria-label="Close pixel editor">×</button>
     </div>
 
     <div class="pe-body">
       <div class="pe-tools">
-        <button class:active={tool === "pencil"} onclick={() => tool = "pencil"} title="Pencil">✎</button>
-        <button class:active={tool === "eraser"} onclick={() => tool = "eraser"} title="Eraser">⌫</button>
-        <button class:active={tool === "eyedropper"} onclick={() => tool = "eyedropper"} title="Color picker">◉</button>
-        <button class:active={tool === "fill"} onclick={() => tool = "fill"} title="Fill">▨</button>
+        <button class:active={tool === "pencil"} onclick={() => tool = "pencil"} title="Pencil" aria-label="Pencil">✎</button>
+        <button class:active={tool === "eraser"} onclick={() => tool = "eraser"} title="Eraser" aria-label="Eraser">⌫</button>
+        <button class:active={tool === "eyedropper"} onclick={() => tool = "eyedropper"} title="Color picker" aria-label="Color picker">◉</button>
+        <button class:active={tool === "fill"} onclick={() => tool = "fill"} title="Fill" aria-label="Fill">▨</button>
         <span class="sep"></span>
         <label for="pe-brush-size" class="pe-size-label">Size</label>
         <input id="pe-brush-size" type="number" bind:value={brushSize} min="1" max="8" class="pe-size-input" />
@@ -250,6 +252,7 @@
     align-items: center;
     justify-content: center;
     z-index: 2000;
+    padding: 12px;
   }
 
   .pixel-editor {
@@ -274,7 +277,7 @@
   }
 
   .pe-title {
-    font-size: 12px;
+    font-size: 13px;
     color: #e0e0e0;
     font-family: monospace;
     min-width: 0;
@@ -324,14 +327,21 @@
   .pe-close {
     margin-left: auto;
     background: transparent;
-    border: none;
-    color: #606080;
-    font-size: 16px;
+    border: 1px solid transparent;
+    color: #a0a0b0;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    border-radius: 4px;
+    font-size: 18px;
     cursor: pointer;
     flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
   }
 
-  .pe-close:hover { color: #e94560; }
+  .pe-close:hover { background: #0f3460; color: #e0e0e0; }
 
   .pe-body {
     display: flex;
@@ -353,10 +363,10 @@
     border: 1px solid #0f3460;
     color: #808090;
     width: 32px;
-    height: 28px;
+    height: 32px;
     font-size: 14px;
     cursor: pointer;
-    border-radius: 3px;
+    border-radius: 4px;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -490,7 +500,7 @@
   }
 
   .pe-cancel, .pe-save {
-    padding: 5px 16px;
+    padding: 6px 16px;
     font-size: 12px;
     border-radius: 4px;
     cursor: pointer;
@@ -513,6 +523,12 @@
   .pe-save:disabled {
     opacity: 0.7;
     cursor: wait;
+  }
+
+  button:focus-visible,
+  input:focus-visible {
+    outline: 2px solid #e94560;
+    outline-offset: 2px;
   }
 
   @media (max-width: 560px) {

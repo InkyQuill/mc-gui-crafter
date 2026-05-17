@@ -147,29 +147,31 @@
     align-items: center;
     justify-content: center;
     z-index: 1000;
+    padding: 16px;
   }
 
   .dialog {
+    width: min(560px, calc(100vw - 32px));
+    max-height: calc(100vh - 32px);
+    overflow: auto;
     background: #1a1a2e;
     border: 1px solid #0f3460;
     border-radius: 8px;
-    padding: 20px;
-    min-width: 500px;
-    max-width: 560px;
+    padding: 16px;
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
   }
 
   h2 {
-    font-size: 16px;
+    font-size: 15px;
     color: #e0e0e0;
-    margin-bottom: 16px;
+    margin: 0 0 12px;
   }
 
   .template-grid {
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: 8px;
-    margin-bottom: 16px;
+    margin-bottom: 12px;
   }
 
   .template-card {
@@ -227,7 +229,8 @@
     display: flex;
     align-items: center;
     gap: 8px;
-    margin-bottom: 12px;
+    margin-bottom: 10px;
+    min-width: 0;
   }
 
   .form-row label {
@@ -250,11 +253,13 @@
 
   select {
     width: auto;
+    max-width: 100%;
   }
 
-  input:focus, select:focus {
-    outline: none;
-    border-color: #e94560;
+  input:focus,
+  select:focus {
+    outline: 2px solid #e94560;
+    outline-offset: 2px;
   }
 
   .dialog-actions {
@@ -291,5 +296,22 @@
 
   .create-btn:hover {
     background: #ff5a7a;
+  }
+
+  .cancel-btn:focus-visible,
+  .create-btn:focus-visible,
+  .template-card:focus-visible {
+    outline: 2px solid #e94560;
+    outline-offset: 2px;
+  }
+
+  @media (max-width: 560px) {
+    .template-grid {
+      grid-template-columns: 1fr;
+    }
+
+    .form-row {
+      flex-wrap: wrap;
+    }
   }
 </style>

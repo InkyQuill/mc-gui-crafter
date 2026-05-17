@@ -115,7 +115,7 @@
   >
     <div class="dialog-header">
       <h2 id="{dialogId}-title">Keyboard Shortcuts</h2>
-      <button class="close-btn" type="button" aria-label="Close shortcuts" title="Close" onclick={onclose}>x</button>
+      <button class="close-btn" type="button" aria-label="Close shortcuts" title="Close" onclick={onclose}>×</button>
     </div>
 
     <div class="shortcut-sections">
@@ -154,6 +154,7 @@
     align-items: center;
     justify-content: center;
     z-index: 1000;
+    padding: 16px;
   }
 
   .dialog {
@@ -259,8 +260,8 @@
   }
 
   .close-btn {
-    width: 26px;
-    height: 26px;
+    width: 28px;
+    height: 28px;
     background: transparent;
     border: 1px solid transparent;
     color: #a0a0b0;
