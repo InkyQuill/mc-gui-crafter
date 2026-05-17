@@ -15,9 +15,20 @@
     editor.tool = tool;
   }
 
+  function isEditableTarget(target: EventTarget | null): boolean {
+    if (!(target instanceof HTMLElement)) return false;
+
+    return target instanceof HTMLInputElement
+      || target instanceof HTMLSelectElement
+      || target instanceof HTMLTextAreaElement
+      || target.isContentEditable
+      || target.closest("[contenteditable='true']") !== null
+      || target.closest('[role="dialog"]') !== null;
+  }
+
   // Keyboard shortcuts
   function onKeydown(e: KeyboardEvent) {
-    if (e.target instanceof HTMLInputElement) return;
+    if (isEditableTarget(e.target)) return;
     switch (e.key.toLowerCase()) {
       case "v": editor.tool = "select"; break;
       case "h": editor.tool = "pan"; break;

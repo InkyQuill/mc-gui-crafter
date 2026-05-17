@@ -6,10 +6,12 @@
   import ExportDialog from "./ExportDialog.svelte";
   import ProjectTabs from "./ProjectTabs.svelte";
   import PreferencesDialog from "./PreferencesDialog.svelte";
+  import ShortcutsDialog from "./ShortcutsDialog.svelte";
 
   let showNewDialog = $state(false);
   let showExportDialog = $state(false);
   let showPreferencesDialog = $state(false);
+  let showShortcutsDialog = $state(false);
 
   async function handleOpen() {
     const path = await api.showOpenDialog();
@@ -54,7 +56,43 @@
     editor.clearSelection();
     editor.resetView();
   }
+
+  function isEditableTarget(target: EventTarget | null): boolean {
+    if (!(target instanceof HTMLElement)) return false;
+
+    return target instanceof HTMLInputElement
+      || target instanceof HTMLSelectElement
+      || target instanceof HTMLTextAreaElement
+      || target.isContentEditable
+      || target.closest("[contenteditable='true']") !== null;
+  }
+
+  function isDialogTarget(target: EventTarget | null): boolean {
+    return target instanceof HTMLElement && target.closest('[role="dialog"]') !== null;
+  }
+
+  function handleKeydown(event: KeyboardEvent) {
+    if (
+      event.key !== "?"
+      || event.ctrlKey
+      || event.metaKey
+      || event.altKey
+      || showShortcutsDialog
+      || showNewDialog
+      || showExportDialog
+      || showPreferencesDialog
+      || isEditableTarget(event.target)
+      || isDialogTarget(event.target)
+    ) {
+      return;
+    }
+
+    event.preventDefault();
+    showShortcutsDialog = true;
+  }
 </script>
+
+<svelte:window onkeydown={handleKeydown} />
 
 <header class="toolbar">
   <span class="logo">MCGUI Crafter</span>
@@ -91,6 +129,14 @@
   <div class="toolbar-group">
     <button
       class="icon-button"
+      onclick={() => showShortcutsDialog = true}
+      title="Keyboard shortcuts (?)"
+      aria-label="Open keyboard shortcuts"
+    >
+      ?
+    </button>
+    <button
+      class="icon-button"
       onclick={() => showPreferencesDialog = true}
       title="Preferences"
       aria-label="Open preferences"
@@ -121,6 +167,10 @@
 
 {#if showPreferencesDialog}
   <PreferencesDialog onclose={() => showPreferencesDialog = false} />
+{/if}
+
+{#if showShortcutsDialog}
+  <ShortcutsDialog onclose={() => showShortcutsDialog = false} />
 {/if}
 
 <style>
