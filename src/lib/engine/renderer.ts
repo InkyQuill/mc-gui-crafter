@@ -2,9 +2,7 @@ import { Application, Container, Graphics, Rectangle, Text, TextStyle, Sprite, T
 import type { Element } from "../types";
 import { project, assetDataUrls } from "../stores/project.svelte";
 import { editor } from "../stores/editor.svelte";
-
-const GRID_MAJOR = 18;
-const GRID_MINOR = 2;
+import { preferences } from "../stores/preferences.svelte";
 
 const SELECTED_TINT = 0xffff00;
 
@@ -114,28 +112,34 @@ export class GuiRenderer {
         let nx: number, ny: number, nw: number, nh: number;
         switch (editor.resizeCorner) {
           case "tl":
-            nx = Math.round(ox + dx);
-            ny = Math.round(oy + dy);
+            nx = editor.snapCoordinate(ox + dx);
+            ny = editor.snapCoordinate(oy + dy);
             nw = Math.max(4, ow - (nx - ox));
             nh = Math.max(4, oh - (ny - oy));
             break;
           case "tr":
-            nx = ox;
-            ny = Math.round(oy + dy);
-            nw = Math.max(4, ow + dx);
-            nh = Math.max(4, oh - (ny - oy));
+            {
+              const right = editor.snapCoordinate(ox + ow + dx);
+              nx = ox;
+              ny = editor.snapCoordinate(oy + dy);
+              nw = Math.max(4, right - ox);
+              nh = Math.max(4, oh - (ny - oy));
+            }
             break;
           case "bl":
-            nx = Math.round(ox + dx);
-            ny = oy;
-            nw = Math.max(4, ow - (nx - ox));
-            nh = Math.max(4, oh + dy);
+            {
+              const bottom = editor.snapCoordinate(oy + oh + dy);
+              nx = editor.snapCoordinate(ox + dx);
+              ny = oy;
+              nw = Math.max(4, ow - (nx - ox));
+              nh = Math.max(4, bottom - oy);
+            }
             break;
           case "br":
             nx = ox;
             ny = oy;
-            nw = Math.max(4, Math.round(ow + dx));
-            nh = Math.max(4, Math.round(oh + dy));
+            nw = Math.max(4, editor.snapCoordinate(ox + ow + dx) - ox);
+            nh = Math.max(4, editor.snapCoordinate(oy + oh + dy) - oy);
             break;
         }
 
@@ -152,14 +156,14 @@ export class GuiRenderer {
           for (const id of editor.selectedIds) {
             const start = this.dragStartPositions.get(id);
             if (start) {
-              const newX = Math.round(start.x + dx);
-              const newY = Math.round(start.y + dy);
+              const newX = editor.snapCoordinate(start.x + dx);
+              const newY = editor.snapCoordinate(start.y + dy);
               project.moveElement(id, newX, newY, false);
             }
           }
         } else {
-          const newX = Math.round(editor.dragOrigX + dx);
-          const newY = Math.round(editor.dragOrigY + dy);
+          const newX = editor.snapCoordinate(editor.dragOrigX + dx);
+          const newY = editor.snapCoordinate(editor.dragOrigY + dy);
           project.moveElement(editor.dragElementId, newX, newY, false);
         }
       }
@@ -314,6 +318,8 @@ export class GuiRenderer {
 
     const g = new Graphics();
     const { width: gw, height: gh } = project.guiSize;
+    const majorGridSize = Math.max(1, preferences.values.majorGridSize);
+    const minorGridSize = Math.max(1, preferences.values.minorGridSize);
 
     // Background fill for GUI area
     g.rect(0, 0, gw, gh);
@@ -326,12 +332,12 @@ export class GuiRenderer {
     // Minor grid
     const minorAlpha = editor.zoom >= 2 ? 0.1 : 0;
     if (minorAlpha > 0) {
-      for (let x = 0; x <= gw; x += GRID_MINOR) {
+      for (let x = 0; x <= gw; x += minorGridSize) {
         g.moveTo(x, 0);
         g.lineTo(x, gh);
         g.stroke({ width: 1, color: 0xffffff, alpha: minorAlpha });
       }
-      for (let y = 0; y <= gh; y += GRID_MINOR) {
+      for (let y = 0; y <= gh; y += minorGridSize) {
         g.moveTo(0, y);
         g.lineTo(gw, y);
         g.stroke({ width: 1, color: 0xffffff, alpha: minorAlpha });
@@ -340,12 +346,12 @@ export class GuiRenderer {
 
     // Major grid (always visible at zoom >= 1)
     const majorAlpha = 0.25;
-    for (let x = 0; x <= gw; x += GRID_MAJOR) {
+    for (let x = 0; x <= gw; x += majorGridSize) {
       g.moveTo(x, 0);
       g.lineTo(x, gh);
       g.stroke({ width: 1, color: 0xffffff, alpha: majorAlpha });
     }
-    for (let y = 0; y <= gh; y += GRID_MAJOR) {
+    for (let y = 0; y <= gh; y += majorGridSize) {
       g.moveTo(0, y);
       g.lineTo(gw, y);
       g.stroke({ width: 1, color: 0xffffff, alpha: majorAlpha });

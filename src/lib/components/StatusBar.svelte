@@ -1,6 +1,7 @@
 <script lang="ts">
   import { editor } from "../stores/editor.svelte";
   import { project } from "../stores/project.svelte";
+  import { preferences } from "../stores/preferences.svelte";
 
   let coordText = $derived(
     editor.mouseGuiX >= 0 && editor.mouseGuiY >= 0
@@ -13,12 +14,26 @@
       ? `Sel: ${editor.selectedElementId}`
       : ""
   );
+
+  let gridInfo = $derived(
+    preferences.values.showGrid
+      ? `Grid ${Math.max(1, preferences.values.minorGridSize)}/${Math.max(1, preferences.values.majorGridSize)}`
+      : "Grid off"
+  );
+
+  let snapInfo = $derived(
+    preferences.values.snapToGrid
+      ? `Snap ${Math.max(1, preferences.values.snapSize)}`
+      : "Snap off"
+  );
 </script>
 
 <footer class="statusbar">
   <span class="tool">{editor.tool}</span>
   <span class="coord">{coordText}</span>
   <span class="zoom">Zoom: {editor.zoom}×</span>
+  <span class="grid">{gridInfo}</span>
+  <span class="snap">{snapInfo}</span>
   <span class="dirty">{project.isDirty ? "● modified" : ""}</span>
   <span class="sel-info">{selInfo}</span>
 </footer>
@@ -52,6 +67,12 @@
 
   .zoom {
     font-family: monospace;
+  }
+
+  .grid,
+  .snap {
+    font-family: monospace;
+    color: #70708c;
   }
 
   .dirty {

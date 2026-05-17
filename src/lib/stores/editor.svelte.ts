@@ -1,10 +1,16 @@
+import { preferences } from "./preferences.svelte";
+
 export type EditorTool = "select" | "pan" | "slot" | "texture" | "text";
+
+export function snap(value: number, snapSize: number): number {
+  if (snapSize <= 1) return Math.round(value);
+  return Math.round(value / snapSize) * snapSize;
+}
 
 class EditorStore {
   selectedElementId = $state<string | null>(null);
   selectedIds = $state<Set<string>>(new Set());
   zoom = $state(2);
-  showGrid = $state(true);
   tool = $state<EditorTool>("select");
 
   // Mouse position in GUI pixel coordinates (relative to GUI top-left)
@@ -18,6 +24,27 @@ class EditorStore {
   // Canvas container dimensions
   canvasWidth = $state(800);
   canvasHeight = $state(600);
+
+  get showGrid() {
+    return preferences.values.showGrid;
+  }
+
+  set showGrid(value: boolean) {
+    preferences.update({ showGrid: value });
+  }
+
+  get snapToGrid() {
+    return preferences.values.snapToGrid;
+  }
+
+  set snapToGrid(value: boolean) {
+    preferences.update({ snapToGrid: value });
+  }
+
+  snapCoordinate(value: number): number {
+    if (!preferences.values.snapToGrid) return Math.round(value);
+    return snap(value, preferences.values.snapSize);
+  }
 
   // Dragging state
   isDragging = $state(false);

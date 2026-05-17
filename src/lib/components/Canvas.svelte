@@ -2,6 +2,7 @@
   import { GuiRenderer } from "../engine/renderer";
   import { project } from "../stores/project.svelte";
   import { editor } from "../stores/editor.svelte";
+  import { preferences } from "../stores/preferences.svelte";
 
   let containerEl: HTMLDivElement | undefined = $state();
   let renderer: GuiRenderer | null = $state(null);
@@ -80,9 +81,13 @@
     }
   });
 
-  // Re-render when showGrid changes
+  // Re-render when grid preferences change
   $effect(() => {
-    void editor.showGrid;
+    void preferences.values.showGrid;
+    void preferences.values.majorGridSize;
+    void preferences.values.minorGridSize;
+    void preferences.values.snapToGrid;
+    void preferences.values.snapSize;
     if (renderer) {
       renderer.render();
     }
