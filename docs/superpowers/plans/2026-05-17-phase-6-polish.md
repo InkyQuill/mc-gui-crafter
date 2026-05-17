@@ -541,15 +541,15 @@ Expected: frontend check/build passes with no warnings.
 - Modify: `README.md`
 - Optional Modify: `docs/architecture.md`
 
-- [ ] **Step 1: Update Phase 6 checklist**
+- [x] **Step 1: Update Phase 6 checklist**
 
 Mark implemented polish items complete. Move non-goals to Phase 7 or Phase 6.x.
 
-- [ ] **Step 2: Update README feature language**
+- [x] **Step 2: Update README feature language**
 
 Document recent projects, preferences, export preview, pixel zoom, and web MCP status only after implemented.
 
-- [ ] **Step 3: Verify docs do not overclaim**
+- [x] **Step 3: Verify docs do not overclaim**
 
 Search:
 

@@ -11,6 +11,11 @@ Built with **Tauri 2 + Svelte 5 + Rust**.
 - Animation timeline: fill, cycle, pulse, toggle
 - Pixel-art texture editor and numeric UV region editing for sprite sheets
 - Templates: furnace, crafting table, chest (9×3, 9×6)
+- Start panel with recent projects, GUI size presets, and MCP endpoint status
+- Persisted editor preferences for grid visibility, snap, grid sizing, default preset, and theme
+- Keyboard shortcut reference and compact status notifications
+- Export preview preflight with planned files, overwrite warnings, and missing-texture errors
+- Pixel editor zoom controls: 1x, 2x, 4x, 8x, and fit
 - Single-file `.mcgui` project format (zip archive)
 - Built-in localhost Streamable HTTP MCP endpoint for AI-driven project manipulation
 - Export to Forge, Fabric, and NeoForge Screen classes + texture atlases

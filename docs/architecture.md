@@ -81,23 +81,24 @@ AI tool connects  ───►  MCP HTTP /mcp ────────►  Tool 
 
 ```
 App.svelte
-├── Toolbar.svelte            # New, open, save, export, undo, redo
-├── EditorLayout.svelte       # Main split-pane layout
-│   ├── Canvas.svelte         # WYSIWYG GUI editor (PixiJS/Canvas)
-│   │   ├── GridOverlay       # Coordinate grid + snap
-│   │   ├── ElementRenderer   # Renders each element in the tree
-│   │   └── SelectionHandle   # Drag/resize handles for selected element
-│   ├── ElementPalette.svelte # Drag source: slot, texture, text, progress…
-│   ├── PropertyPanel.svelte  # Edit selected element properties
-│   │   ├── PositionInput     # x, y, width, height
-│   │   ├── TexturePicker     # Select from imported assets
-│   │   ├── TextEditor        # Content, font, color
-│   │   └── AnimationBinder   # Bind element to animation
-│   └── LayerPanel.svelte     # Tree view of all elements, z-order
+├── Toolbar.svelte            # New, open, save, export, undo, redo, preferences, help
+├── ProjectTabs.svelte        # Open project sessions
+├── StartPanel.svelte         # Empty-state launcher, recent projects, MCP status
+├── Canvas.svelte             # WYSIWYG GUI editor (PixiJS/Canvas)
+│   ├── GridOverlay           # Coordinate grid + snap
+│   ├── ElementRenderer       # Renders each element in the tree
+│   └── SelectionHandle       # Drag/resize handles for selected element
+├── ElementPalette.svelte     # Drag source: slot, texture, text, progress…
+├── PropertyPanel.svelte      # Edit selected element properties, UV, animation binding
+├── LayerPanel.svelte         # Tree view of all elements, z-order, visibility, grouping
+├── AssetLibrary.svelte       # Import, preview, edit, and remove texture assets
 ├── AnimationTimeline.svelte  # Keyframe editor at bottom
-├── TextureImporter.svelte    # Import dialog
-├── PixelEditor.svelte        # Simple pixel-art editor
-└── ExportDialog.svelte       # Export settings + target selection
+├── PixelEditor.svelte        # Pixel-art editor with zoom controls
+├── NewProjectDialog.svelte   # Template and GUI preset selection
+├── ExportDialog.svelte       # Export settings, backend preview, and preflight errors
+├── PreferencesDialog.svelte  # Local editor preferences
+├── ShortcutsDialog.svelte    # Shortcut reference
+└── StatusMessages.svelte     # Toast-style status/error feedback
 ```
 
 ## State Management (Svelte 5 runes)
@@ -105,6 +106,8 @@ App.svelte
 ```typescript
 // project.svelte.ts - global project state
 class ProjectStore {
+  sessions = $state<ProjectSessionSummary[]>([]);
+  activeProjectId = $state<string | null>(null);
   elements = $state<Element[]>([]);
   groups = $state<Group[]>([]);
   animations = $state<Animation[]>([]);
@@ -122,11 +125,21 @@ class ProjectStore {
 // editor.svelte.ts - editor UI state
 class EditorStore {
   zoom = $state(1);
-  showGrid = $state(true);
-  snapToGrid = $state(true);
-  gridSize = $state({ major: 18, minor: 2 });
   tool = $state<"select" | "pan" | "slot" | "texture" | "text">("select");
   mousePos = $state({ x: 0, y: 0 });
+}
+
+// preferences.svelte.ts - local UI preferences
+class PreferencesStore {
+  values = $state({
+    showGrid: true,
+    snapToGrid: true,
+    majorGridSize: 18,
+    minorGridSize: 2,
+    snapSize: 1,
+    defaultPreset: "vanilla_chest",
+    theme: "dark",
+  });
 }
 ```
 
