@@ -1,0 +1,23 @@
+# Dependencies
+node_modules/
+
+# Alternate Git metadata used when .git is unavailable in sandboxed runs
+.git-real/
+
+# Build output
+dist/
+src-tauri/target/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local

@@ -1,0 +1,243 @@
+<script lang="ts">
+  import { project } from "../stores/project.svelte";
+  import { editor } from "../stores/editor.svelte";
+  import * as api from "../api";
+  import type { TemplateInfo } from "../api";
+
+  let { onclose }: { onclose: () => void } = $props();
+
+  let templates = $state<TemplateInfo[]>([]);
+  let selectedTemplate = $state<string>("empty");
+  let width = $state(176);
+  let height = $state(166);
+  let modTarget = $state<"forge" | "fabric" | "neoforge">("forge");
+
+  $effect(() => {
+    api.templateList().then(t => { templates = t; });
+  });
+
+  function selectTemplate(name: string) {
+    selectedTemplate = name;
+    const t = templates.find(t => t.name === name);
+    if (t) {
+      width = t.default_width;
+      height = t.default_height;
+    }
+  }
+
+  async function handleCreate() {
+    await project.newProject("Untitled GUI", width, height, modTarget, selectedTemplate);
+    editor.resetView();
+    onclose();
+  }
+
+  function handleOverlayClick(event: MouseEvent) {
+    if (event.target === event.currentTarget) {
+      onclose();
+    }
+  }
+
+  function handleOverlayKeydown(event: KeyboardEvent) {
+    if (event.key === "Escape") {
+      onclose();
+    }
+  }
+</script>
+
+<div class="dialog-overlay" role="presentation" onclick={handleOverlayClick} onkeydown={handleOverlayKeydown}>
+  <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="new-project-title">
+    <h2 id="new-project-title">New Project</h2>
+
+    <div class="template-grid">
+      {#each templates as t}
+        <button
+          class="template-card"
+          class:selected={selectedTemplate === t.name}
+          onclick={() => selectTemplate(t.name)}
+        >
+          <span class="template-name">{t.name.replace(/_/g, " ")}</span>
+          <span class="template-size">{t.default_width}×{t.default_height}</span>
+          <span class="template-desc">{t.description}</span>
+          <span class="template-elements">{t.element_count} elements</span>
+        </button>
+      {/each}
+    </div>
+
+    <div class="form-row">
+      <label for="np-width">Width</label>
+      <input id="np-width" type="number" bind:value={width} min="16" max="1024" />
+      <label for="np-height">Height</label>
+      <input id="np-height" type="number" bind:value={height} min="16" max="1024" />
+    </div>
+
+    <div class="form-row">
+      <label for="np-target">Target</label>
+      <select id="np-target" bind:value={modTarget}>
+        <option value="forge">Forge</option>
+        <option value="fabric">Fabric</option>
+        <option value="neoforge">NeoForge</option>
+      </select>
+    </div>
+
+    <div class="dialog-actions">
+      <button class="cancel-btn" onclick={onclose}>Cancel</button>
+      <button class="create-btn" onclick={handleCreate}>Create</button>
+    </div>
+  </div>
+</div>
+
+<style>
+  .dialog-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.6);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+  }
+
+  .dialog {
+    background: #1a1a2e;
+    border: 1px solid #0f3460;
+    border-radius: 8px;
+    padding: 20px;
+    min-width: 500px;
+    max-width: 560px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  }
+
+  h2 {
+    font-size: 16px;
+    color: #e0e0e0;
+    margin-bottom: 16px;
+  }
+
+  .template-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    margin-bottom: 16px;
+  }
+
+  .template-card {
+    background: #12121f;
+    border: 1px solid #0f3460;
+    border-radius: 6px;
+    padding: 10px;
+    cursor: pointer;
+    text-align: left;
+    font-family: inherit;
+    color: #a0a0b0;
+    transition: border-color 0.15s;
+  }
+
+  .template-card:hover {
+    border-color: #e94560;
+  }
+
+  .template-card.selected {
+    border-color: #e94560;
+    background: #1a0f1f;
+  }
+
+  .template-name {
+    display: block;
+    font-size: 13px;
+    font-weight: 600;
+    color: #e0e0e0;
+    text-transform: capitalize;
+  }
+
+  .template-size {
+    display: block;
+    font-size: 11px;
+    color: #e94560;
+    font-family: monospace;
+    margin-top: 2px;
+  }
+
+  .template-desc {
+    display: block;
+    font-size: 11px;
+    color: #606080;
+    margin-top: 4px;
+  }
+
+  .template-elements {
+    display: block;
+    font-size: 10px;
+    color: #505060;
+    margin-top: 2px;
+  }
+
+  .form-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 12px;
+  }
+
+  .form-row label {
+    font-size: 11px;
+    color: #606080;
+    min-width: 45px;
+  }
+
+  input[type="number"],
+  select {
+    background: #12121f;
+    border: 1px solid #0f3460;
+    color: #e0e0e0;
+    padding: 4px 8px;
+    font-size: 12px;
+    font-family: monospace;
+    border-radius: 4px;
+    width: 80px;
+  }
+
+  select {
+    width: auto;
+  }
+
+  input:focus, select:focus {
+    outline: none;
+    border-color: #e94560;
+  }
+
+  .dialog-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 16px;
+  }
+
+  .cancel-btn, .create-btn {
+    padding: 6px 16px;
+    font-size: 12px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-family: inherit;
+  }
+
+  .cancel-btn {
+    background: transparent;
+    border: 1px solid #0f3460;
+    color: #808090;
+  }
+
+  .cancel-btn:hover {
+    background: #0f3460;
+  }
+
+  .create-btn {
+    background: #e94560;
+    border: 1px solid #e94560;
+    color: #12121f;
+    font-weight: 600;
+  }
+
+  .create-btn:hover {
+    background: #ff5a7a;
+  }
+</style>

@@ -1,0 +1,183 @@
+<script lang="ts">
+  import type { EditorTool } from "../stores/editor.svelte";
+  import { editor } from "../stores/editor.svelte";
+  import { project } from "../stores/project.svelte";
+
+  const tools: { id: EditorTool; label: string; shortcut: string }[] = [
+    { id: "select", label: "Select", shortcut: "V" },
+    { id: "pan", label: "Pan", shortcut: "H" },
+    { id: "slot", label: "Slot", shortcut: "S" },
+    { id: "texture", label: "Texture", shortcut: "T" },
+    { id: "text", label: "Text", shortcut: "X" },
+  ];
+
+  function selectTool(tool: EditorTool) {
+    editor.tool = tool;
+  }
+
+  // Keyboard shortcuts
+  function onKeydown(e: KeyboardEvent) {
+    if (e.target instanceof HTMLInputElement) return;
+    switch (e.key.toLowerCase()) {
+      case "v": editor.tool = "select"; break;
+      case "h": editor.tool = "pan"; break;
+      case "s": editor.tool = "slot"; break;
+      case "t": editor.tool = "texture"; break;
+      case "x": editor.tool = "text"; break;
+      case "delete":
+      case "backspace":
+        if (editor.selectedElementId) {
+          project.removeElement(editor.selectedElementId);
+          editor.clearSelection();
+        }
+        break;
+      case "escape":
+        editor.clearSelection();
+        editor.tool = "select";
+        break;
+    }
+  }
+</script>
+
+<svelte:window onkeydown={onKeydown} />
+
+<aside class="palette">
+  <h3>Elements</h3>
+  <div class="tool-list">
+    {#each tools as tool}
+      <button
+        class="tool-btn"
+        class:active={editor.tool === tool.id}
+        onclick={() => selectTool(tool.id)}
+        title={`${tool.label} (${tool.shortcut})`}
+      >
+        <span class="tool-icon">
+          {#if tool.id === "select"}↖
+          {:else if tool.id === "pan"}✥
+          {:else if tool.id === "slot"}◻
+          {:else if tool.id === "texture"}▣
+          {:else if tool.id === "text"}T
+          {/if}
+        </span>
+        <span class="tool-label">{tool.label}</span>
+        <span class="tool-shortcut">{tool.shortcut}</span>
+      </button>
+    {/each}
+  </div>
+
+  <p class="hint">
+    {#if editor.tool === "select"}
+      Click to select. Drag to move.
+    {:else if editor.tool === "pan"}
+      Drag to pan canvas.
+    {:else if editor.tool === "slot"}
+      Click canvas to place slot.
+    {:else if editor.tool === "texture"}
+      Click canvas to place texture region.
+    {:else if editor.tool === "text"}
+      Click canvas to place text.
+    {/if}
+  </p>
+
+  <hr class="divider" />
+
+  <h3>GUI</h3>
+  <div class="gui-info">
+    <span>{project.guiSize.width}×{project.guiSize.height}</span>
+    <span class="muted">{project.elementCount} elements</span>
+  </div>
+</aside>
+
+
+<style>
+  .palette {
+    padding: 10px;
+  }
+
+  h3 {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: #606080;
+    margin-bottom: 8px;
+  }
+
+  .tool-list {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .tool-btn {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: transparent;
+    border: 1px solid transparent;
+    color: #808090;
+    padding: 6px 8px;
+    font-size: 12px;
+    cursor: pointer;
+    border-radius: 3px;
+    font-family: inherit;
+    text-align: left;
+    width: 100%;
+  }
+
+  .tool-btn:hover {
+    background: #0f3460;
+    color: #e0e0e0;
+  }
+
+  .tool-btn.active {
+    background: #0f3460;
+    color: #e94560;
+    border-color: #e94560;
+  }
+
+  .tool-icon {
+    font-size: 14px;
+    width: 20px;
+    text-align: center;
+  }
+
+  .tool-label {
+    flex: 1;
+  }
+
+  .tool-shortcut {
+    font-size: 10px;
+    color: #505060;
+    background: #1a1a2e;
+    padding: 1px 5px;
+    border-radius: 2px;
+    font-family: monospace;
+  }
+
+  .hint {
+    font-size: 11px;
+    color: #505060;
+    margin-top: 8px;
+    line-height: 1.4;
+  }
+
+  .divider {
+    border: none;
+    border-top: 1px solid #0f3460;
+    margin: 12px 0;
+  }
+
+  .gui-info {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    font-size: 12px;
+    color: #808090;
+    font-family: monospace;
+  }
+
+  .muted {
+    color: #505060;
+    font-size: 11px;
+  }
+</style>

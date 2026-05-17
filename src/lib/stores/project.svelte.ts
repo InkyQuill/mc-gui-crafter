@@ -1,0 +1,445 @@
+import type { Element, ElementType, Group, Animation, Size, ModTarget, ActiveProjectPayload, ProjectSessionSummary } from "../types";
+import * as api from "../api";
+
+let nextId = 1;
+function uid(): string {
+  return `el_${nextId++}_${Date.now().toString(36)}`;
+}
+
+// Global map of asset name -> data URL for rendering
+export const assetDataUrls = new Map<string, string>();
+
+class ProjectStore {
+  sessions = $state<ProjectSessionSummary[]>([]);
+  activeProjectId = $state<string | null>(null);
+  name = $state("Untitled GUI");
+  guiSize = $state<Size>({ width: 176, height: 166 });
+  modTarget = $state<ModTarget>("forge");
+  elements = $state<Element[]>([]);
+  groups = $state<Group[]>([]);
+  animations = $state<Animation[]>([]);
+  assets = $state<string[]>([]);
+  revision = $state(0);
+  renderVersion = $state(0);
+
+  projectPath = $state<string | null>(null);
+  isDirty = $state(false);
+  isOpen = $state(false);
+
+  get elementCount(): number {
+    return this.elements.length;
+  }
+
+  get activeSession(): ProjectSessionSummary | undefined {
+    return this.sessions.find(session => session.id === this.activeProjectId);
+  }
+
+  get summary() {
+    return {
+      project_id: this.activeProjectId ?? "",
+      name: this.name,
+      gui_size: this.guiSize,
+      mod_target: this.modTarget,
+      element_count: this.elementCount,
+      is_dirty: this.isDirty,
+      revision: this.revision,
+      path: this.projectPath,
+      session: this.activeSession,
+    };
+  }
+
+  elementById(id: string): Element | undefined {
+    return this.elements.find(e => e.id === id);
+  }
+
+  groupById(id: string): Group | undefined {
+    return this.groups.find(group => group.id === id);
+  }
+
+  groupForElement(id: string): Group | undefined {
+    return this.groups.find(group => group.elements.includes(id));
+  }
+
+  async newProject(name: string, width: number, height: number, target: ModTarget, template?: string) {
+    const summary = await api.projectNew(name, width, height, target, template);
+    this.activeProjectId = summary.project_id;
+    await this.refreshSessions();
+    await this.hydrateActiveProject();
+    nextId = 1;
+    this.startAutoSave();
+  }
+
+  async openProject(path: string) {
+    const summary = await api.projectOpen(path);
+    this.activeProjectId = summary.project_id;
+    await this.refreshSessions();
+    await this.hydrateActiveProject();
+    nextId = this.elements.length + 1;
+    ProjectStore.addRecentProject(path);
+    this.startAutoSave();
+  }
+
+  async saveProject() {
+    if (!this.activeProjectId) return;
+    const result = await api.projectSave(this.activeProjectId);
+    this.projectPath = result.path ?? this.projectPath;
+    this.isDirty = result.is_dirty;
+    await this.refreshSessions();
+    if (this.projectPath) ProjectStore.addRecentProject(this.projectPath);
+  }
+
+  async saveProjectAs(path: string) {
+    if (!this.activeProjectId) return;
+    const result = await api.projectSaveAs(path, this.activeProjectId);
+    this.projectPath = result.path ?? path;
+    this.isDirty = result.is_dirty;
+    await this.refreshSessions();
+    ProjectStore.addRecentProject(this.projectPath);
+    this.startAutoSave();
+  }
+
+  async switchProject(projectId: string) {
+    if (projectId === this.activeProjectId) return;
+    await api.projectSetActive(projectId);
+    this.activeProjectId = projectId;
+    await this.refreshSessions();
+    await this.hydrateActiveProject();
+  }
+
+  async closeProject(projectId: string) {
+    await api.projectClose(projectId);
+    await this.refreshSessions();
+    if (this.sessions.length === 0) {
+      this.clearActiveProject();
+      return;
+    }
+    await this.hydrateActiveProject();
+  }
+
+  async addElement(type: ElementType, x: number, y: number, overrides?: Partial<Element>): Promise<Element> {
+    const element: Element = {
+      id: uid(),
+      type,
+      x,
+      y,
+      ...overrides,
+    };
+
+    if (type === "slot" && !element.size) {
+      element.size = 18;
+    }
+
+    const result = await api.elementAdd(element, this.activeProjectId ?? undefined);
+    this.elements = [...this.elements, result];
+    this.isDirty = true;
+    await this.refreshSessions();
+    this.bumpRenderVersion();
+
+    return result;
+  }
+
+  async moveElement(id: string, x: number, y: number, recordUndo = true) {
+    const old = this.elementById(id);
+    if (!old) return;
+    if (!recordUndo && old.x === x && old.y === y) return;
+
+    this._moveLocal(id, x, y);
+    this.isDirty = true;
+    this.bumpRenderVersion();
+
+    if (recordUndo) {
+      await api.elementMove(id, x, y, this.activeProjectId ?? undefined);
+      await this.refreshSessions();
+      await this.hydrateActiveProject();
+    }
+  }
+
+  async commitMovedElements(ids: Iterable<string>) {
+    const moves = [...ids]
+      .map(id => {
+        const el = this.elementById(id);
+        return el ? { id, x: el.x, y: el.y } : null;
+      })
+      .filter(move => move !== null);
+
+    if (moves.length === 0) return;
+
+    for (const move of moves) {
+      await api.elementMove(move.id, move.x, move.y, this.activeProjectId ?? undefined);
+    }
+
+    await this.refreshSessions();
+    await this.hydrateActiveProject();
+  }
+
+  private _moveLocal(id: string, x: number, y: number) {
+    const el = this.elements.find(e => e.id === id);
+    if (el) { el.x = x; el.y = y; }
+  }
+
+  async removeElement(id: string) {
+    const el = this.elementById(id);
+    if (!el) return;
+
+    await api.elementRemove(id, this.activeProjectId ?? undefined);
+    this.elements = this.elements.filter(e => e.id !== id);
+    this.groups = this.groups
+      .map(group => ({ ...group, elements: group.elements.filter(elementId => elementId !== id) }))
+      .filter(group => group.elements.length >= 2);
+    this.isDirty = true;
+    await this.refreshSessions();
+    this.bumpRenderVersion();
+  }
+
+  async updateElement(id: string, changes: Partial<Element>) {
+    const el = this.elements.find(e => e.id === id);
+    if (!el) return;
+
+    const updated = await api.elementUpdate(id, changes, this.activeProjectId ?? undefined);
+    Object.assign(el, updated);
+    await this.refreshSessions();
+    await this.hydrateActiveProject();
+  }
+
+  async createGroup(elementIds: Iterable<string>) {
+    const ids = [...new Set([...elementIds])].filter(id => this.elementById(id));
+    if (ids.length < 2) return null;
+
+    const group = await api.groupCreate(ids, undefined, this.activeProjectId ?? undefined);
+    await this.refreshSessions();
+    await this.hydrateActiveProject();
+    return group;
+  }
+
+  async ungroup(groupId: string) {
+    const removed = await api.groupUngroup(groupId, this.activeProjectId ?? undefined);
+    if (removed) {
+      await this.refreshSessions();
+      await this.hydrateActiveProject();
+    }
+    return removed;
+  }
+
+  async ungroupElements(elementIds: Iterable<string>) {
+    const groupIds = new Set<string>();
+    for (const id of elementIds) {
+      const group = this.groupForElement(id);
+      if (group) groupIds.add(group.id);
+    }
+    for (const groupId of groupIds) {
+      await this.ungroup(groupId);
+    }
+  }
+
+  async undo() {
+    if (!this.activeProjectId || !this.canUndo) return;
+    await api.projectUndo(this.activeProjectId);
+    await this.refreshSessions();
+    await this.hydrateActiveProject();
+  }
+
+  async redo() {
+    if (!this.activeProjectId || !this.canRedo) return;
+    await api.projectRedo(this.activeProjectId);
+    await this.refreshSessions();
+    await this.hydrateActiveProject();
+  }
+
+  get canUndo(): boolean { return this.activeSession?.can_undo ?? false; }
+  get canRedo(): boolean { return this.activeSession?.can_redo ?? false; }
+
+  async moveElementUp(id: string) {
+    const idx = this.elements.findIndex(e => e.id === id);
+    if (idx > 0) {
+      await api.elementReorder(id, idx - 1, this.activeProjectId ?? undefined);
+      await this.refreshSessions();
+      await this.hydrateActiveProject();
+    }
+  }
+
+  async moveElementDown(id: string) {
+    const idx = this.elements.findIndex(e => e.id === id);
+    if (idx < this.elements.length - 1) {
+      await api.elementReorder(id, idx + 1, this.activeProjectId ?? undefined);
+      await this.refreshSessions();
+      await this.hydrateActiveProject();
+    }
+  }
+
+  getElementBounds(id: string): { x: number; y: number; w: number; h: number } | null {
+    const el = this.elementById(id);
+    if (!el) return null;
+    const w = el.width ?? el.size ?? 18;
+    const h = el.height ?? el.size ?? 18;
+    return { x: el.x, y: el.y, w, h };
+  }
+
+  async resizeElement(id: string, x: number, y: number, w: number, h: number, recordUndo = true) {
+    const el = this.elementById(id);
+    if (!el) return;
+
+    this._resizeLocal(id, x, y, w, h, undefined);
+    this.isDirty = true;
+    this.bumpRenderVersion();
+    if (recordUndo) {
+      await api.elementResize(id, x, y, w, h, this.activeProjectId ?? undefined);
+      await this.refreshSessions();
+      await this.hydrateActiveProject();
+    }
+  }
+
+  _resizeLocal(id: string, x: number, y: number, w?: number, h?: number, size?: number) {
+    const el = this.elements.find(e => e.id === id);
+    if (!el) return;
+    el.x = x;
+    el.y = y;
+    if (el.type === "slot") {
+      const nextSize = size ?? (w !== undefined || h !== undefined ? Math.max(w ?? 0, h ?? 0) : undefined);
+      if (nextSize !== undefined) el.size = Math.max(8, nextSize);
+    } else {
+      if (w !== undefined) el.width = Math.max(4, w);
+      if (h !== undefined) el.height = Math.max(4, h);
+    }
+  }
+
+  // -- Animation management --
+  async addAnimation(name: string, type: Animation["type"], dataKey: string) {
+    const anim: Animation = {
+      id: name.trim() || `anim_${Date.now().toString(36)}`,
+      type,
+      data_key: dataKey,
+    };
+    const created = await api.animationCreate(anim, this.activeProjectId ?? undefined);
+    await this.refreshSessions();
+    await this.hydrateActiveProject();
+    return created;
+  }
+
+  async removeAnimation(id: string) {
+    await api.animationRemove(id, this.activeProjectId ?? undefined);
+    await this.refreshSessions();
+    await this.hydrateActiveProject();
+  }
+
+  async updateAnimation(id: string, changes: Partial<Animation>) {
+    const anim = this.animations.find(a => a.id === id);
+    if (anim) {
+      Object.assign(anim, await api.animationUpdate(id, changes, this.activeProjectId ?? undefined));
+      await this.refreshSessions();
+      await this.hydrateActiveProject();
+    }
+  }
+
+  async bindAnimationToElement(elementId: string, animationId: string | undefined) {
+    const el = this.elements.find(e => e.id === elementId);
+    if (el) {
+      const updated = animationId
+        ? await api.animationBind(elementId, animationId, this.activeProjectId ?? undefined)
+        : await api.animationUnbind(elementId, this.activeProjectId ?? undefined);
+      Object.assign(el, updated);
+      await this.refreshSessions();
+      await this.hydrateActiveProject();
+    }
+  }
+
+  // -- Auto-save --
+  private autoSaveTimer: ReturnType<typeof setInterval> | null = null;
+
+  async syncFromBackend() {
+    await this.refreshSessions();
+    if (this.activeProjectId) {
+      await this.hydrateActiveProject();
+    }
+  }
+
+  async refreshSessions() {
+    try {
+      this.sessions = await api.projectListSessions();
+      this.activeProjectId = this.sessions.find(session => session.active)?.id ?? null;
+    } catch { /* ignore errors during sync */ }
+  }
+
+  async hydrateActiveProject() {
+    try {
+      const payload = await api.projectGetActive();
+      this.applyActivePayload(payload);
+      await this.loadActiveAssets();
+    } catch {
+      this.clearActiveProject();
+    }
+  }
+
+  private applyActivePayload(payload: ActiveProjectPayload) {
+    const project = payload.project;
+    this.activeProjectId = payload.summary.id;
+    this.name = project.name;
+    this.guiSize = project.gui_size;
+    this.modTarget = project.mod_target;
+    this.elements = project.elements;
+    this.groups = project.groups;
+    this.animations = project.animations;
+    this.assets = project.assets;
+    this.projectPath = payload.summary.path ?? project.project_path ?? null;
+    this.isDirty = payload.summary.is_dirty;
+    this.revision = payload.summary.revision;
+    this.isOpen = true;
+    this.bumpRenderVersion();
+  }
+
+  private async loadActiveAssets() {
+    try {
+      const assets = await api.assetList(this.activeProjectId ?? undefined);
+      this.assets = assets.map(a => a.name);
+      assetDataUrls.clear();
+      for (const a of assets) {
+        assetDataUrls.set(a.name, a.data_url);
+      }
+      this.bumpRenderVersion();
+    } catch { /* assets may not be available */ }
+  }
+
+  private clearActiveProject() {
+    this.activeProjectId = null;
+    this.name = "Untitled GUI";
+    this.guiSize = { width: 176, height: 166 };
+    this.modTarget = "forge";
+    this.elements = [];
+    this.groups = [];
+    this.animations = [];
+    this.assets = [];
+    this.projectPath = null;
+    this.isDirty = false;
+    this.revision = 0;
+    this.isOpen = false;
+    assetDataUrls.clear();
+    this.bumpRenderVersion();
+  }
+  private bumpRenderVersion() {
+    this.renderVersion += 1;
+  }
+  startAutoSave(intervalMs = 60000) {
+    this.stopAutoSave();
+    this.autoSaveTimer = setInterval(() => {
+      if (this.isDirty && this.projectPath) {
+        this.saveProject();
+      }
+    }, intervalMs);
+  }
+  stopAutoSave() {
+    if (this.autoSaveTimer) { clearInterval(this.autoSaveTimer); this.autoSaveTimer = null; }
+  }
+
+  // -- Recent projects --
+  static getRecentProjects(): string[] {
+    try {
+      return JSON.parse(localStorage.getItem("mcgui_recent") || "[]");
+    } catch { return []; }
+  }
+  static addRecentProject(path: string) {
+    const recent = ProjectStore.getRecentProjects().filter(p => p !== path);
+    recent.unshift(path);
+    localStorage.setItem("mcgui_recent", JSON.stringify(recent.slice(0, 10)));
+  }
+}
+
+export const project = new ProjectStore();

@@ -1,0 +1,1659 @@
+use crate::animation::Animation;
+use crate::format;
+use crate::project::{Element, Group, ModTarget, Project, ProjectSessionSummary};
+use crate::templates::TemplateInfo;
+use crate::AppState;
+use tauri::State;
+
+#[tauri::command(rename_all = "snake_case")]
+pub fn template_list() -> Vec<TemplateInfo> {
+    crate::templates::list_template_info()
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub fn project_new(
+    state: State<AppState>,
+    name: String,
+    width: u32,
+    height: u32,
+    mod_target: String,
+    template: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let target = parse_mod_target(&mod_target);
+
+    let mut project = Project::new(&name, width, height, target);
+
+    if let Some(tmpl) = template {
+        crate::templates::apply_template(&mut project, &tmpl)?;
+    }
+
+    let mut sessions = state.sessions.lock().unwrap();
+    let project_id = sessions.create_session(project);
+
+    project_result(&sessions, &project_id)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub fn project_open(state: State<AppState>, path: String) -> Result<serde_json::Value, String> {
+    let project = format::load_from_mcgui(&path)?;
+    let mut sessions = state.sessions.lock().unwrap();
+    let project_id = sessions.create_session(project);
+
+    project_result(&sessions, &project_id)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub fn project_save(
+    state: State<AppState>,
+    project_id: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let mut sessions = state.sessions.lock().unwrap();
+    save_session(&mut sessions, project_id.as_deref())
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub fn project_save_as(
+    state: State<AppState>,
+    project_id: Option<String>,
+    path: String,
+) -> Result<serde_json::Value, String> {
+    let mut sessions = state.sessions.lock().unwrap();
+    save_session_as(&mut sessions, project_id.as_deref(), path)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub fn project_close(
+    state: State<AppState>,
+    project_id: String,
+) -> Result<ProjectSessionSummary, String> {
+    let mut sessions = state.sessions.lock().unwrap();
+    sessions.close_session(&project_id)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub fn project_set_active(
+    state: State<AppState>,
+    project_id: String,
+) -> Result<ProjectSessionSummary, String> {
+    let mut sessions = state.sessions.lock().unwrap();
+    sessions.set_active(&project_id)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub fn project_list_sessions(state: State<AppState>) -> Vec<ProjectSessionSummary> {
+    let sessions = state.sessions.lock().unwrap();
+    sessions.list_sessions()
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub fn project_get_active(state: State<AppState>) -> Result<serde_json::Value, String> {
+    let sessions = state.sessions.lock().unwrap();
+    let active = sessions.active_session()?;
+    Ok(serde_json::json!({
+        "summary": sessions.list_sessions().into_iter().find(|summary| summary.id == active.id),
+        "project": active.project,
+    }))
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub fn project_summary(
+    state: State<AppState>,
+    project_id: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let sessions = state.sessions.lock().unwrap();
+    let session = sessions.resolve(project_id.as_deref())?;
+
+    Ok(serde_json::json!({
+        "project_id": session.id,
+        "name": session.project.name,
+        "gui_size": session.project.gui_size,
+        "mod_target": session.project.mod_target,
+        "element_count": session.project.elements.len(),
+        "is_dirty": session.project.is_dirty,
+        "path": session.project.project_path,
+        "revision": session.revision,
+        "session": sessions.list_sessions().into_iter().find(|summary| summary.id == session.id),
+    }))
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub fn element_add(
+    state: State<AppState>,
+    element: Element,
+    project_id: Option<String>,
+) -> Result<Element, String> {
+    let mut sessions = state.sessions.lock().unwrap();
+    sessions.record_history(project_id.as_deref())?;
+    let session = sessions.resolve_mut(project_id.as_deref())?;
+
+    session.project.add_element(element.clone());
+    sessions.mark_changed(project_id.as_deref())?;
+    Ok(element)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub fn element_move(
+    state: State<AppState>,
+    id: String,
+    x: i32,
+    y: i32,
+    project_id: Option<String>,
+) -> Result<Element, String> {
+    let mut sessions = state.sessions.lock().unwrap();
+    move_element_in_session(&mut sessions, project_id.as_deref(), &id, x, y)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub fn element_update(
+    state: State<AppState>,
+    id: String,
+    changes: serde_json::Value,
+    project_id: Option<String>,
+) -> Result<Element, String> {
+    let mut sessions = state.sessions.lock().unwrap();
+    update_element_in_session(&mut sessions, project_id.as_deref(), &id, changes)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub fn element_resize(
+    state: State<AppState>,
+    id: String,
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+    project_id: Option<String>,
+) -> Result<Element, String> {
+    let mut sessions = state.sessions.lock().unwrap();
+    resize_element_in_session(
+        &mut sessions,
+        project_id.as_deref(),
+        &id,
+        x,
+        y,
+        width,
+        height,
+    )
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub fn element_reorder(
+    state: State<AppState>,
+    id: String,
+    index: usize,
+    project_id: Option<String>,
+) -> Result<ProjectSessionSummary, String> {
+    let mut sessions = state.sessions.lock().unwrap();
+    reorder_element_in_session(&mut sessions, project_id.as_deref(), &id, index)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub fn element_remove(
+    state: State<AppState>,
+    id: String,
+    project_id: Option<String>,
+) -> Result<bool, String> {
+    let mut sessions = state.sessions.lock().unwrap();
+    remove_element_from_session(&mut sessions, project_id.as_deref(), &id)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub fn element_list(
+    state: State<AppState>,
+    project_id: Option<String>,
+) -> Result<Vec<Element>, String> {
+    let sessions = state.sessions.lock().unwrap();
+    let session = sessions.resolve(project_id.as_deref())?;
+
+    Ok(session.project.elements.clone())
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub fn group_create(
+    state: State<AppState>,
+    element_ids: Vec<String>,
+    group_id: Option<String>,
+    project_id: Option<String>,
+) -> Result<Group, String> {
+    let mut sessions = state.sessions.lock().unwrap();
+    create_group_in_session(&mut sessions, project_id.as_deref(), element_ids, group_id)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub fn group_ungroup(
+    state: State<AppState>,
+    group_id: String,
+    project_id: Option<String>,
+) -> Result<bool, String> {
+    let mut sessions = state.sessions.lock().unwrap();
+    ungroup_in_session(&mut sessions, project_id.as_deref(), &group_id)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub fn group_list(
+    state: State<AppState>,
+    project_id: Option<String>,
+) -> Result<Vec<Group>, String> {
+    let sessions = state.sessions.lock().unwrap();
+    let session = sessions.resolve(project_id.as_deref())?;
+    Ok(session.project.groups.clone())
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub fn animation_create(
+    state: State<AppState>,
+    animation: Animation,
+    project_id: Option<String>,
+) -> Result<Animation, String> {
+    let mut sessions = state.sessions.lock().unwrap();
+    create_animation_in_session(&mut sessions, project_id.as_deref(), animation)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub fn animation_update(
+    state: State<AppState>,
+    id: String,
+    changes: serde_json::Value,
+    project_id: Option<String>,
+) -> Result<Animation, String> {
+    let mut sessions = state.sessions.lock().unwrap();
+    update_animation_in_session(&mut sessions, project_id.as_deref(), &id, changes)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub fn animation_remove(
+    state: State<AppState>,
+    id: String,
+    project_id: Option<String>,
+) -> Result<bool, String> {
+    let mut sessions = state.sessions.lock().unwrap();
+    remove_animation_from_session(&mut sessions, project_id.as_deref(), &id)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub fn animation_bind(
+    state: State<AppState>,
+    element_id: String,
+    animation_id: String,
+    project_id: Option<String>,
+) -> Result<Element, String> {
+    let mut sessions = state.sessions.lock().unwrap();
+    bind_animation_in_session(
+        &mut sessions,
+        project_id.as_deref(),
+        &element_id,
+        &animation_id,
+    )
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub fn animation_unbind(
+    state: State<AppState>,
+    element_id: String,
+    project_id: Option<String>,
+) -> Result<Element, String> {
+    let mut sessions = state.sessions.lock().unwrap();
+    unbind_animation_in_session(&mut sessions, project_id.as_deref(), &element_id)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub fn asset_import(
+    state: State<AppState>,
+    file_path: String,
+    project_id: Option<String>,
+) -> Result<serde_json::Value, String> {
+    use std::io::Read;
+
+    // Read file
+    let mut file =
+        std::fs::File::open(&file_path).map_err(|e| format!("Failed to open file: {e}"))?;
+    let mut data = Vec::new();
+    file.read_to_end(&mut data)
+        .map_err(|e| format!("Failed to read file: {e}"))?;
+
+    // Decode with image crate to get dimensions
+    let img = image::load_from_memory(&data).map_err(|e| format!("Failed to decode image: {e}"))?;
+    let (width, height) = (img.width(), img.height());
+
+    // Generate asset name from filename
+    let name = std::path::Path::new(&file_path)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("texture");
+    let asset_path = format!("textures/{name}.png");
+
+    // Base64 encode
+    use base64::Engine;
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&data);
+
+    let mut sessions = state.sessions.lock().unwrap();
+    sessions.record_history(project_id.as_deref())?;
+    let session = sessions.resolve_mut(project_id.as_deref())?;
+
+    session
+        .project
+        .texture_data
+        .insert(asset_path.clone(), data);
+    if !session.project.assets.contains(&asset_path) {
+        session.project.assets.push(asset_path.clone());
+    }
+    sessions.mark_changed(project_id.as_deref())?;
+
+    Ok(serde_json::json!({
+        "name": asset_path,
+        "width": width,
+        "height": height,
+        "data_url": format!("data:image/png;base64,{}", b64)
+    }))
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub fn asset_update(
+    state: State<AppState>,
+    name: String,
+    data_url: String,
+    project_id: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let mut sessions = state.sessions.lock().unwrap();
+    update_asset_in_session(&mut sessions, project_id.as_deref(), &name, &data_url)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub fn asset_list(
+    state: State<AppState>,
+    project_id: Option<String>,
+) -> Result<Vec<serde_json::Value>, String> {
+    let sessions = state.sessions.lock().unwrap();
+    let project = &sessions.resolve(project_id.as_deref())?.project;
+
+    use base64::Engine;
+    Ok(project
+        .assets
+        .iter()
+        .map(|name| {
+            let (width, height, data_url) = if let Some(data) = project.texture_data.get(name) {
+                let dims = image::load_from_memory(data).ok();
+                let w = dims.as_ref().map(|i| i.width()).unwrap_or(16);
+                let h = dims.as_ref().map(|i| i.height()).unwrap_or(16);
+                let b64 = base64::engine::general_purpose::STANDARD.encode(data);
+                (w, h, format!("data:image/png;base64,{}", b64))
+            } else {
+                (16, 16, String::new())
+            };
+            serde_json::json!({
+                "name": name,
+                "width": width,
+                "height": height,
+                "data_url": data_url
+            })
+        })
+        .collect())
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub fn asset_remove(
+    state: State<AppState>,
+    name: String,
+    project_id: Option<String>,
+) -> Result<bool, String> {
+    let mut sessions = state.sessions.lock().unwrap();
+    remove_asset_from_session(&mut sessions, project_id.as_deref(), &name)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub fn asset_get_data_url(
+    state: State<AppState>,
+    name: String,
+    project_id: Option<String>,
+) -> Result<String, String> {
+    let sessions = state.sessions.lock().unwrap();
+    let project = &sessions.resolve(project_id.as_deref())?.project;
+
+    let data = project
+        .texture_data
+        .get(&name)
+        .ok_or(format!("Asset not found: {name}"))?;
+
+    use base64::Engine;
+    let b64 = base64::engine::general_purpose::STANDARD.encode(data);
+    Ok(format!("data:image/png;base64,{}", b64))
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub fn project_export(
+    state: State<AppState>,
+    target: String,
+    mod_id: String,
+    package: String,
+    class_name: String,
+    output_dir: String,
+    project_id: Option<String>,
+) -> Result<Vec<String>, String> {
+    let sessions = state.sessions.lock().unwrap();
+    let project = &sessions.resolve(project_id.as_deref())?.project;
+
+    let config = crate::export::ExportConfig {
+        mod_id,
+        package,
+        class_name,
+        output_dir,
+    };
+
+    crate::export::export_project(project, &config, &target)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub fn project_undo(
+    state: State<AppState>,
+    project_id: Option<String>,
+) -> Result<ProjectSessionSummary, String> {
+    let mut sessions = state.sessions.lock().unwrap();
+    sessions.undo(project_id.as_deref())
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub fn project_redo(
+    state: State<AppState>,
+    project_id: Option<String>,
+) -> Result<ProjectSessionSummary, String> {
+    let mut sessions = state.sessions.lock().unwrap();
+    sessions.redo(project_id.as_deref())
+}
+
+fn parse_mod_target(mod_target: &str) -> ModTarget {
+    match mod_target {
+        "fabric" | "Fabric" => ModTarget::Fabric,
+        "neoforge" | "NeoForge" => ModTarget::NeoForge,
+        _ => ModTarget::Forge,
+    }
+}
+
+fn move_element_in_session(
+    sessions: &mut crate::project::ProjectSessionManager,
+    project_id: Option<&str>,
+    id: &str,
+    x: i32,
+    y: i32,
+) -> Result<Element, String> {
+    let current = sessions
+        .resolve(project_id)?
+        .project
+        .find_element(id)
+        .ok_or("Element not found")?;
+    if current.x == x && current.y == y {
+        return Ok(current.clone());
+    }
+
+    sessions.record_history(project_id)?;
+    let session = sessions.resolve_mut(project_id)?;
+    let element = session
+        .project
+        .find_element_mut(id)
+        .ok_or("Element not found")?;
+    element.x = x;
+    element.y = y;
+    let element = element.clone();
+    sessions.mark_changed(project_id)?;
+
+    Ok(element)
+}
+
+fn remove_element_from_session(
+    sessions: &mut crate::project::ProjectSessionManager,
+    project_id: Option<&str>,
+    id: &str,
+) -> Result<bool, String> {
+    if sessions
+        .resolve(project_id)?
+        .project
+        .find_element(id)
+        .is_none()
+    {
+        return Ok(false);
+    }
+
+    sessions.record_history(project_id)?;
+    let session = sessions.resolve_mut(project_id)?;
+    let removed = session.project.remove_element(id).is_some();
+    if removed {
+        sessions.mark_changed(project_id)?;
+    }
+    Ok(removed)
+}
+
+fn update_element_in_session(
+    sessions: &mut crate::project::ProjectSessionManager,
+    project_id: Option<&str>,
+    id: &str,
+    changes: serde_json::Value,
+) -> Result<Element, String> {
+    let current = sessions
+        .resolve(project_id)?
+        .project
+        .find_element(id)
+        .ok_or("Element not found")?;
+    let updated = apply_element_changes(current, changes)?;
+    if &updated == current {
+        return Ok(current.clone());
+    }
+
+    sessions.record_history(project_id)?;
+    let session = sessions.resolve_mut(project_id)?;
+    let element = session
+        .project
+        .find_element_mut(id)
+        .ok_or("Element not found")?;
+    *element = updated.clone();
+    sessions.mark_changed(project_id)?;
+    Ok(updated)
+}
+
+fn apply_element_changes(element: &Element, changes: serde_json::Value) -> Result<Element, String> {
+    let mut value = serde_json::to_value(element)
+        .map_err(|error| format!("Failed to encode element: {error}"))?;
+    let object = changes
+        .as_object()
+        .ok_or("Element changes must be an object")?;
+
+    if object
+        .get("id")
+        .is_some_and(|value| value.as_str() != Some(element.id.as_str()))
+    {
+        return Err("Element id cannot be changed".to_string());
+    }
+    if object.get("type").is_some() {
+        return Err("Element type cannot be changed".to_string());
+    }
+
+    let target = value
+        .as_object_mut()
+        .ok_or("Element payload must be an object")?;
+    for (key, new_value) in object {
+        if key == "id" || key == "type" {
+            continue;
+        }
+        target.insert(key.clone(), new_value.clone());
+    }
+
+    serde_json::from_value(value).map_err(|error| format!("Invalid element update: {error}"))
+}
+
+fn resize_element_in_session(
+    sessions: &mut crate::project::ProjectSessionManager,
+    project_id: Option<&str>,
+    id: &str,
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+) -> Result<Element, String> {
+    let current = sessions
+        .resolve(project_id)?
+        .project
+        .find_element(id)
+        .ok_or("Element not found")?;
+    let mut updated = current.clone();
+    updated.x = x;
+    updated.y = y;
+    if updated.element_type == crate::project::ElementType::Slot {
+        updated.size = Some(width.max(height).max(8));
+    } else {
+        updated.width = Some(width.max(4));
+        updated.height = Some(height.max(4));
+    }
+    if &updated == current {
+        return Ok(current.clone());
+    }
+
+    sessions.record_history(project_id)?;
+    let session = sessions.resolve_mut(project_id)?;
+    let element = session
+        .project
+        .find_element_mut(id)
+        .ok_or("Element not found")?;
+    *element = updated.clone();
+    sessions.mark_changed(project_id)?;
+    Ok(updated)
+}
+
+fn reorder_element_in_session(
+    sessions: &mut crate::project::ProjectSessionManager,
+    project_id: Option<&str>,
+    id: &str,
+    index: usize,
+) -> Result<ProjectSessionSummary, String> {
+    let session = sessions.resolve(project_id)?;
+    let current_index = session
+        .project
+        .elements
+        .iter()
+        .position(|element| element.id == id)
+        .ok_or("Element not found")?;
+    let target_index = index.min(session.project.elements.len().saturating_sub(1));
+    if current_index == target_index {
+        return session_summary(sessions, &session.id);
+    }
+
+    sessions.record_history(project_id)?;
+    let session = sessions.resolve_mut(project_id)?;
+    let element = session.project.elements.remove(current_index);
+    session.project.elements.insert(target_index, element);
+    sessions.mark_changed(project_id)
+}
+
+fn create_group_in_session(
+    sessions: &mut crate::project::ProjectSessionManager,
+    project_id: Option<&str>,
+    element_ids: Vec<String>,
+    group_id: Option<String>,
+) -> Result<Group, String> {
+    let id = group_id.unwrap_or_else(|| format!("group_{}", uuid::Uuid::new_v4()));
+
+    {
+        let project = &sessions.resolve(project_id)?.project;
+        if project.groups.iter().any(|group| group.id == id) {
+            return Err("Group already exists".to_string());
+        }
+        let mut unique_count = 0usize;
+        let mut unique_ids: Vec<&String> = Vec::new();
+        for element_id in &element_ids {
+            if !unique_ids.iter().any(|existing| *existing == element_id) {
+                unique_count += 1;
+                unique_ids.push(element_id);
+            }
+            if project.find_element(element_id).is_none() {
+                return Err(format!("Element not found: {element_id}"));
+            }
+        }
+        if unique_count < 2 {
+            return Err("At least two elements are required to create a group".to_string());
+        }
+    }
+
+    sessions.record_history(project_id)?;
+    let session = sessions.resolve_mut(project_id)?;
+    let group = session.project.group_elements(id, element_ids)?;
+    sessions.mark_changed(project_id)?;
+    Ok(group)
+}
+
+fn ungroup_in_session(
+    sessions: &mut crate::project::ProjectSessionManager,
+    project_id: Option<&str>,
+    group_id: &str,
+) -> Result<bool, String> {
+    if !sessions
+        .resolve(project_id)?
+        .project
+        .groups
+        .iter()
+        .any(|group| group.id == group_id)
+    {
+        return Ok(false);
+    }
+
+    sessions.record_history(project_id)?;
+    let session = sessions.resolve_mut(project_id)?;
+    let removed = session.project.ungroup(group_id);
+    if removed {
+        sessions.mark_changed(project_id)?;
+    }
+    Ok(removed)
+}
+
+fn create_animation_in_session(
+    sessions: &mut crate::project::ProjectSessionManager,
+    project_id: Option<&str>,
+    animation: Animation,
+) -> Result<Animation, String> {
+    let project = &sessions.resolve(project_id)?.project;
+    if project
+        .animations
+        .iter()
+        .any(|existing| existing.id == animation.id)
+    {
+        return Err("Animation already exists".to_string());
+    }
+
+    sessions.record_history(project_id)?;
+    let session = sessions.resolve_mut(project_id)?;
+    session.project.animations.push(animation.clone());
+    sessions.mark_changed(project_id)?;
+    Ok(animation)
+}
+
+fn update_animation_in_session(
+    sessions: &mut crate::project::ProjectSessionManager,
+    project_id: Option<&str>,
+    id: &str,
+    changes: serde_json::Value,
+) -> Result<Animation, String> {
+    let current = sessions
+        .resolve(project_id)?
+        .project
+        .animations
+        .iter()
+        .find(|animation| animation.id == id)
+        .ok_or("Animation not found")?;
+    let updated = apply_animation_changes(current, changes)?;
+    if &updated == current {
+        return Ok(current.clone());
+    }
+
+    sessions.record_history(project_id)?;
+    let session = sessions.resolve_mut(project_id)?;
+    let animation = session
+        .project
+        .animations
+        .iter_mut()
+        .find(|animation| animation.id == id)
+        .ok_or("Animation not found")?;
+    *animation = updated.clone();
+    sessions.mark_changed(project_id)?;
+    Ok(updated)
+}
+
+fn apply_animation_changes(
+    animation: &Animation,
+    changes: serde_json::Value,
+) -> Result<Animation, String> {
+    let mut value = serde_json::to_value(animation)
+        .map_err(|error| format!("Failed to encode animation: {error}"))?;
+    let object = changes
+        .as_object()
+        .ok_or("Animation changes must be an object")?;
+    if object
+        .get("id")
+        .is_some_and(|value| value.as_str() != Some(animation.id.as_str()))
+    {
+        return Err("Animation id cannot be changed".to_string());
+    }
+    if object.get("type").is_some() {
+        return Err("Animation type cannot be changed".to_string());
+    }
+
+    let target = value
+        .as_object_mut()
+        .ok_or("Animation payload must be an object")?;
+    for (key, new_value) in object {
+        if key == "id" || key == "type" {
+            continue;
+        }
+        target.insert(key.clone(), new_value.clone());
+    }
+
+    serde_json::from_value(value).map_err(|error| format!("Invalid animation update: {error}"))
+}
+
+fn remove_animation_from_session(
+    sessions: &mut crate::project::ProjectSessionManager,
+    project_id: Option<&str>,
+    id: &str,
+) -> Result<bool, String> {
+    let project = &sessions.resolve(project_id)?.project;
+    if !project
+        .animations
+        .iter()
+        .any(|animation| animation.id == id)
+    {
+        return Ok(false);
+    }
+
+    sessions.record_history(project_id)?;
+    let session = sessions.resolve_mut(project_id)?;
+    session
+        .project
+        .animations
+        .retain(|animation| animation.id != id);
+    for element in &mut session.project.elements {
+        if element.animation.as_deref() == Some(id) {
+            element.animation = None;
+        }
+    }
+    sessions.mark_changed(project_id)?;
+    Ok(true)
+}
+
+fn bind_animation_in_session(
+    sessions: &mut crate::project::ProjectSessionManager,
+    project_id: Option<&str>,
+    element_id: &str,
+    animation_id: &str,
+) -> Result<Element, String> {
+    let project = &sessions.resolve(project_id)?.project;
+    if !project
+        .animations
+        .iter()
+        .any(|animation| animation.id == animation_id)
+    {
+        return Err("Animation not found".to_string());
+    }
+    let current = project
+        .find_element(element_id)
+        .ok_or("Element not found")?;
+    if current.animation.as_deref() == Some(animation_id) {
+        return Ok(current.clone());
+    }
+
+    sessions.record_history(project_id)?;
+    let session = sessions.resolve_mut(project_id)?;
+    let element = session
+        .project
+        .find_element_mut(element_id)
+        .ok_or("Element not found")?;
+    element.animation = Some(animation_id.to_string());
+    let element = element.clone();
+    sessions.mark_changed(project_id)?;
+    Ok(element)
+}
+
+fn unbind_animation_in_session(
+    sessions: &mut crate::project::ProjectSessionManager,
+    project_id: Option<&str>,
+    element_id: &str,
+) -> Result<Element, String> {
+    let current = sessions
+        .resolve(project_id)?
+        .project
+        .find_element(element_id)
+        .ok_or("Element not found")?;
+    if current.animation.is_none() {
+        return Ok(current.clone());
+    }
+
+    sessions.record_history(project_id)?;
+    let session = sessions.resolve_mut(project_id)?;
+    let element = session
+        .project
+        .find_element_mut(element_id)
+        .ok_or("Element not found")?;
+    element.animation = None;
+    let element = element.clone();
+    sessions.mark_changed(project_id)?;
+    Ok(element)
+}
+
+fn remove_asset_from_session(
+    sessions: &mut crate::project::ProjectSessionManager,
+    project_id: Option<&str>,
+    name: &str,
+) -> Result<bool, String> {
+    let exists = {
+        let project = &sessions.resolve(project_id)?.project;
+        project.assets.iter().any(|asset| asset == name) || project.texture_data.contains_key(name)
+    };
+    if !exists {
+        return Ok(false);
+    }
+
+    sessions.record_history(project_id)?;
+    let session = sessions.resolve_mut(project_id)?;
+    let removed_texture = session.project.texture_data.remove(name).is_some();
+    let old_len = session.project.assets.len();
+    session.project.assets.retain(|asset| asset != name);
+    let removed_asset = session.project.assets.len() != old_len;
+    if removed_texture || removed_asset {
+        sessions.mark_changed(project_id)?;
+    }
+
+    Ok(removed_texture || removed_asset)
+}
+
+fn update_asset_in_session(
+    sessions: &mut crate::project::ProjectSessionManager,
+    project_id: Option<&str>,
+    name: &str,
+    data_url: &str,
+) -> Result<serde_json::Value, String> {
+    let data = decode_png_data_url(data_url)?;
+    if image::guess_format(&data).map_err(|e| format!("Failed to detect image format: {e}"))?
+        != image::ImageFormat::Png
+    {
+        return Err("Invalid asset image: expected PNG bytes".to_string());
+    }
+    let img = image::load_from_memory(&data).map_err(|e| format!("Failed to decode PNG: {e}"))?;
+    let (width, height) = (img.width(), img.height());
+
+    {
+        let project = &sessions.resolve(project_id)?.project;
+        if !project.assets.iter().any(|asset| asset == name) {
+            return Err(format!("Asset not found: {name}"));
+        }
+    }
+
+    {
+        let project = &sessions.resolve(project_id)?.project;
+        if project
+            .texture_data
+            .get(name)
+            .is_some_and(|current| current == &data)
+        {
+            return Ok(serde_json::json!({
+                "name": name,
+                "width": width,
+                "height": height,
+                "data_url": data_url,
+            }));
+        }
+    }
+
+    sessions.record_history(project_id)?;
+    let session = sessions.resolve_mut(project_id)?;
+    session.project.texture_data.insert(name.to_string(), data);
+    sessions.mark_changed(project_id)?;
+
+    Ok(serde_json::json!({
+        "name": name,
+        "width": width,
+        "height": height,
+        "data_url": data_url,
+    }))
+}
+
+fn decode_png_data_url(data_url: &str) -> Result<Vec<u8>, String> {
+    let Some(payload) = data_url.strip_prefix("data:image/png;base64,") else {
+        return Err("Invalid asset data URL: expected data:image/png;base64,...".to_string());
+    };
+    if payload.trim().is_empty() {
+        return Err("Invalid asset data URL: missing PNG base64 payload".to_string());
+    }
+
+    use base64::Engine;
+    base64::engine::general_purpose::STANDARD
+        .decode(payload)
+        .map_err(|e| format!("Invalid PNG base64 payload: {e}"))
+}
+
+fn save_session(
+    sessions: &mut crate::project::ProjectSessionManager,
+    project_id: Option<&str>,
+) -> Result<serde_json::Value, String> {
+    let session = sessions.resolve_mut(project_id)?;
+    format::save_to_mcgui(&session.project)?;
+    session.project.is_dirty = false;
+
+    Ok(serde_json::json!({
+        "project_id": session.id,
+        "status": "saved",
+        "path": session.project.project_path,
+        "is_dirty": false
+    }))
+}
+
+fn save_session_as(
+    sessions: &mut crate::project::ProjectSessionManager,
+    project_id: Option<&str>,
+    path: String,
+) -> Result<serde_json::Value, String> {
+    let session = sessions.resolve_mut(project_id)?;
+    let previous_path = session.project.project_path.clone();
+    session.project.project_path = Some(path.clone());
+    if let Err(error) = format::save_to_mcgui(&session.project) {
+        session.project.project_path = previous_path;
+        return Err(error);
+    }
+    session.project.is_dirty = false;
+
+    Ok(serde_json::json!({
+        "project_id": session.id,
+        "status": "saved",
+        "path": path,
+        "is_dirty": false
+    }))
+}
+
+fn session_summary(
+    sessions: &crate::project::ProjectSessionManager,
+    project_id: &str,
+) -> Result<ProjectSessionSummary, String> {
+    sessions
+        .list_sessions()
+        .into_iter()
+        .find(|summary| summary.id == project_id)
+        .ok_or("Project session not found".to_string())
+}
+
+fn project_result(
+    sessions: &crate::project::ProjectSessionManager,
+    project_id: &str,
+) -> Result<serde_json::Value, String> {
+    let session = sessions.resolve(Some(project_id))?;
+    let summary = session_summary(sessions, project_id)?;
+
+    Ok(serde_json::json!({
+        "project_id": summary.id,
+        "name": &session.project.name,
+        "gui_size": &session.project.gui_size,
+        "mod_target": &session.project.mod_target,
+        "path": &session.project.project_path,
+        "element_count": session.project.elements.len(),
+        "is_dirty": session.project.is_dirty,
+        "revision": session.revision,
+        "session": summary,
+    }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::animation::{Animation, AnimationType};
+    use crate::project::ProjectSessionManager;
+
+    fn sample_element(id: &str, x: i32, y: i32) -> Element {
+        Element {
+            id: id.to_string(),
+            element_type: crate::project::ElementType::Slot,
+            x,
+            y,
+            width: None,
+            height: None,
+            size: Some(18),
+            asset: None,
+            direction: None,
+            content: None,
+            font: None,
+            color: None,
+            shadow: None,
+            animation: None,
+            visible: true,
+            uv: None,
+        }
+    }
+
+    fn png_data_url(color: [u8; 4]) -> String {
+        use base64::Engine;
+        use image::{DynamicImage, ImageBuffer, ImageFormat, Rgba};
+        use std::io::Cursor;
+
+        let image = ImageBuffer::from_pixel(1, 1, Rgba(color));
+        let mut bytes = Cursor::new(Vec::new());
+        DynamicImage::ImageRgba8(image)
+            .write_to(&mut bytes, ImageFormat::Png)
+            .unwrap();
+        format!(
+            "data:image/png;base64,{}",
+            base64::engine::general_purpose::STANDARD.encode(bytes.into_inner())
+        )
+    }
+
+    #[test]
+    fn save_session_as_sets_path_and_clears_dirty() {
+        let path = std::env::temp_dir()
+            .join(format!(
+                "gui-crafter-save-as-{}.mcgui",
+                uuid::Uuid::new_v4()
+            ))
+            .to_string_lossy()
+            .into_owned();
+        let mut sessions = ProjectSessionManager::default();
+        let project_id =
+            sessions.create_session(Project::new("Save As", 176, 166, ModTarget::Forge));
+
+        let result = save_session_as(&mut sessions, Some(&project_id), path.clone()).unwrap();
+        let session = sessions.resolve(Some(&project_id)).unwrap();
+        let _ = std::fs::remove_file(&path);
+
+        assert_eq!(result["project_id"], project_id);
+        assert_eq!(result["path"], path);
+        assert_eq!(session.project.project_path, Some(path));
+        assert!(!session.project.is_dirty);
+    }
+
+    #[test]
+    fn save_session_as_restores_previous_path_when_save_fails() {
+        let mut sessions = ProjectSessionManager::default();
+        let project_id =
+            sessions.create_session(Project::new("Save As", 176, 166, ModTarget::Forge));
+        let previous_path = Some(
+            std::env::temp_dir()
+                .join(format!(
+                    "gui-crafter-existing-{}.mcgui",
+                    uuid::Uuid::new_v4()
+                ))
+                .to_string_lossy()
+                .into_owned(),
+        );
+        sessions
+            .resolve_mut(Some(&project_id))
+            .unwrap()
+            .project
+            .project_path = previous_path.clone();
+        let invalid_path = std::env::temp_dir()
+            .join(format!("gui-crafter-missing-{}", uuid::Uuid::new_v4()))
+            .join("project.mcgui")
+            .to_string_lossy()
+            .into_owned();
+
+        let result = save_session_as(&mut sessions, Some(&project_id), invalid_path);
+
+        assert!(result.is_err());
+        assert_eq!(
+            sessions
+                .resolve(Some(&project_id))
+                .unwrap()
+                .project
+                .project_path,
+            previous_path
+        );
+    }
+
+    #[test]
+    fn element_move_missing_element_keeps_history_and_redo() {
+        let mut sessions = ProjectSessionManager::default();
+        let project_id =
+            sessions.create_session(Project::new("History", 176, 166, ModTarget::Forge));
+        sessions.record_history(Some(&project_id)).unwrap();
+        sessions
+            .resolve_mut(Some(&project_id))
+            .unwrap()
+            .project
+            .add_element(sample_element("slot_1", 8, 18));
+        sessions.mark_changed(Some(&project_id)).unwrap();
+        sessions.undo(Some(&project_id)).unwrap();
+
+        let result = move_element_in_session(&mut sessions, Some(&project_id), "missing", 10, 20);
+
+        let summary = sessions
+            .list_sessions()
+            .into_iter()
+            .find(|summary| summary.id == project_id)
+            .unwrap();
+        assert!(result.is_err());
+        assert!(!summary.can_undo);
+        assert!(summary.can_redo);
+    }
+
+    #[test]
+    fn element_remove_missing_element_keeps_history_and_redo() {
+        let mut sessions = ProjectSessionManager::default();
+        let project_id =
+            sessions.create_session(Project::new("History", 176, 166, ModTarget::Forge));
+        sessions.record_history(Some(&project_id)).unwrap();
+        sessions
+            .resolve_mut(Some(&project_id))
+            .unwrap()
+            .project
+            .add_element(sample_element("slot_1", 8, 18));
+        sessions.mark_changed(Some(&project_id)).unwrap();
+        sessions.undo(Some(&project_id)).unwrap();
+
+        let removed =
+            remove_element_from_session(&mut sessions, Some(&project_id), "missing").unwrap();
+
+        let summary = sessions
+            .list_sessions()
+            .into_iter()
+            .find(|summary| summary.id == project_id)
+            .unwrap();
+        assert!(!removed);
+        assert!(!summary.can_undo);
+        assert!(summary.can_redo);
+    }
+
+    #[test]
+    fn asset_remove_missing_asset_keeps_history_and_redo() {
+        let mut sessions = ProjectSessionManager::default();
+        let project_id =
+            sessions.create_session(Project::new("History", 176, 166, ModTarget::Forge));
+        sessions.record_history(Some(&project_id)).unwrap();
+        sessions
+            .resolve_mut(Some(&project_id))
+            .unwrap()
+            .project
+            .assets
+            .push("textures/slot.png".to_string());
+        sessions.mark_changed(Some(&project_id)).unwrap();
+        sessions.undo(Some(&project_id)).unwrap();
+
+        let removed =
+            remove_asset_from_session(&mut sessions, Some(&project_id), "textures/missing.png")
+                .unwrap();
+
+        let summary = sessions
+            .list_sessions()
+            .into_iter()
+            .find(|summary| summary.id == project_id)
+            .unwrap();
+        assert!(!removed);
+        assert!(!summary.can_undo);
+        assert!(summary.can_redo);
+    }
+
+    #[test]
+    fn asset_update_replaces_existing_asset_bytes_and_records_history() {
+        let mut sessions = ProjectSessionManager::default();
+        let project_id =
+            sessions.create_session(Project::new("Assets", 176, 166, ModTarget::Forge));
+        let original = png_data_url([0, 0, 0, 255]);
+        let updated = png_data_url([255, 0, 0, 255]);
+        update_asset_in_session(
+            &mut sessions,
+            Some(&project_id),
+            "textures/slot.png",
+            &original,
+        )
+        .unwrap_err();
+        sessions
+            .resolve_mut(Some(&project_id))
+            .unwrap()
+            .project
+            .assets
+            .push("textures/slot.png".to_string());
+
+        let result = update_asset_in_session(
+            &mut sessions,
+            Some(&project_id),
+            "textures/slot.png",
+            &updated,
+        )
+        .unwrap();
+
+        let session = sessions.resolve(Some(&project_id)).unwrap();
+        assert_eq!(result["name"], "textures/slot.png");
+        assert_eq!(result["width"], 1);
+        assert_eq!(result["height"], 1);
+        assert_eq!(result["data_url"], updated);
+        assert!(session
+            .project
+            .texture_data
+            .contains_key("textures/slot.png"));
+        assert!(session.project.is_dirty);
+        let summary = session_summary(&sessions, &project_id).unwrap();
+        assert_eq!(summary.revision, 1);
+        assert!(summary.can_undo);
+    }
+
+    #[test]
+    fn asset_update_rejects_invalid_data_url_without_dirtying_project() {
+        let mut sessions = ProjectSessionManager::default();
+        let project_id =
+            sessions.create_session(Project::new("Assets", 176, 166, ModTarget::Forge));
+        {
+            let project = &mut sessions.resolve_mut(Some(&project_id)).unwrap().project;
+            project.assets.push("textures/slot.png".to_string());
+            project.is_dirty = false;
+        }
+
+        let result = update_asset_in_session(
+            &mut sessions,
+            Some(&project_id),
+            "textures/slot.png",
+            "data:text/plain;base64,abc",
+        );
+
+        let summary = session_summary(&sessions, &project_id).unwrap();
+        let session = sessions.resolve(Some(&project_id)).unwrap();
+        assert!(result.is_err());
+        assert!(!session.project.is_dirty);
+        assert_eq!(summary.revision, 0);
+        assert!(!summary.can_undo);
+    }
+
+    #[test]
+    fn asset_update_missing_asset_keeps_history_and_redo() {
+        let mut sessions = ProjectSessionManager::default();
+        let project_id =
+            sessions.create_session(Project::new("History", 176, 166, ModTarget::Forge));
+        sessions.record_history(Some(&project_id)).unwrap();
+        sessions
+            .resolve_mut(Some(&project_id))
+            .unwrap()
+            .project
+            .assets
+            .push("textures/slot.png".to_string());
+        sessions.mark_changed(Some(&project_id)).unwrap();
+        sessions.undo(Some(&project_id)).unwrap();
+
+        let result = update_asset_in_session(
+            &mut sessions,
+            Some(&project_id),
+            "textures/missing.png",
+            &png_data_url([0, 0, 0, 255]),
+        );
+
+        let summary = session_summary(&sessions, &project_id).unwrap();
+        assert!(result.is_err());
+        assert!(!summary.can_undo);
+        assert!(summary.can_redo);
+    }
+
+    #[test]
+    fn asset_update_noop_preserves_redo() {
+        let mut sessions = ProjectSessionManager::default();
+        let project_id =
+            sessions.create_session(Project::new("History", 176, 166, ModTarget::Forge));
+        let data_url = png_data_url([0, 0, 0, 255]);
+        {
+            let project = &mut sessions.resolve_mut(Some(&project_id)).unwrap().project;
+            project.assets.push("textures/slot.png".to_string());
+        }
+        update_asset_in_session(
+            &mut sessions,
+            Some(&project_id),
+            "textures/slot.png",
+            &data_url,
+        )
+        .unwrap();
+        sessions.undo(Some(&project_id)).unwrap();
+        {
+            let project = &mut sessions.resolve_mut(Some(&project_id)).unwrap().project;
+            project.assets.push("textures/slot.png".to_string());
+            use base64::Engine;
+            let payload = data_url.strip_prefix("data:image/png;base64,").unwrap();
+            project.texture_data.insert(
+                "textures/slot.png".to_string(),
+                base64::engine::general_purpose::STANDARD
+                    .decode(payload)
+                    .unwrap(),
+            );
+        }
+
+        update_asset_in_session(
+            &mut sessions,
+            Some(&project_id),
+            "textures/slot.png",
+            &data_url,
+        )
+        .unwrap();
+
+        let summary = session_summary(&sessions, &project_id).unwrap();
+        assert!(!summary.can_undo);
+        assert!(summary.can_redo);
+    }
+
+    #[test]
+    fn valid_element_move_records_history_and_clears_redo() {
+        let mut sessions = ProjectSessionManager::default();
+        let project_id =
+            sessions.create_session(Project::new("History", 176, 166, ModTarget::Forge));
+        sessions
+            .resolve_mut(Some(&project_id))
+            .unwrap()
+            .project
+            .add_element(sample_element("slot_1", 8, 18));
+
+        let moved =
+            move_element_in_session(&mut sessions, Some(&project_id), "slot_1", 10, 20).unwrap();
+
+        let summary = sessions
+            .list_sessions()
+            .into_iter()
+            .find(|summary| summary.id == project_id)
+            .unwrap();
+        assert_eq!((moved.x, moved.y), (10, 20));
+        assert!(summary.can_undo);
+        assert!(!summary.can_redo);
+    }
+
+    #[test]
+    fn element_update_changes_properties_once_and_preserves_redo_on_noop() {
+        let mut sessions = ProjectSessionManager::default();
+        let project_id =
+            sessions.create_session(Project::new("Update", 176, 166, ModTarget::Forge));
+        sessions
+            .resolve_mut(Some(&project_id))
+            .unwrap()
+            .project
+            .add_element(sample_element("slot_1", 8, 18));
+
+        let updated = update_element_in_session(
+            &mut sessions,
+            Some(&project_id),
+            "slot_1",
+            serde_json::json!({
+                "x": 10,
+                "visible": false,
+                "uv": { "x": 1, "y": 2, "width": 16, "height": 16 }
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(updated.x, 10);
+        assert!(!updated.visible);
+        assert_eq!(updated.uv.unwrap().width, 16);
+        let summary = session_summary(&sessions, &project_id).unwrap();
+        assert_eq!(summary.revision, 1);
+        assert!(summary.can_undo);
+
+        sessions.undo(Some(&project_id)).unwrap();
+        let unchanged = update_element_in_session(
+            &mut sessions,
+            Some(&project_id),
+            "slot_1",
+            serde_json::json!({ "x": 8 }),
+        )
+        .unwrap();
+
+        assert_eq!(unchanged.x, 8);
+        let summary = session_summary(&sessions, &project_id).unwrap();
+        assert!(!summary.can_undo);
+        assert!(summary.can_redo);
+    }
+
+    #[test]
+    fn element_resize_and_reorder_record_real_changes() {
+        let mut sessions = ProjectSessionManager::default();
+        let project_id =
+            sessions.create_session(Project::new("Resize", 176, 166, ModTarget::Forge));
+        {
+            let project = &mut sessions.resolve_mut(Some(&project_id)).unwrap().project;
+            project.add_element(sample_element("slot_1", 8, 18));
+            project.add_element(sample_element("slot_2", 20, 18));
+        }
+
+        let resized =
+            resize_element_in_session(&mut sessions, Some(&project_id), "slot_1", 9, 19, 24, 24)
+                .unwrap();
+        assert_eq!((resized.x, resized.y, resized.size), (9, 19, Some(24)));
+
+        let summary =
+            reorder_element_in_session(&mut sessions, Some(&project_id), "slot_1", 1).unwrap();
+        assert_eq!(summary.revision, 2);
+        let elements = &sessions
+            .resolve(Some(&project_id))
+            .unwrap()
+            .project
+            .elements;
+        assert_eq!(elements[1].id, "slot_1");
+    }
+
+    #[test]
+    fn group_create_and_ungroup_record_history() {
+        let mut sessions = ProjectSessionManager::default();
+        let project_id =
+            sessions.create_session(Project::new("Groups", 176, 166, ModTarget::Forge));
+        {
+            let project = &mut sessions.resolve_mut(Some(&project_id)).unwrap().project;
+            project.add_element(sample_element("slot_1", 8, 18));
+            project.add_element(sample_element("slot_2", 28, 18));
+        }
+
+        let group = create_group_in_session(
+            &mut sessions,
+            Some(&project_id),
+            vec!["slot_1".to_string(), "slot_2".to_string()],
+            Some("group_1".to_string()),
+        )
+        .unwrap();
+
+        assert_eq!(group.id, "group_1");
+        assert_eq!(
+            group.elements,
+            vec!["slot_1".to_string(), "slot_2".to_string()]
+        );
+        assert_eq!(session_summary(&sessions, &project_id).unwrap().revision, 1);
+        assert!(session_summary(&sessions, &project_id).unwrap().can_undo);
+
+        sessions.undo(Some(&project_id)).unwrap();
+        assert!(sessions
+            .resolve(Some(&project_id))
+            .unwrap()
+            .project
+            .groups
+            .is_empty());
+
+        sessions.redo(Some(&project_id)).unwrap();
+        assert_eq!(
+            sessions
+                .resolve(Some(&project_id))
+                .unwrap()
+                .project
+                .groups
+                .len(),
+            1
+        );
+
+        assert!(ungroup_in_session(&mut sessions, Some(&project_id), "group_1").unwrap());
+        assert!(sessions
+            .resolve(Some(&project_id))
+            .unwrap()
+            .project
+            .groups
+            .is_empty());
+        assert_eq!(session_summary(&sessions, &project_id).unwrap().revision, 4);
+    }
+
+    #[test]
+    fn group_create_missing_or_too_small_preserves_history() {
+        let mut sessions = ProjectSessionManager::default();
+        let project_id =
+            sessions.create_session(Project::new("Groups", 176, 166, ModTarget::Forge));
+        sessions
+            .resolve_mut(Some(&project_id))
+            .unwrap()
+            .project
+            .add_element(sample_element("slot_1", 8, 18));
+
+        assert!(create_group_in_session(
+            &mut sessions,
+            Some(&project_id),
+            vec!["slot_1".to_string()],
+            Some("group_1".to_string()),
+        )
+        .is_err());
+        assert!(create_group_in_session(
+            &mut sessions,
+            Some(&project_id),
+            vec!["slot_1".to_string(), "missing".to_string()],
+            Some("group_1".to_string()),
+        )
+        .is_err());
+
+        let summary = session_summary(&sessions, &project_id).unwrap();
+        assert_eq!(summary.revision, 0);
+        assert!(!summary.can_undo);
+    }
+
+    #[test]
+    fn element_reorder_missing_or_same_position_does_not_corrupt_history() {
+        let mut sessions = ProjectSessionManager::default();
+        let project_id =
+            sessions.create_session(Project::new("Reorder", 176, 166, ModTarget::Forge));
+        sessions
+            .resolve_mut(Some(&project_id))
+            .unwrap()
+            .project
+            .add_element(sample_element("slot_1", 8, 18));
+        sessions.record_history(Some(&project_id)).unwrap();
+        sessions.mark_changed(Some(&project_id)).unwrap();
+        sessions.undo(Some(&project_id)).unwrap();
+
+        assert!(
+            reorder_element_in_session(&mut sessions, Some(&project_id), "missing", 0).is_err()
+        );
+        let summary =
+            reorder_element_in_session(&mut sessions, Some(&project_id), "slot_1", 0).unwrap();
+
+        assert!(!summary.can_undo);
+        assert!(summary.can_redo);
+    }
+
+    fn sample_animation(id: &str) -> Animation {
+        Animation {
+            id: id.to_string(),
+            animation_type: AnimationType::Fill,
+            data_key: "progress".to_string(),
+            texture: None,
+            direction: None,
+            frame_count: None,
+            fps: None,
+            min_value: None,
+            max_value: None,
+            triggers_on: None,
+        }
+    }
+
+    #[test]
+    fn animation_create_update_remove_and_bind_record_history() {
+        let mut sessions = ProjectSessionManager::default();
+        let project_id =
+            sessions.create_session(Project::new("Animations", 176, 166, ModTarget::Forge));
+        sessions
+            .resolve_mut(Some(&project_id))
+            .unwrap()
+            .project
+            .add_element(sample_element("slot_1", 8, 18));
+
+        let created = create_animation_in_session(
+            &mut sessions,
+            Some(&project_id),
+            sample_animation("fill_1"),
+        )
+        .unwrap();
+        assert_eq!(created.id, "fill_1");
+
+        let updated = update_animation_in_session(
+            &mut sessions,
+            Some(&project_id),
+            "fill_1",
+            serde_json::json!({ "min_value": 0.25, "max_value": 0.75 }),
+        )
+        .unwrap();
+        assert_eq!(updated.min_value, Some(0.25));
+
+        let bound = bind_animation_in_session(&mut sessions, Some(&project_id), "slot_1", "fill_1")
+            .unwrap();
+        assert_eq!(bound.animation.as_deref(), Some("fill_1"));
+
+        let unbound =
+            unbind_animation_in_session(&mut sessions, Some(&project_id), "slot_1").unwrap();
+        assert_eq!(unbound.animation, None);
+
+        let removed =
+            remove_animation_from_session(&mut sessions, Some(&project_id), "fill_1").unwrap();
+        assert!(removed);
+        assert!(sessions
+            .resolve(Some(&project_id))
+            .unwrap()
+            .project
+            .animations
+            .is_empty());
+        assert_eq!(session_summary(&sessions, &project_id).unwrap().revision, 5);
+    }
+
+    #[test]
+    fn animation_missing_targets_do_not_corrupt_redo() {
+        let mut sessions = ProjectSessionManager::default();
+        let project_id =
+            sessions.create_session(Project::new("Animations", 176, 166, ModTarget::Forge));
+        sessions
+            .resolve_mut(Some(&project_id))
+            .unwrap()
+            .project
+            .add_element(sample_element("slot_1", 8, 18));
+        create_animation_in_session(&mut sessions, Some(&project_id), sample_animation("fill_1"))
+            .unwrap();
+        sessions.undo(Some(&project_id)).unwrap();
+
+        assert!(
+            bind_animation_in_session(&mut sessions, Some(&project_id), "slot_1", "missing")
+                .is_err()
+        );
+        let removed =
+            remove_animation_from_session(&mut sessions, Some(&project_id), "missing").unwrap();
+        assert!(!removed);
+        let summary = session_summary(&sessions, &project_id).unwrap();
+        assert!(!summary.can_undo);
+        assert!(summary.can_redo);
+    }
+}
