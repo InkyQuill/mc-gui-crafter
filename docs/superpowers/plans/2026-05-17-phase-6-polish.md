@@ -567,7 +567,7 @@ Expected: any remaining hits are accurate historical plan text or future roadmap
 
 - No source changes unless verification finds a defect.
 
-- [ ] **Step 1: Run frontend verification**
+- [x] **Step 1: Run frontend verification**
 
 ```bash
 pnpm verify
@@ -575,7 +575,7 @@ pnpm verify
 
 Expected: 0 Svelte errors, 0 Svelte warnings, Vite build passes.
 
-- [ ] **Step 2: Run Rust verification**
+- [x] **Step 2: Run Rust verification**
 
 ```bash
 cd src-tauri
@@ -586,7 +586,7 @@ cargo build
 
 Expected: formatting clean, all tests pass, build warning-free.
 
-- [ ] **Step 3: Manual smoke checklist**
+- [x] **Step 3: Manual smoke checklist**
 
 Verify manually:
 
