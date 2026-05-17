@@ -420,6 +420,29 @@ pub fn asset_get_data_url(
 }
 
 #[tauri::command(rename_all = "snake_case")]
+pub fn project_export_preview(
+    state: State<AppState>,
+    target: String,
+    mod_id: String,
+    package: String,
+    class_name: String,
+    output_dir: String,
+    project_id: Option<String>,
+) -> Result<crate::export::ExportPreview, String> {
+    let sessions = state.sessions.lock().unwrap();
+    let project = &sessions.resolve(project_id.as_deref())?.project;
+
+    let config = crate::export::ExportConfig {
+        mod_id,
+        package,
+        class_name,
+        output_dir,
+    };
+
+    crate::export::preview_export(project, &config, &target)
+}
+
+#[tauri::command(rename_all = "snake_case")]
 pub fn project_export(
     state: State<AppState>,
     target: String,

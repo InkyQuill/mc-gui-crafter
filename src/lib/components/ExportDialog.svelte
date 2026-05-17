@@ -14,6 +14,71 @@
   let exporting = $state(false);
   let resultFiles = $state<string[]>([]);
   let errorMsg = $state("");
+  let preview = $state<api.ExportPreview | null>(null);
+  let previewLoading = $state(false);
+  let previewError = $state("");
+  let previewRequestId = 0;
+  let canExport = $derived(
+    Boolean(outputDir)
+      && !exporting
+      && !previewLoading
+      && preview !== null
+      && preview.errors.length === 0
+      && !previewError,
+  );
+
+  $effect(() => {
+    const request = {
+      target,
+      modId,
+      packageName,
+      className,
+      outputDir,
+      projectId: project.activeProjectId ?? undefined,
+      revision: project.revision,
+    };
+
+    resultFiles = [];
+    if (!request.outputDir) {
+      preview = null;
+      previewError = "";
+      previewLoading = false;
+      return;
+    }
+
+    const requestId = ++previewRequestId;
+    previewLoading = true;
+    previewError = "";
+
+    const timer = window.setTimeout(async () => {
+      try {
+        const nextPreview = await api.projectExportPreview(
+          request.target,
+          request.modId,
+          request.packageName,
+          request.className,
+          request.outputDir,
+          request.projectId,
+        );
+        if (requestId === previewRequestId) {
+          preview = nextPreview;
+        }
+      } catch (error) {
+        if (requestId === previewRequestId) {
+          preview = null;
+          previewError = readableError(error);
+        }
+      } finally {
+        if (requestId === previewRequestId) {
+          previewLoading = false;
+        }
+      }
+    }, 300);
+
+    return () => {
+      window.clearTimeout(timer);
+    };
+  });
 
   async function pickDirectory() {
     try {
@@ -32,7 +97,7 @@
   }
 
   async function handleExport() {
-    if (!outputDir) return;
+    if (!canExport) return;
     exporting = true;
     errorMsg = "";
     try {
@@ -112,11 +177,60 @@
       </div>
     </div>
 
+    {#if outputDir}
+      <div class="preview">
+        <div class="preview-header">
+          <h3>Export Preview</h3>
+          {#if previewLoading}
+            <span>Updating...</span>
+          {/if}
+        </div>
+
+        {#if previewError}
+          <div class="error">{previewError}</div>
+        {:else if preview}
+          {#if preview.warnings.length > 0}
+            <div class="warning-list">
+              <h3>Warnings</h3>
+              <ul>
+                {#each preview.warnings as warning (warning)}
+                  <li>{warning}</li>
+                {/each}
+              </ul>
+            </div>
+          {/if}
+
+          {#if preview.errors.length > 0}
+            <div class="error-list">
+              <h3>Errors</h3>
+              <ul>
+                {#each preview.errors as previewErrorMessage (previewErrorMessage)}
+                  <li>{previewErrorMessage}</li>
+                {/each}
+              </ul>
+            </div>
+          {/if}
+
+          <div class="planned-files">
+            <h3>Planned Files</h3>
+            <ul>
+              {#each preview.files as f (f)}
+                <li>
+                  <code>{f}</code>
+                  <button class="copy-btn" onclick={() => copyToClipboard(f)} title="Copy path">⎘</button>
+                </li>
+              {/each}
+            </ul>
+          </div>
+        {/if}
+      </div>
+    {/if}
+
     {#if resultFiles.length > 0}
       <div class="result">
         <h3>Generated Files</h3>
         <ul>
-          {#each resultFiles as f}
+          {#each resultFiles as f (f)}
             <li>
               <code>{f}</code>
               <button class="copy-btn" onclick={() => copyToClipboard(f)} title="Copy path">⎘</button>
@@ -132,7 +246,7 @@
 
     <div class="actions">
       <button class="cancel-btn" onclick={onclose}>Close</button>
-      <button class="export-btn" onclick={handleExport} disabled={!outputDir || exporting}>
+      <button class="export-btn" onclick={handleExport} disabled={!canExport}>
         {exporting ? "Exporting..." : "Export"}
       </button>
     </div>
@@ -151,6 +265,8 @@
     border: 1px solid #0f3460;
     border-radius: 8px; padding: 20px;
     min-width: 480px; max-width: 560px;
+    max-height: min(720px, 90vh);
+    overflow: auto;
     box-shadow: 0 8px 32px rgba(0,0,0,0.5);
   }
   h2 { font-size: 16px; color: #e0e0e0; margin-bottom: 16px; }
@@ -171,13 +287,27 @@
     text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
   .pick-btn:hover { background: #1a5aa0; color: #e0e0e0; }
-  .result { margin-top: 12px; }
-  .result ul { list-style: none; padding: 0; }
-  .result li {
+  .preview, .result { margin-top: 12px; }
+  .preview-header {
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  }
+  .preview-header span { color: #606080; font-size: 11px; }
+  .planned-files ul, .result ul, .warning-list ul, .error-list ul {
+    list-style: none; padding: 0; margin: 0;
+  }
+  .planned-files li, .result li {
     display: flex; align-items: center; gap: 4px;
     padding: 3px 0; font-size: 11px; color: #808090;
   }
-  .result code { font-family: monospace; font-size: 11px; color: #e9a23b; }
+  .planned-files code, .result code {
+    font-family: monospace; font-size: 11px; color: #e9a23b;
+    overflow-wrap: anywhere;
+  }
+  .warning-list li, .error-list li {
+    padding: 3px 0; font-size: 11px; line-height: 1.4;
+  }
+  .warning-list li { color: #e9a23b; }
+  .error-list li { color: #e94560; }
   .copy-btn {
     background: transparent; border: none; color: #505060;
     font-size: 12px; cursor: pointer;

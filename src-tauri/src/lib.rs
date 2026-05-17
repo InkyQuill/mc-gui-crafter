@@ -52,6 +52,7 @@ pub fn run() {
             commands::asset_list,
             commands::asset_remove,
             commands::asset_get_data_url,
+            commands::project_export_preview,
             commands::project_export,
             commands::element_add,
             commands::element_move,

@@ -375,7 +375,7 @@ Expected: frontend check/build passes with no warnings.
 - Modify: `src/lib/components/ExportDialog.svelte`
 - Test: `src-tauri/src/export/mod.rs`
 
-- [ ] **Step 1: Add export preview model**
+- [x] **Step 1: Add export preview model**
 
 In `src-tauri/src/export/mod.rs`, add serializable structs:
 
@@ -393,7 +393,7 @@ pub struct ExportPreview {
 }
 ```
 
-- [ ] **Step 2: Add planning function**
+- [x] **Step 2: Add planning function**
 
 Add:
 
@@ -403,11 +403,11 @@ pub fn preview_export(project: &Project, config: &ExportConfig, target: &str) ->
 
 It must reuse the same sanitization and planned paths as `export_project`, without writing files.
 
-- [ ] **Step 3: Detect missing textures and overwrites**
+- [x] **Step 3: Detect missing textures and overwrites**
 
 Preview should put missing texture references in `errors`. Existing target files should be listed in `warnings`.
 
-- [ ] **Step 4: Add command and frontend API**
+- [x] **Step 4: Add command and frontend API**
 
 Add Tauri command:
 
@@ -418,11 +418,11 @@ pub fn project_export_preview(...) -> Result<crate::export::ExportPreview, Strin
 
 Register it in `src-tauri/src/lib.rs` and add `api.projectExportPreview(...)`.
 
-- [ ] **Step 5: Render preview in export dialog**
+- [x] **Step 5: Render preview in export dialog**
 
 Update `ExportDialog.svelte` to call preview when target/mod/package/class/output changes and show file tree, warnings, and errors. Disable export when preview has errors.
 
-- [ ] **Step 6: Add Rust tests**
+- [x] **Step 6: Add Rust tests**
 
 Add tests that assert preview:
 
@@ -431,7 +431,7 @@ Add tests that assert preview:
 - reports missing textures,
 - reports existing output files as warnings.
 
-- [ ] **Step 7: Verify**
+- [x] **Step 7: Verify**
 
 Run:
 

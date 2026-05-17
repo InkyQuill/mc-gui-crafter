@@ -11,6 +11,18 @@ pub struct ExportConfig {
     pub output_dir: String,
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ExportPreview {
+    pub target: String,
+    pub mod_id: String,
+    pub package: String,
+    pub class_name: String,
+    pub output_dir: String,
+    pub files: Vec<String>,
+    pub warnings: Vec<String>,
+    pub errors: Vec<String>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ExportTarget {
     Forge,
@@ -18,7 +30,7 @@ enum ExportTarget {
     NeoForge,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct SanitizedExport {
     mod_id: String,
     package: String,
@@ -26,6 +38,20 @@ struct SanitizedExport {
     class_name: String,
     resource_name: String,
     output_dir: PathBuf,
+}
+
+#[derive(Debug)]
+struct PlannedFile {
+    path: PathBuf,
+    data: Vec<u8>,
+}
+
+#[derive(Debug)]
+struct ExportPlan {
+    target: ExportTarget,
+    export: SanitizedExport,
+    files: Vec<PlannedFile>,
+    errors: Vec<String>,
 }
 
 impl ExportTarget {
@@ -96,50 +122,86 @@ pub fn export_project(
     config: &ExportConfig,
     target: &str,
 ) -> Result<Vec<String>, String> {
-    let target = ExportTarget::parse(target)?;
-    let export = SanitizedExport::new(config)?;
-    validate_project(project)?;
-
-    fs::create_dir_all(export.java_dir()).map_err(|e| e.to_string())?;
-    fs::create_dir_all(export.asset_dir().join("textures/gui")).map_err(|e| e.to_string())?;
-    fs::create_dir_all(export.asset_dir().join("gui")).map_err(|e| e.to_string())?;
+    let plan = plan_export(project, config, target)?;
+    if !plan.errors.is_empty() {
+        return Err(plan.errors.join("\n"));
+    }
 
     let mut files = Vec::new();
+    for file in plan.files {
+        write_file(&file.path, &file.data)?;
+        files.push(file.path.to_string_lossy().to_string());
+    }
+
+    Ok(files)
+}
+
+pub fn preview_export(
+    project: &Project,
+    config: &ExportConfig,
+    target: &str,
+) -> Result<ExportPreview, String> {
+    let plan = plan_export(project, config, target)?;
+    Ok(ExportPreview {
+        target: plan.target.loader_id().to_string(),
+        mod_id: plan.export.mod_id,
+        package: plan.export.package,
+        class_name: plan.export.class_name,
+        output_dir: plan.export.output_dir.to_string_lossy().to_string(),
+        files: plan
+            .files
+            .iter()
+            .map(|file| file.path.to_string_lossy().to_string())
+            .collect(),
+        warnings: existing_file_warnings(&plan.files),
+        errors: plan.errors,
+    })
+}
+
+fn plan_export(
+    project: &Project,
+    config: &ExportConfig,
+    target: &str,
+) -> Result<ExportPlan, String> {
+    let target = ExportTarget::parse(target)?;
+    let export = SanitizedExport::new(config)?;
+    validate_project_dimensions(project)?;
+
+    let mut files = Vec::new();
+    let errors = missing_texture_errors(project);
 
     let settings_path = export.output_dir.join("settings.gradle");
-    write_file(
-        &settings_path,
-        generate_settings_gradle(&export, target).as_bytes(),
+    plan_file(
         &mut files,
+        settings_path,
+        generate_settings_gradle(&export, target).into_bytes(),
     )?;
 
     let gradle_path = export.output_dir.join("build.gradle");
-    write_file(
-        &gradle_path,
-        generate_build_gradle(&export, target).as_bytes(),
+    plan_file(
         &mut files,
+        gradle_path,
+        generate_build_gradle(&export, target).into_bytes(),
     )?;
 
     let properties_path = export.output_dir.join("gradle.properties");
-    write_file(
-        &properties_path,
-        generate_gradle_properties(&export, target).as_bytes(),
+    plan_file(
         &mut files,
+        properties_path,
+        generate_gradle_properties(&export, target).into_bytes(),
     )?;
 
     let atlas_data = crate::texture::composite_atlas(project)?;
     let texture_path = export
         .asset_dir()
         .join(format!("textures/gui/{}_gui.png", export.resource_name));
-    write_file(&texture_path, &atlas_data, &mut files)?;
+    plan_file(&mut files, texture_path, atlas_data)?;
 
     for asset in referenced_texture_assets(project) {
-        let data = project
-            .texture_data
-            .get(asset.as_ref())
-            .ok_or_else(|| format!("Texture asset referenced by project is missing: {asset}"))?;
-        let asset_path = export.asset_dir().join(asset.as_ref());
-        write_file(&asset_path, data, &mut files)?;
+        if let Some(data) = project.texture_data.get(asset.as_ref()) {
+            let asset_path = export.asset_dir().join(asset.as_ref());
+            plan_file(&mut files, asset_path, data.clone())?;
+        }
     }
 
     let layout = serde_json::json!({
@@ -153,13 +215,13 @@ pub fn export_project(
         .join(format!("gui/{}_layout.json", export.resource_name));
     let layout_json = serde_json::to_vec_pretty(&layout)
         .map_err(|e| format!("Failed to serialize layout JSON: {e}"))?;
-    write_file(&layout_path, &layout_json, &mut files)?;
+    plan_file(&mut files, layout_path, layout_json)?;
 
     let layout_java_path = export.java_dir().join("GuiLayout.java");
-    write_file(
-        &layout_java_path,
-        generate_gui_layout_java(&export, target, project).as_bytes(),
+    plan_file(
         &mut files,
+        layout_java_path,
+        generate_gui_layout_java(&export, target, project).into_bytes(),
     )?;
 
     let screen_path = export
@@ -170,57 +232,82 @@ pub fn export_project(
         ExportTarget::Fabric => generate_fabric_screen(&export, project),
         ExportTarget::NeoForge => generate_neoforge_screen(&export, project),
     };
-    write_file(&screen_path, screen_code.as_bytes(), &mut files)?;
+    plan_file(&mut files, screen_path, screen_code.into_bytes())?;
 
     let mod_entry_path = export
         .java_dir()
         .join(format!("{}Client.java", export.class_name));
-    write_file(
-        &mod_entry_path,
-        generate_client_entrypoint(&export, target).as_bytes(),
+    plan_file(
         &mut files,
+        mod_entry_path,
+        generate_client_entrypoint(&export, target).into_bytes(),
     )?;
 
     let metadata_path = loader_metadata_path(&export, target);
-    write_file(
-        &metadata_path,
-        generate_loader_metadata(&export, target).as_bytes(),
+    plan_file(
         &mut files,
+        metadata_path,
+        generate_loader_metadata(&export, target).into_bytes(),
     )?;
 
     let readme_path = export.output_dir.join("README.txt");
-    write_file(
-        &readme_path,
-        generate_readme(&export, target, project).as_bytes(),
+    plan_file(
         &mut files,
+        readme_path,
+        generate_readme(&export, target, project).into_bytes(),
     )?;
 
-    Ok(files)
+    Ok(ExportPlan {
+        target,
+        export,
+        files,
+        errors,
+    })
 }
 
-fn write_file(path: &Path, data: &[u8], files: &mut Vec<String>) -> Result<(), String> {
+fn plan_file(files: &mut Vec<PlannedFile>, path: PathBuf, data: Vec<u8>) -> Result<(), String> {
+    if path.as_os_str().is_empty() {
+        return Err("Export file path cannot be empty".to_string());
+    }
+    files.push(PlannedFile { path, data });
+    Ok(())
+}
+
+fn write_file(path: &Path, data: &[u8]) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
     fs::write(path, data).map_err(|e| e.to_string())?;
-    files.push(path.to_string_lossy().to_string());
     Ok(())
 }
 
-fn validate_project(project: &Project) -> Result<(), String> {
+fn validate_project_dimensions(project: &Project) -> Result<(), String> {
     if project.gui_size.width == 0 || project.gui_size.height == 0 {
         return Err("Project GUI dimensions must be greater than zero".to_string());
     }
 
-    for asset in referenced_texture_assets(project) {
-        if !project.texture_data.contains_key(asset.as_ref()) {
-            return Err(format!(
-                "Texture asset referenced by project is missing: {asset}"
-            ));
-        }
-    }
-
     Ok(())
+}
+
+fn missing_texture_errors(project: &Project) -> Vec<String> {
+    referenced_texture_assets(project)
+        .into_iter()
+        .filter(|asset| !project.texture_data.contains_key(asset.as_ref()))
+        .map(|asset| format!("Texture asset referenced by project is missing: {asset}"))
+        .collect()
+}
+
+fn existing_file_warnings(files: &[PlannedFile]) -> Vec<String> {
+    files
+        .iter()
+        .filter(|file| file.path.exists())
+        .map(|file| {
+            format!(
+                "Target file already exists and will be overwritten: {}",
+                file.path.to_string_lossy()
+            )
+        })
+        .collect()
 }
 
 fn referenced_texture_assets(project: &Project) -> Vec<Cow<'_, str>> {
@@ -1487,6 +1574,91 @@ mod tests {
         let error = export_project(&project, &config, "forge").unwrap_err();
 
         assert!(error.contains("textures/widgets/panel.png"));
+        let _ = fs::remove_dir_all(output_dir);
+    }
+
+    #[test]
+    fn preview_uses_sanitized_names_and_lists_planned_java_and_resource_files() {
+        let output_dir = temp_export_dir("preview");
+        let config = ExportConfig {
+            mod_id: "Bad Mod.ID".to_string(),
+            package: "com.example.1bad.class".to_string(),
+            class_name: "123 Furnace GUI".to_string(),
+            output_dir: output_dir.to_string_lossy().to_string(),
+        };
+
+        let preview = preview_export(&sample_project(ModTarget::Forge), &config, "forge").unwrap();
+
+        assert_eq!(preview.target, "forge");
+        assert_eq!(preview.mod_id, "bad_mod_id");
+        assert_eq!(preview.package, "com.example._1bad.class_");
+        assert_eq!(preview.class_name, "G123FurnaceGUI");
+        assert_eq!(preview.output_dir, output_dir.to_string_lossy());
+        assert!(preview.errors.is_empty());
+        assert!(preview.files.iter().any(|path| {
+            path.ends_with("src/main/java/com/example/_1bad/class_/GuiLayout.java")
+        }));
+        assert!(preview.files.iter().any(|path| {
+            path.ends_with("src/main/java/com/example/_1bad/class_/G123FurnaceGUIScreen.java")
+        }));
+        assert!(preview.files.iter().any(|path| {
+            path.ends_with("src/main/resources/assets/bad_mod_id/gui/123_furnace_gui_layout.json")
+        }));
+        assert!(preview.files.iter().any(|path| {
+            path.ends_with(
+                "src/main/resources/assets/bad_mod_id/textures/gui/123_furnace_gui_gui.png",
+            )
+        }));
+        assert!(!output_dir.join("settings.gradle").exists());
+        assert!(!output_dir.join("src").exists());
+
+        let _ = fs::remove_dir_all(output_dir);
+    }
+
+    #[test]
+    fn preview_reports_missing_textures_as_errors_without_writing_files() {
+        let output_dir = temp_export_dir("preview-missing");
+        let mut project = sample_project(ModTarget::Forge);
+        project.texture_data.remove("textures/widgets/panel.png");
+        let config = ExportConfig {
+            mod_id: "testmod".to_string(),
+            package: "com.example".to_string(),
+            class_name: "TestGui".to_string(),
+            output_dir: output_dir.to_string_lossy().to_string(),
+        };
+
+        let preview = preview_export(&project, &config, "forge").unwrap();
+
+        assert!(preview
+            .errors
+            .iter()
+            .any(|error| error.contains("textures/widgets/panel.png")));
+        assert!(!output_dir.join("settings.gradle").exists());
+        assert!(!output_dir.join("src").exists());
+
+        let _ = fs::remove_dir_all(output_dir);
+    }
+
+    #[test]
+    fn preview_reports_existing_target_files_as_warnings_without_overwriting() {
+        let output_dir = temp_export_dir("preview-existing");
+        let existing_path = output_dir.join("settings.gradle");
+        fs::write(&existing_path, "existing settings").unwrap();
+        let config = ExportConfig {
+            mod_id: "testmod".to_string(),
+            package: "com.example".to_string(),
+            class_name: "TestGui".to_string(),
+            output_dir: output_dir.to_string_lossy().to_string(),
+        };
+
+        let preview = preview_export(&sample_project(ModTarget::Forge), &config, "forge").unwrap();
+
+        assert!(preview.warnings.iter().any(|warning| {
+            warning.contains("settings.gradle") && warning.contains("already exists")
+        }));
+        assert_eq!(read(&existing_path), "existing settings");
+        assert!(!output_dir.join("src").exists());
+
         let _ = fs::remove_dir_all(output_dir);
     }
 }

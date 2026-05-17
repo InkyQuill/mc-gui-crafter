@@ -36,8 +36,14 @@ interface MockSession {
 
 const mockSessions: MockSession[] = [];
 const mockAssetDataUrls = new Map<string, Map<string, string>>();
+const mockExistingExportFiles = new Set<string>();
 let mockActiveProjectId: string | null = null;
 let mockNextProjectId = 1;
+
+export function setMockExistingExportFiles(paths: string[]): void {
+  mockExistingExportFiles.clear();
+  for (const path of paths) mockExistingExportFiles.add(path);
+}
 
 function clone<T>(value: T): T {
   return structuredClone(value);
@@ -126,6 +132,132 @@ async function dataUrlDimensions(dataUrl: string): Promise<{ width: number; heig
     image.onerror = () => reject("Failed to decode PNG");
     image.src = dataUrl;
   });
+}
+
+const javaKeywords = new Set([
+  "abstract", "assert", "boolean", "break", "byte", "case", "catch", "char",
+  "class", "const", "continue", "default", "do", "double", "else", "enum",
+  "extends", "final", "finally", "float", "for", "goto", "if", "implements",
+  "import", "instanceof", "int", "interface", "long", "native", "new",
+  "package", "private", "protected", "public", "return", "short", "static",
+  "strictfp", "super", "switch", "synchronized", "this", "throw", "throws",
+  "transient", "try", "void", "volatile", "while",
+]);
+
+function trimInvalidResourceEdges(value: string, fallback: string): string {
+  const trimmed = value.replace(/^[_-]+|[_-]+$/g, "");
+  return trimmed || fallback;
+}
+
+function sanitizeMockResource(value: string, fallback: string): string {
+  let out = "";
+  for (const char of value.trim()) {
+    const lower = char.toLowerCase();
+    if (/^[a-z0-9_-]$/.test(lower)) out += lower;
+    else if (/^\s$/.test(lower) || lower === ".") out += "_";
+  }
+  return trimInvalidResourceEdges(out, fallback);
+}
+
+function sanitizeMockClassName(value: string): string {
+  let out = "";
+  let capitalizeNext = true;
+  for (const char of value.trim()) {
+    if (/^[a-zA-Z0-9]$/.test(char)) {
+      out += capitalizeNext ? char.toUpperCase() : char;
+      capitalizeNext = false;
+    } else {
+      capitalizeNext = true;
+    }
+  }
+  if (!out) out = "GeneratedGui";
+  if (/^[0-9]/.test(out)) out = `G${out}`;
+  if (javaKeywords.has(out)) out = `${out}Gui`;
+  return out;
+}
+
+function sanitizeMockPackage(value: string, modId: string): string {
+  const segments = value
+    .split(".")
+    .map(segment => {
+      let out = "";
+      for (const char of segment.trim()) {
+        const lower = char.toLowerCase();
+        if (/^[a-z0-9_]$/.test(lower)) out += lower;
+      }
+      if (!out) return null;
+      if (/^[0-9]/.test(out)) out = `_${out}`;
+      if (javaKeywords.has(out)) out = `${out}_`;
+      return out;
+    })
+    .filter((segment): segment is string => Boolean(segment));
+  return segments.length > 0 ? segments.join(".") : `com.example.${modId.replace(/-/g, "_")}`;
+}
+
+function joinMockPath(...parts: string[]): string {
+  const [first, ...rest] = parts;
+  return [first.replace(/\/+$/g, ""), ...rest.map(part => part.replace(/^\/+|\/+$/g, ""))]
+    .filter(Boolean)
+    .join("/");
+}
+
+function mockExportPreview(args?: Record<string, unknown>): ExportPreview {
+  const target = String(args?.target ?? "forge").trim().toLowerCase();
+  if (!["forge", "fabric", "neoforge"].includes(target)) throw `Unsupported export target: ${target}`;
+  const outputDir = String(args?.output_dir ?? "").trim();
+  if (!outputDir) throw "Export output directory cannot be empty";
+
+  const session = mockSession(args?.project_id);
+  const modId = sanitizeMockResource(String(args?.mod_id ?? ""), "mcgui_export");
+  const className = sanitizeMockClassName(String(args?.class_name ?? ""));
+  const packageName = sanitizeMockPackage(String(args?.package ?? ""), modId);
+  const packagePath = packageName.replace(/\./g, "/");
+  const resourceName = sanitizeMockResource(String(args?.class_name ?? ""), "gui");
+  const assetBase = joinMockPath(outputDir, "src/main/resources/assets", modId);
+  const javaBase = joinMockPath(outputDir, "src/main/java", packagePath);
+  const metadata = target === "fabric"
+    ? "src/main/resources/fabric.mod.json"
+    : target === "neoforge"
+      ? "src/main/resources/META-INF/neoforge.mods.toml"
+      : "src/main/resources/META-INF/mods.toml";
+  const referencedAssets = new Set<string>();
+  for (const element of session.project.elements) {
+    if (element.type === "texture" && element.asset) referencedAssets.add(element.asset);
+  }
+  for (const animation of session.project.animations) {
+    if (animation.texture) referencedAssets.add(animation.texture);
+  }
+  const assets = mockAssetsForSession(session);
+  const errors = [...referencedAssets]
+    .filter(asset => !assets.has(asset))
+    .map(asset => `Texture asset referenced by project is missing: ${asset}`);
+
+  const files = [
+    joinMockPath(outputDir, "settings.gradle"),
+    joinMockPath(outputDir, "build.gradle"),
+    joinMockPath(outputDir, "gradle.properties"),
+    joinMockPath(assetBase, `textures/gui/${resourceName}_gui.png`),
+    ...[...referencedAssets].filter(asset => assets.has(asset)).map(asset => joinMockPath(assetBase, asset)),
+    joinMockPath(assetBase, `gui/${resourceName}_layout.json`),
+    joinMockPath(javaBase, "GuiLayout.java"),
+    joinMockPath(javaBase, `${className}Screen.java`),
+    joinMockPath(javaBase, `${className}Client.java`),
+    joinMockPath(outputDir, metadata),
+    joinMockPath(outputDir, "README.txt"),
+  ];
+
+  return {
+    target: target as ModTarget,
+    mod_id: modId,
+    package: packageName,
+    class_name: className,
+    output_dir: outputDir,
+    files,
+    warnings: files
+      .filter(path => mockExistingExportFiles.has(path))
+      .map(path => `Target file already exists and will be overwritten: ${path}`),
+    errors,
+  };
 }
 
 async function mockInvoke(cmd: string, args?: Record<string, unknown>): Promise<unknown> {
@@ -444,14 +576,13 @@ async function mockInvoke(cmd: string, args?: Record<string, unknown>): Promise<
       if (dataUrl === undefined) throw `Asset not found: ${String(args?.name ?? "")}`;
       return dataUrl;
     }
-    case "project_export":
-      return [
-        `textures/gui/${String(args?.class_name ?? "gui").toLowerCase()}_gui.png`,
-        `data/gui/${String(args?.class_name ?? "gui").toLowerCase()}_layout.json`,
-        `${String(args?.package ?? "com.example").replace(/\./g, "/")}/GuiLayout.java`,
-        `${String(args?.package ?? "com.example").replace(/\./g, "/")}/${String(args?.class_name ?? "Gui")}Screen.java`,
-        "README.txt",
-      ];
+    case "project_export_preview":
+      return mockExportPreview(args);
+    case "project_export": {
+      const preview = mockExportPreview(args);
+      if (preview.errors.length > 0) throw preview.errors.join("\n");
+      return preview.files;
+    }
     case "mcp_status":
       return null;
     case "template_list":
@@ -626,6 +757,17 @@ export interface AssetImportResult {
   data_url: string;
 }
 
+export interface ExportPreview {
+  target: ModTarget;
+  mod_id: string;
+  package: string;
+  class_name: string;
+  output_dir: string;
+  files: string[];
+  warnings: string[];
+  errors: string[];
+}
+
 export async function assetImport(filePath: string, projectId?: string, dataUrl?: string): Promise<AssetImportResult> {
   const invoke = await getInvoke();
   return invoke("asset_import", { file_path: filePath, project_id: projectId, data_url: dataUrl }) as Promise<AssetImportResult>;
@@ -649,6 +791,25 @@ export async function assetRemove(name: string, projectId?: string): Promise<boo
 export async function assetGetDataUrl(name: string, projectId?: string): Promise<string> {
   const invoke = await getInvoke();
   return invoke("asset_get_data_url", { name, project_id: projectId }) as Promise<string>;
+}
+
+export async function projectExportPreview(
+  target: ModTarget,
+  modId: string,
+  packageName: string,
+  className: string,
+  outputDir: string,
+  projectId?: string,
+): Promise<ExportPreview> {
+  const invoke = await getInvoke();
+  return invoke("project_export_preview", {
+    target,
+    mod_id: modId,
+    package: packageName,
+    class_name: className,
+    output_dir: outputDir,
+    project_id: projectId,
+  }) as Promise<ExportPreview>;
 }
 
 export async function projectExport(
