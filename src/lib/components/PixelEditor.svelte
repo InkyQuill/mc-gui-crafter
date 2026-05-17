@@ -6,12 +6,47 @@
     onsaved: (newDataUrl: string) => void | Promise<void>;
   } = $props();
 
+  type ZoomLevel = 1 | 2 | 4 | 8 | "fit";
+
+  const zoomOptions: { value: ZoomLevel; label: string }[] = [
+    { value: 1, label: "1x" },
+    { value: 2, label: "2x" },
+    { value: 4, label: "4x" },
+    { value: 8, label: "8x" },
+    { value: "fit", label: "Fit" },
+  ];
+
   let canvasEl: HTMLCanvasElement | undefined = $state();
   let ctx: CanvasRenderingContext2D | null = $state(null);
   let imgWidth = $state(16);
   let imgHeight = $state(16);
+  let canvasWrapWidth = $state(0);
+  let canvasWrapHeight = $state(0);
+  let zoom = $state<ZoomLevel>(4);
   let saveError = $state<string | null>(null);
   let isSaving = $state(false);
+
+  let canvasStyle = $derived.by(() => {
+    if (zoom === "fit") {
+      const availableWidth = Math.max(1, canvasWrapWidth - 24);
+      const availableHeight = Math.max(1, canvasWrapHeight - 24);
+      const scale = Math.min(
+        8,
+        availableWidth / Math.max(1, imgWidth),
+        availableHeight / Math.max(1, imgHeight),
+      );
+
+      return [
+        `width: ${imgWidth * scale}px`,
+        `height: ${imgHeight * scale}px`,
+      ].join("; ");
+    }
+
+    return [
+      `width: ${imgWidth * zoom}px`,
+      `height: ${imgHeight * zoom}px`,
+    ].join("; ");
+  });
 
   // Tools
   let tool = $state<"pencil" | "eraser" | "eyedropper" | "fill">("pencil");
@@ -135,6 +170,18 @@
     <div class="pe-header">
       <span id="pixel-editor-title" class="pe-title">Edit: {assetName.replace("textures/", "")}</span>
       <span class="pe-size">{imgWidth}×{imgHeight}</span>
+      <div class="pe-zoom" role="group" aria-label="Zoom level">
+        {#each zoomOptions as option}
+          <button
+            type="button"
+            class:active={zoom === option.value}
+            aria-pressed={zoom === option.value}
+            onclick={() => zoom = option.value}
+          >
+            {option.label}
+          </button>
+        {/each}
+      </div>
       <button class="pe-close" onclick={onclose}>×</button>
     </div>
 
@@ -149,10 +196,16 @@
         <input id="pe-brush-size" type="number" bind:value={brushSize} min="1" max="8" class="pe-size-input" />
       </div>
 
-      <div class="pe-canvas-wrap">
+      <div
+        class:fit={zoom === "fit"}
+        class="pe-canvas-wrap"
+        bind:clientWidth={canvasWrapWidth}
+        bind:clientHeight={canvasWrapHeight}
+      >
         <canvas
           bind:this={canvasEl}
           class="pe-canvas"
+          style={canvasStyle}
           onclick={handleCanvasClick}
           onmousemove={handleMouseMove}
         ></canvas>
@@ -205,6 +258,10 @@
     border-radius: 8px;
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
     min-width: 400px;
+    max-width: calc(100vw - 24px);
+    max-height: calc(100vh - 24px);
+    display: flex;
+    flex-direction: column;
   }
 
   .pe-header {
@@ -213,18 +270,55 @@
     gap: 8px;
     padding: 8px 12px;
     border-bottom: 1px solid #0f3460;
+    flex-wrap: wrap;
   }
 
   .pe-title {
     font-size: 12px;
     color: #e0e0e0;
     font-family: monospace;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .pe-size {
     font-size: 11px;
     color: #606080;
     font-family: monospace;
+    flex: 0 0 auto;
+  }
+
+  .pe-zoom {
+    display: inline-flex;
+    flex: 0 0 auto;
+    overflow: hidden;
+    border: 1px solid #0f3460;
+    border-radius: 4px;
+  }
+
+  .pe-zoom button {
+    min-width: 32px;
+    height: 24px;
+    padding: 0 7px;
+    background: #12121f;
+    border: 0;
+    border-right: 1px solid #0f3460;
+    color: #808090;
+    font-size: 10px;
+    font-family: inherit;
+    cursor: pointer;
+  }
+
+  .pe-zoom button:last-child {
+    border-right: 0;
+  }
+
+  .pe-zoom button:hover,
+  .pe-zoom button.active {
+    background: #1a0f1f;
+    color: #e94560;
   }
 
   .pe-close {
@@ -234,6 +328,7 @@
     color: #606080;
     font-size: 16px;
     cursor: pointer;
+    flex: 0 0 auto;
   }
 
   .pe-close:hover { color: #e94560; }
@@ -242,6 +337,8 @@
     display: flex;
     gap: 12px;
     padding: 12px;
+    min-height: 0;
+    overflow: hidden;
   }
 
   .pe-tools {
@@ -295,6 +392,8 @@
 
   .pe-canvas-wrap {
     flex: 1;
+    min-width: 0;
+    box-sizing: border-box;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -308,13 +407,27 @@
     border: 1px solid #0f3460;
     border-radius: 4px;
     min-height: 200px;
+    max-width: calc(100vw - 144px);
+    max-height: calc(100vh - 172px);
+    overflow: auto;
+    padding: 12px;
   }
 
   .pe-canvas {
+    image-rendering: crisp-edges;
     image-rendering: pixelated;
-    max-width: 100%;
-    max-height: 300px;
+    flex: 0 0 auto;
     cursor: crosshair;
+  }
+
+  .pe-canvas-wrap.fit {
+    width: calc(100vw - 144px);
+    height: calc(100vh - 172px);
+  }
+
+  .pe-canvas-wrap.fit .pe-canvas {
+    max-width: 100%;
+    max-height: 100%;
   }
 
   .pe-palette {
@@ -322,6 +435,7 @@
     flex-direction: column;
     gap: 6px;
     align-items: center;
+    flex: 0 0 auto;
   }
 
   .pe-color-picker {
@@ -366,6 +480,7 @@
     gap: 8px;
     padding: 8px 12px;
     border-top: 1px solid #0f3460;
+    flex-wrap: wrap;
   }
 
   .pe-error {
@@ -398,5 +513,35 @@
   .pe-save:disabled {
     opacity: 0.7;
     cursor: wait;
+  }
+
+  @media (max-width: 560px) {
+    .pixel-editor {
+      min-width: 0;
+      width: calc(100vw - 24px);
+    }
+
+    .pe-body {
+      flex-wrap: wrap;
+      overflow: auto;
+    }
+
+    .pe-tools,
+    .pe-palette {
+      flex-direction: row;
+      align-items: center;
+    }
+
+    .pe-canvas-wrap {
+      flex-basis: 100%;
+      order: 2;
+      max-width: 100%;
+      max-height: calc(100vh - 236px);
+    }
+
+    .pe-canvas-wrap.fit {
+      width: 100%;
+      height: calc(100vh - 236px);
+    }
   }
 </style>
