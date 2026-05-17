@@ -9,7 +9,7 @@ function uid(): string {
 // Global map of asset name -> data URL for rendering
 export const assetDataUrls = new Map<string, string>();
 
-class ProjectStore {
+export class ProjectStore {
   sessions = $state<ProjectSessionSummary[]>([]);
   activeProjectId = $state<string | null>(null);
   name = $state("Untitled GUI");
@@ -432,13 +432,24 @@ class ProjectStore {
   // -- Recent projects --
   static getRecentProjects(): string[] {
     try {
-      return JSON.parse(localStorage.getItem("mcgui_recent") || "[]");
+      const parsed = JSON.parse(localStorage.getItem("mcgui_recent") || "[]");
+      return Array.isArray(parsed) ? parsed.filter(path => typeof path === "string") : [];
     } catch { return []; }
   }
+
   static addRecentProject(path: string) {
     const recent = ProjectStore.getRecentProjects().filter(p => p !== path);
     recent.unshift(path);
     localStorage.setItem("mcgui_recent", JSON.stringify(recent.slice(0, 10)));
+  }
+
+  static removeRecentProject(path: string) {
+    const recent = ProjectStore.getRecentProjects().filter(p => p !== path);
+    localStorage.setItem("mcgui_recent", JSON.stringify(recent));
+  }
+
+  removeRecentProject(path: string) {
+    ProjectStore.removeRecentProject(path);
   }
 }
 

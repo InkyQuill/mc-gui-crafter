@@ -452,6 +452,8 @@ async function mockInvoke(cmd: string, args?: Record<string, unknown>): Promise<
         `${String(args?.package ?? "com.example").replace(/\./g, "/")}/${String(args?.class_name ?? "Gui")}Screen.java`,
         "README.txt",
       ];
+    case "mcp_status":
+      return null;
     case "template_list":
       return [
         { name: "empty", description: "Blank canvas of configurable size", default_width: 176, default_height: 166, element_count: 0 },
@@ -606,6 +608,15 @@ export interface TemplateInfo {
 export async function templateList(): Promise<TemplateInfo[]> {
   const invoke = await getInvoke();
   return invoke("template_list") as Promise<TemplateInfo[]>;
+}
+
+export interface McpServerStatus {
+  address: string;
+}
+
+export async function mcpStatus(): Promise<McpServerStatus | null> {
+  const invoke = await getInvoke();
+  return invoke("mcp_status") as Promise<McpServerStatus | null>;
 }
 
 export interface AssetImportResult {
