@@ -75,6 +75,7 @@ pub fn run() {
             commands::font_import,
             commands::font_list,
             commands::font_glyph_map,
+            commands::font_render_data,
         ])
         .run(tauri::generate_context!())
         .expect("error while running MCGUI Crafter");

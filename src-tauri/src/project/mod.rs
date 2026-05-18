@@ -111,8 +111,8 @@ pub enum FontSource {
     },
     #[serde(rename = "ttf")]
     Ttf {
-        #[serde(skip)]
-        font_data: Vec<u8>,
+        #[serde(default)]
+        atlas_png: Vec<u8>,
         font_size: u32,
         glyph_map: GlyphMap,
     },
@@ -586,12 +586,21 @@ mod tests {
     #[test]
     fn font_asset_serialization() {
         let mut glyph_map = GlyphMap::new();
-        glyph_map.insert('A', GlyphInfo { x: 0, y: 0, width: 8, height: 8, ascent: 7 });
+        glyph_map.insert(
+            'A',
+            GlyphInfo {
+                x: 0,
+                y: 0,
+                width: 8,
+                height: 8,
+                ascent: 7,
+            },
+        );
 
         let font = FontAsset {
             id: "minecraft:default".into(),
             source: FontSource::Ttf {
-                font_data: vec![],
+                atlas_png: vec![1, 2, 3],
                 font_size: 16,
                 glyph_map: glyph_map.clone(),
             },
@@ -600,6 +609,7 @@ mod tests {
         let value = serde_json::to_value(&font).unwrap();
         assert_eq!(value["id"], "minecraft:default");
         assert_eq!(value["source"]["type"], "ttf");
+        assert!(value["source"]["atlas_png"].as_array().is_some());
         assert_eq!(value["source"]["font_size"], 16);
 
         let glyph_map_val = &value["source"]["glyph_map"];

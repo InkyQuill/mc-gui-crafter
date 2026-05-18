@@ -1,5 +1,7 @@
 use crate::project::{FontAsset, FontSource, GlyphInfo, GlyphMap};
 use ab_glyph::Font;
+use image::{ImageFormat, Rgba, RgbaImage};
+use std::io::Cursor;
 
 /// Rasterize a TTF/OTF font into a FontAsset with glyph map.
 pub fn rasterize_ttf(font_data: &[u8], font_size: u32, id: &str) -> Result<FontAsset, String> {
@@ -13,6 +15,8 @@ pub fn rasterize_ttf(font_data: &[u8], font_size: u32, id: &str) -> Result<FontA
     };
 
     let atlas_width = 256u32;
+    let atlas_height = 256u32;
+    let mut atlas = RgbaImage::from_pixel(atlas_width, atlas_height, Rgba([0, 0, 0, 0]));
     let mut x_offset = 0u32;
     let mut y_offset = 0u32;
     let mut row_height = 0u32;
@@ -37,6 +41,9 @@ pub fn rasterize_ttf(font_data: &[u8], font_size: u32, id: &str) -> Result<FontA
                 y_offset += row_height;
                 row_height = 0;
             }
+            if y_offset + h > atlas_height {
+                break;
+            }
 
             glyph_map.insert(
                 c,
@@ -49,15 +56,31 @@ pub fn rasterize_ttf(font_data: &[u8], font_size: u32, id: &str) -> Result<FontA
                 },
             );
 
+            let draw_x = x_offset;
+            let draw_y = y_offset;
+            outlined.draw(|x, y, coverage| {
+                let px = draw_x + x;
+                let py = draw_y + y;
+                if px < atlas_width && py < atlas_height {
+                    let alpha = (coverage * 255.0).round() as u8;
+                    atlas.put_pixel(px, py, Rgba([255, 255, 255, alpha]));
+                }
+            });
+
             x_offset += w;
             row_height = row_height.max(h);
         }
     }
 
+    let mut atlas_png = Cursor::new(Vec::new());
+    image::DynamicImage::ImageRgba8(atlas)
+        .write_to(&mut atlas_png, ImageFormat::Png)
+        .map_err(|e| format!("Failed to encode font atlas: {e}"))?;
+
     Ok(FontAsset {
         id: id.to_string(),
         source: FontSource::Ttf {
-            font_data: font_data.to_vec(),
+            atlas_png: atlas_png.into_inner(),
             font_size,
             glyph_map,
         },

@@ -521,6 +521,72 @@ pub fn list_minecraft_sources() -> Vec<serde_json::Value> {
     sources
 }
 
+fn data_url_png(data: &[u8]) -> String {
+    use base64::Engine;
+    let b64 = base64::engine::general_purpose::STANDARD.encode(data);
+    format!("data:image/png;base64,{b64}")
+}
+
+fn font_render_data_json(font: &crate::project::FontAsset) -> serde_json::Value {
+    match &font.source {
+        crate::project::FontSource::Minecraft {
+            providers,
+            glyph_map,
+        } => serde_json::json!({
+            "id": font.id,
+            "source_type": "minecraft",
+            "providers": providers.iter().map(|provider| {
+                serde_json::json!({
+                    "file": provider.file,
+                    "ascent": provider.ascent,
+                    "chars": provider.chars,
+                    "image_width": provider.image_width,
+                    "image_height": provider.image_height,
+                    "image_data_url": data_url_png(&provider.image_data),
+                })
+            }).collect::<Vec<_>>(),
+            "glyph_map": glyph_map,
+        }),
+        crate::project::FontSource::Ttf {
+            atlas_png,
+            font_size,
+            glyph_map,
+        } => serde_json::json!({
+            "id": font.id,
+            "source_type": "ttf",
+            "font_size": font_size,
+            "atlas_data_url": data_url_png(atlas_png),
+            "glyph_map": glyph_map,
+        }),
+    }
+}
+
+fn font_list_json(project: &Project) -> Vec<serde_json::Value> {
+    let mut fonts = vec![serde_json::json!({
+        "id": "minecraft:default",
+        "source": { "type": "minecraft" }
+    })];
+
+    fonts.extend(
+        project
+            .fonts
+            .iter()
+            .filter(|font| font.id != "minecraft:default")
+            .map(|font| {
+                let source_type = match &font.source {
+                    crate::project::FontSource::Minecraft { .. } => "minecraft",
+                    crate::project::FontSource::Ttf { .. } => "ttf",
+                };
+                serde_json::json!({
+                    "id": font.id,
+                    "source": { "type": source_type }
+                })
+            }),
+    );
+
+    fonts
+}
+
 #[tauri::command(rename_all = "snake_case")]
 pub fn font_import(
     state: State<AppState>,
@@ -529,8 +595,8 @@ pub fn font_import(
 ) -> Result<serde_json::Value, String> {
     use std::io::Read;
 
-    let mut file = std::fs::File::open(&file_path)
-        .map_err(|e| format!("Failed to open font file: {e}"))?;
+    let mut file =
+        std::fs::File::open(&file_path).map_err(|e| format!("Failed to open font file: {e}"))?;
     let mut data = Vec::new();
     file.read_to_end(&mut data)
         .map_err(|e| format!("Failed to read font file: {e}"))?;
@@ -570,32 +636,9 @@ pub fn font_list(
     project_id: Option<String>,
 ) -> Result<Vec<serde_json::Value>, String> {
     let sessions = state.sessions.lock().unwrap();
-    let session = sessions.resolve(project_id.as_deref())?;
+    let project = &sessions.resolve(project_id.as_deref())?.project;
 
-    let fonts: Vec<_> = if session.project.fonts.is_empty() {
-        vec![serde_json::json!({
-            "id": "minecraft:default",
-            "source": { "type": "minecraft" }
-        })]
-    } else {
-        session
-            .project
-            .fonts
-            .iter()
-            .map(|f| {
-                let source_type = match &f.source {
-                    crate::project::FontSource::Minecraft { .. } => "minecraft",
-                    crate::project::FontSource::Ttf { .. } => "ttf",
-                };
-                serde_json::json!({
-                    "id": f.id,
-                    "source": { "type": source_type }
-                })
-            })
-            .collect()
-    };
-
-    Ok(fonts)
+    Ok(font_list_json(project))
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -604,6 +647,14 @@ pub fn font_glyph_map(
     font_id: String,
     project_id: Option<String>,
 ) -> Result<serde_json::Value, String> {
+    if font_id == "minecraft:default" {
+        let font = crate::font::load_bundled_font();
+        if let crate::project::FontSource::Minecraft { glyph_map, .. } = font.source {
+            return serde_json::to_value(glyph_map)
+                .map_err(|e| format!("Failed to serialize glyph map: {e}"));
+        }
+    }
+
     let sessions = state.sessions.lock().unwrap();
     let session = sessions.resolve(project_id.as_deref())?;
 
@@ -620,6 +671,29 @@ pub fn font_glyph_map(
     };
 
     serde_json::to_value(glyph_map).map_err(|e| format!("Failed to serialize glyph map: {e}"))
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub fn font_render_data(
+    state: State<AppState>,
+    font_id: String,
+    project_id: Option<String>,
+) -> Result<serde_json::Value, String> {
+    if font_id == "minecraft:default" {
+        let font = crate::font::load_bundled_font();
+        return Ok(font_render_data_json(&font));
+    }
+
+    let sessions = state.sessions.lock().unwrap();
+    let session = sessions.resolve(project_id.as_deref())?;
+    let font = session
+        .project
+        .fonts
+        .iter()
+        .find(|font| font.id == font_id)
+        .ok_or_else(|| format!("Font not found: {font_id}"))?;
+
+    Ok(font_render_data_json(font))
 }
 
 fn parse_mod_target(mod_target: &str) -> ModTarget {
@@ -1818,5 +1892,31 @@ mod tests {
         let summary = session_summary(&sessions, &project_id).unwrap();
         assert!(!summary.can_undo);
         assert!(summary.can_redo);
+    }
+
+    #[test]
+    fn font_list_always_includes_minecraft_default() {
+        let project = Project::new("Fonts", 176, 166, ModTarget::Forge);
+
+        let fonts = font_list_json(&project);
+
+        assert!(fonts.iter().any(|font| font["id"] == "minecraft:default"));
+    }
+
+    #[test]
+    fn bundled_default_font_render_data_contains_glyphs_and_provider_images() {
+        let font = crate::font::load_bundled_font();
+
+        let render_data = font_render_data_json(&font);
+
+        assert_eq!(render_data["id"], "minecraft:default");
+        assert!(render_data["glyph_map"].get("A").is_some());
+        assert!(render_data["providers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|provider| provider["image_data_url"]
+                .as_str()
+                .is_some_and(|data_url| data_url.starts_with("data:image/png;base64,"))));
     }
 }
