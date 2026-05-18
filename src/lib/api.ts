@@ -601,6 +601,11 @@ async function mockInvoke(cmd: string, args?: Record<string, unknown>): Promise<
         { name: "crafting_3x3", description: "3x3 crafting grid with output slot", default_width: 176, default_height: 166, element_count: 11 },
         { name: "chest_9x3", description: "Standard chest inventory (9x3 grid)", default_width: 176, default_height: 166, element_count: 28 },
         { name: "chest_9x6", description: "Double chest inventory (9x6 grid)", default_width: 176, default_height: 222, element_count: 55 },
+        { name: "advanced_machine", description: "Advanced machine: input, fuel, output, progress arrow, 2 fluid tanks, energy bar", default_width: 176, default_height: 166, element_count: 9 },
+        { name: "fluid_tank", description: "Fluid tank: input/output slots, fluid fill gauge, capacity text", default_width: 176, default_height: 166, element_count: 6 },
+        { name: "brewing_stand", description: "Brewing stand: 3 bottles, ingredient, blaze powder, progress bubbles, fuel gauge", default_width: 176, default_height: 166, element_count: 12 },
+        { name: "anvil", description: "Anvil: 2 input slots, output, level cost text, repair progress", default_width: 176, default_height: 166, element_count: 7 },
+        { name: "custom_grid", description: "Custom N×M grid with optional output, progress, and inventory", default_width: 176, default_height: 166, element_count: 39 },
       ];
     default:
       throw `Unknown command: ${cmd}`;

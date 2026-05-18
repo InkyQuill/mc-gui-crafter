@@ -33,7 +33,18 @@ pub fn list_template_info() -> Vec<TemplateInfo> {
 }
 
 pub fn list_templates() -> Vec<Template> {
-    vec![empty(), furnace(), crafting_3x3(), chest_9x3(), chest_9x6()]
+    vec![
+        empty(),
+        furnace(),
+        crafting_3x3(),
+        chest_9x3(),
+        chest_9x6(),
+        advanced_machine(),
+        fluid_tank(),
+        brewing_stand(),
+        anvil(),
+        custom_grid_default(),
+    ]
 }
 
 pub fn get_template(name: &str) -> Option<Template> {
@@ -60,116 +71,54 @@ fn furnace() -> Template {
             Element {
                 id: "bg".into(),
                 element_type: ElementType::Texture,
-                x: 0,
-                y: 0,
-                width: Some(176),
-                height: Some(166),
+                x: 0, y: 0, width: Some(176), height: Some(166),
                 size: None,
                 asset: Some("textures/background.png".into()),
-                direction: None,
-                content: None,
-                font: None,
-                color: None,
-                shadow: None,
-                animation: None,
-                visible: true,
-                uv: None,
+                direction: None, content: None, font: None, color: None,
+                shadow: None, animation: None, visible: true, uv: None,
                 layer: Layer::Background,
             },
             Element {
-                id: "input_slot".into(),
-                element_type: ElementType::Slot,
-                x: 56,
-                y: 17,
-                width: None,
-                height: None,
-                size: Some(18),
-                asset: None,
-                direction: None,
-                content: None,
-                font: None,
-                color: None,
-                shadow: None,
-                animation: None,
-                visible: true,
-                uv: None,
+                id: "input_slot".into(), element_type: ElementType::Slot,
+                x: 56, y: 17, size: Some(18),
+                width: None, height: None, asset: None, direction: None,
+                content: None, font: None, color: None, shadow: None,
+                animation: None, visible: true, uv: None,
                 layer: Layer::Background,
             },
             Element {
-                id: "fuel_slot".into(),
-                element_type: ElementType::Slot,
-                x: 56,
-                y: 53,
-                width: None,
-                height: None,
-                size: Some(18),
-                asset: None,
-                direction: None,
-                content: None,
-                font: None,
-                color: None,
-                shadow: None,
-                animation: None,
-                visible: true,
-                uv: None,
+                id: "fuel_slot".into(), element_type: ElementType::Slot,
+                x: 56, y: 53, size: Some(18),
+                width: None, height: None, asset: None, direction: None,
+                content: None, font: None, color: None, shadow: None,
+                animation: None, visible: true, uv: None,
                 layer: Layer::Background,
             },
             Element {
-                id: "output_slot".into(),
-                element_type: ElementType::Slot,
-                x: 116,
-                y: 35,
-                width: None,
-                height: None,
-                size: Some(18),
-                asset: None,
-                direction: None,
-                content: None,
-                font: None,
-                color: None,
-                shadow: None,
-                animation: None,
-                visible: true,
-                uv: None,
+                id: "output_slot".into(), element_type: ElementType::Slot,
+                x: 116, y: 35, size: Some(18),
+                width: None, height: None, asset: None, direction: None,
+                content: None, font: None, color: None, shadow: None,
+                animation: None, visible: true, uv: None,
                 layer: Layer::Background,
             },
             Element {
-                id: "progress_arrow".into(),
-                element_type: ElementType::Progress,
-                x: 79,
-                y: 35,
-                width: Some(22),
-                height: Some(15),
-                size: None,
-                asset: None,
+                id: "progress_arrow".into(), element_type: ElementType::Progress,
+                x: 79, y: 35, width: Some(22), height: Some(15),
+                size: None, asset: None,
                 direction: Some(crate::project::FillDirection::LeftToRight),
-                content: None,
-                font: None,
-                color: None,
-                shadow: None,
-                animation: Some("arrow_fill".into()),
-                visible: true,
-                uv: None,
-                layer: Layer::Background,
+                content: None, font: None, color: None, shadow: None,
+                animation: Some("arrow_fill".into()), visible: true, uv: None,
+                layer: Layer::Animatable,
             },
             Element {
-                id: "title".into(),
-                element_type: ElementType::Text,
-                x: 8,
-                y: 6,
-                width: None,
-                height: None,
-                size: None,
-                asset: None,
-                direction: None,
-                content: Some("{machine_name}".into()),
-                font: Some("minecraft:default".into()),
-                color: Some(0x404040),
-                shadow: Some(true),
-                animation: None,
-                visible: true,
-                uv: None,
-                layer: Layer::Background,
+                id: "title".into(), element_type: ElementType::Text,
+                x: 8, y: 6,
+                width: None, height: None, size: None, asset: None,
+                direction: None, content: Some("{machine_name}".into()),
+                font: Some("minecraft:default".into()), color: Some(0x404040),
+                shadow: Some(true), animation: None, visible: true, uv: None,
+                layer: Layer::Overlay,
             },
         ],
     }
@@ -177,90 +126,46 @@ fn furnace() -> Template {
 
 fn crafting_3x3() -> Template {
     let mut elements = vec![Element {
-        id: "bg".into(),
-        element_type: ElementType::Texture,
-        x: 0,
-        y: 0,
-        width: Some(176),
-        height: Some(166),
-        size: None,
-        asset: Some("textures/background.png".into()),
-        direction: None,
-        content: None,
-        font: None,
-        color: None,
-        shadow: None,
-        animation: None,
-        visible: true,
-        uv: None,
-                layer: Layer::Background,
+        id: "bg".into(), element_type: ElementType::Texture,
+        x: 0, y: 0, width: Some(176), height: Some(166),
+        size: None, asset: Some("textures/background.png".into()),
+        direction: None, content: None, font: None, color: None,
+        shadow: None, animation: None, visible: true, uv: None,
+        layer: Layer::Background,
     }];
 
-    // 3x3 crafting grid (x=30, y=17 to x=84, y=71)
     for row in 0..3 {
         for col in 0..3 {
             elements.push(Element {
                 id: format!("craft_grid_{}_{}", row, col),
                 element_type: ElementType::Slot,
-                x: 30 + col * (18 + 2),
-                y: 17 + row * (18 + 2),
-                width: None,
-                height: None,
+                x: 30 + col * (18 + 2), y: 17 + row * (18 + 2),
                 size: Some(18),
-                asset: None,
-                direction: None,
-                content: None,
-                font: None,
-                color: None,
-                shadow: None,
-                animation: None,
-                visible: true,
-                uv: None,
+                width: None, height: None, asset: None, direction: None,
+                content: None, font: None, color: None, shadow: None,
+                animation: None, visible: true, uv: None,
                 layer: Layer::Background,
             });
         }
     }
 
-    // Arrow between grid and output
     elements.push(Element {
-        id: "craft_arrow".into(),
-        element_type: ElementType::Progress,
-        x: 98,
-        y: 36,
-        width: Some(22),
-        height: Some(15),
-        size: None,
-        asset: None,
+        id: "craft_arrow".into(), element_type: ElementType::Progress,
+        x: 98, y: 36, width: Some(22), height: Some(15),
+        size: None, asset: None,
         direction: Some(crate::project::FillDirection::LeftToRight),
-        content: None,
-        font: None,
-        color: None,
-        shadow: None,
-        animation: Some("craft_progress".into()),
-        visible: true,
-        uv: None,
-                layer: Layer::Background,
+        content: None, font: None, color: None, shadow: None,
+        animation: Some("craft_progress".into()), visible: true, uv: None,
+        layer: Layer::Animatable,
     });
 
-    // Output slot
     elements.push(Element {
-        id: "output_slot".into(),
-        element_type: ElementType::Slot,
-        x: 124,
-        y: 35,
-        width: None,
-        height: None,
-        size: Some(18),
-        asset: None,
-        direction: None,
-        content: None,
-        font: None,
-        color: None,
-        shadow: None,
-        animation: None,
-        visible: true,
-        uv: None,
-                layer: Layer::Background,
+        id: "output_slot".into(), element_type: ElementType::Slot,
+        x: 124, y: 35, size: Some(18),
+        width: None, height: None, asset: None, direction: None,
+        content: None, font: None, color: None, shadow: None,
+        animation: None, visible: true, uv: None,
+        layer: Layer::Background,
     });
 
     Template {
@@ -274,23 +179,12 @@ fn crafting_3x3() -> Template {
 
 fn chest_9x3() -> Template {
     let mut elements = vec![Element {
-        id: "bg".into(),
-        element_type: ElementType::Texture,
-        x: 0,
-        y: 0,
-        width: Some(176),
-        height: Some(166),
-        size: None,
-        asset: Some("textures/background.png".into()),
-        direction: None,
-        content: None,
-        font: None,
-        color: None,
-        shadow: None,
-        animation: None,
-        visible: true,
-        uv: None,
-                layer: Layer::Background,
+        id: "bg".into(), element_type: ElementType::Texture,
+        x: 0, y: 0, width: Some(176), height: Some(166),
+        size: None, asset: Some("textures/background.png".into()),
+        direction: None, content: None, font: None, color: None,
+        shadow: None, animation: None, visible: true, uv: None,
+        layer: Layer::Background,
     }];
 
     for row in 0..3 {
@@ -298,20 +192,11 @@ fn chest_9x3() -> Template {
             elements.push(Element {
                 id: format!("inv_{}_{}", row, col),
                 element_type: ElementType::Slot,
-                x: 8 + col * (18 + 2),
-                y: 18 + row * (18 + 2),
-                width: None,
-                height: None,
+                x: 8 + col * (18 + 2), y: 18 + row * (18 + 2),
                 size: Some(18),
-                asset: None,
-                direction: None,
-                content: None,
-                font: None,
-                color: None,
-                shadow: None,
-                animation: None,
-                visible: true,
-                uv: None,
+                width: None, height: None, asset: None, direction: None,
+                content: None, font: None, color: None, shadow: None,
+                animation: None, visible: true, uv: None,
                 layer: Layer::Background,
             });
         }
@@ -328,23 +213,12 @@ fn chest_9x3() -> Template {
 
 fn chest_9x6() -> Template {
     let mut elements = vec![Element {
-        id: "bg".into(),
-        element_type: ElementType::Texture,
-        x: 0,
-        y: 0,
-        width: Some(176),
-        height: Some(222),
-        size: None,
-        asset: Some("textures/background.png".into()),
-        direction: None,
-        content: None,
-        font: None,
-        color: None,
-        shadow: None,
-        animation: None,
-        visible: true,
-        uv: None,
-                layer: Layer::Background,
+        id: "bg".into(), element_type: ElementType::Texture,
+        x: 0, y: 0, width: Some(176), height: Some(222),
+        size: None, asset: Some("textures/background.png".into()),
+        direction: None, content: None, font: None, color: None,
+        shadow: None, animation: None, visible: true, uv: None,
+        layer: Layer::Background,
     }];
 
     for row in 0..6 {
@@ -352,20 +226,11 @@ fn chest_9x6() -> Template {
             elements.push(Element {
                 id: format!("inv_{}_{}", row, col),
                 element_type: ElementType::Slot,
-                x: 8 + col * (18 + 2),
-                y: 18 + row * (18 + 2),
-                width: None,
-                height: None,
+                x: 8 + col * (18 + 2), y: 18 + row * (18 + 2),
                 size: Some(18),
-                asset: None,
-                direction: None,
-                content: None,
-                font: None,
-                color: None,
-                shadow: None,
-                animation: None,
-                visible: true,
-                uv: None,
+                width: None, height: None, asset: None, direction: None,
+                content: None, font: None, color: None, shadow: None,
+                animation: None, visible: true, uv: None,
                 layer: Layer::Background,
             });
         }
@@ -376,6 +241,375 @@ fn chest_9x6() -> Template {
         description: "Double chest inventory (9×6 grid)",
         default_width: 176,
         default_height: 222,
+        elements,
+    }
+}
+
+// --- NEW TEMPLATES ---
+
+fn advanced_machine() -> Template {
+    Template {
+        name: "advanced_machine",
+        description: "Advanced machine: input, fuel, output, progress arrow, 2 fluid tanks, energy bar",
+        default_width: 176,
+        default_height: 166,
+        elements: vec![
+            Element {
+                id: "bg".into(), element_type: ElementType::Texture,
+                x: 0, y: 0, width: Some(176), height: Some(166),
+                size: None, asset: Some("textures/background.png".into()),
+                direction: None, content: None, font: None, color: None,
+                shadow: None, animation: None, visible: true, uv: None,
+                layer: Layer::Background,
+            },
+            Element {
+                id: "title".into(), element_type: ElementType::Text,
+                x: 8, y: 6,
+                width: None, height: None, size: None, asset: None,
+                direction: None, content: Some("{machine_name}".into()),
+                font: Some("minecraft:default".into()), color: Some(0x404040),
+                shadow: Some(true), animation: None, visible: true, uv: None,
+                layer: Layer::Overlay,
+            },
+            Element {
+                id: "input_slot".into(), element_type: ElementType::Slot,
+                x: 44, y: 17, size: Some(18),
+                width: None, height: None, asset: None, direction: None,
+                content: None, font: None, color: None, shadow: None,
+                animation: None, visible: true, uv: None,
+                layer: Layer::Background,
+            },
+            Element {
+                id: "fuel_slot".into(), element_type: ElementType::Slot,
+                x: 44, y: 59, size: Some(18),
+                width: None, height: None, asset: None, direction: None,
+                content: None, font: None, color: None, shadow: None,
+                animation: None, visible: true, uv: None,
+                layer: Layer::Background,
+            },
+            Element {
+                id: "output_slot".into(), element_type: ElementType::Slot,
+                x: 116, y: 38, size: Some(18),
+                width: None, height: None, asset: None, direction: None,
+                content: None, font: None, color: None, shadow: None,
+                animation: None, visible: true, uv: None,
+                layer: Layer::Background,
+            },
+            Element {
+                id: "progress_arrow".into(), element_type: ElementType::Progress,
+                x: 73, y: 38, width: Some(22), height: Some(15),
+                size: None, asset: None,
+                direction: Some(crate::project::FillDirection::LeftToRight),
+                content: None, font: None, color: None, shadow: None,
+                animation: Some("cook_progress".into()), visible: true, uv: None,
+                layer: Layer::Animatable,
+            },
+            Element {
+                id: "fluid_tank_left".into(), element_type: ElementType::FluidTank,
+                x: 16, y: 17, width: Some(16), height: Some(48),
+                size: None, asset: None,
+                direction: Some(crate::project::FillDirection::BottomToTop),
+                content: None, font: None, color: None, shadow: None,
+                animation: Some("fluid_left".into()), visible: true, uv: None,
+                layer: Layer::Animatable,
+            },
+            Element {
+                id: "fluid_tank_right".into(), element_type: ElementType::FluidTank,
+                x: 144, y: 17, width: Some(16), height: Some(48),
+                size: None, asset: None,
+                direction: Some(crate::project::FillDirection::BottomToTop),
+                content: None, font: None, color: None, shadow: None,
+                animation: Some("fluid_right".into()), visible: true, uv: None,
+                layer: Layer::Animatable,
+            },
+            Element {
+                id: "energy_bar".into(), element_type: ElementType::EnergyBar,
+                x: 152, y: 17, width: Some(12), height: Some(48),
+                size: None, asset: None,
+                direction: Some(crate::project::FillDirection::BottomToTop),
+                content: None, font: None, color: None, shadow: None,
+                animation: Some("energy".into()), visible: true, uv: None,
+                layer: Layer::Animatable,
+            },
+        ],
+    }
+}
+
+fn fluid_tank() -> Template {
+    Template {
+        name: "fluid_tank",
+        description: "Fluid tank: input/output slots, fluid fill gauge, capacity text",
+        default_width: 176,
+        default_height: 166,
+        elements: vec![
+            Element {
+                id: "bg".into(), element_type: ElementType::Texture,
+                x: 0, y: 0, width: Some(176), height: Some(166),
+                size: None, asset: Some("textures/background.png".into()),
+                direction: None, content: None, font: None, color: None,
+                shadow: None, animation: None, visible: true, uv: None,
+                layer: Layer::Background,
+            },
+            Element {
+                id: "title".into(), element_type: ElementType::Text,
+                x: 8, y: 6,
+                width: None, height: None, size: None, asset: None,
+                direction: None, content: Some("{fluid_name}".into()),
+                font: Some("minecraft:default".into()), color: Some(0x404040),
+                shadow: Some(true), animation: None, visible: true, uv: None,
+                layer: Layer::Overlay,
+            },
+            Element {
+                id: "fluid_fill".into(), element_type: ElementType::FluidTank,
+                x: 35, y: 17, width: Some(20), height: Some(64),
+                size: None, asset: None,
+                direction: Some(crate::project::FillDirection::BottomToTop),
+                content: None, font: None, color: None, shadow: None,
+                animation: Some("fluid_amount".into()), visible: true, uv: None,
+                layer: Layer::Animatable,
+            },
+            Element {
+                id: "input_fluid_slot".into(), element_type: ElementType::Slot,
+                x: 12, y: 56, size: Some(18),
+                width: None, height: None, asset: None, direction: None,
+                content: None, font: None, color: None, shadow: None,
+                animation: None, visible: true, uv: None,
+                layer: Layer::Background,
+            },
+            Element {
+                id: "output_fluid_slot".into(), element_type: ElementType::Slot,
+                x: 62, y: 56, size: Some(18),
+                width: None, height: None, asset: None, direction: None,
+                content: None, font: None, color: None, shadow: None,
+                animation: None, visible: true, uv: None,
+                layer: Layer::Background,
+            },
+            Element {
+                id: "capacity_text".into(), element_type: ElementType::Text,
+                x: 8, y: 88,
+                width: None, height: None, size: None, asset: None,
+                direction: None, content: Some("{amount} / {capacity} mB".into()),
+                font: Some("minecraft:default".into()), color: Some(0x808080),
+                shadow: Some(false), animation: None, visible: true, uv: None,
+                layer: Layer::Overlay,
+            },
+        ],
+    }
+}
+
+fn brewing_stand() -> Template {
+    let mut elements = vec![
+        Element {
+            id: "bg".into(), element_type: ElementType::Texture,
+            x: 0, y: 0, width: Some(176), height: Some(166),
+            size: None, asset: Some("textures/background.png".into()),
+            direction: None, content: None, font: None, color: None,
+            shadow: None, animation: None, visible: true, uv: None,
+            layer: Layer::Background,
+        },
+        Element {
+            id: "title".into(), element_type: ElementType::Text,
+            x: 8, y: 6,
+            width: None, height: None, size: None, asset: None,
+            direction: None, content: Some("{machine_name}".into()),
+            font: Some("minecraft:default".into()), color: Some(0x404040),
+            shadow: Some(true), animation: None, visible: true, uv: None,
+            layer: Layer::Overlay,
+        },
+        Element {
+            id: "ingredient_slot".into(), element_type: ElementType::Slot,
+            x: 79, y: 17, size: Some(18),
+            width: None, height: None, asset: None, direction: None,
+            content: None, font: None, color: None, shadow: None,
+            animation: None, visible: true, uv: None,
+            layer: Layer::Background,
+        },
+        Element {
+            id: "blaze_slot".into(), element_type: ElementType::Slot,
+            x: 79, y: 65, size: Some(18),
+            width: None, height: None, asset: None, direction: None,
+            content: None, font: None, color: None, shadow: None,
+            animation: None, visible: true, uv: None,
+            layer: Layer::Background,
+        },
+    ];
+
+    for i in 0..3 {
+        let bottle_x = 56 + i * 24;
+        elements.push(Element {
+            id: format!("bottle_{i}"), element_type: ElementType::Slot,
+            x: bottle_x, y: 40, size: Some(18),
+            width: None, height: None, asset: None, direction: None,
+            content: None, font: None, color: None, shadow: None,
+            animation: None, visible: true, uv: None,
+            layer: Layer::Background,
+        });
+        elements.push(Element {
+            id: format!("bubble_{i}"), element_type: ElementType::Progress,
+            x: bottle_x + 14, y: 29, width: Some(8), height: Some(26),
+            size: None, asset: None,
+            direction: Some(crate::project::FillDirection::TopToBottom),
+            content: None, font: None, color: None, shadow: None,
+            animation: Some("brew_time".into()), visible: true, uv: None,
+            layer: Layer::Animatable,
+        });
+    }
+
+    elements.push(Element {
+        id: "fuel_gauge".into(), element_type: ElementType::Progress,
+        x: 79, y: 47, width: Some(18), height: Some(14),
+        size: None, asset: None,
+        direction: Some(crate::project::FillDirection::LeftToRight),
+        content: None, font: None, color: None, shadow: None,
+        animation: Some("fuel".into()), visible: true, uv: None,
+        layer: Layer::Animatable,
+    });
+
+    Template {
+        name: "brewing_stand",
+        description: "Brewing stand: 3 bottles, ingredient, blaze powder, progress bubbles, fuel gauge",
+        default_width: 176,
+        default_height: 166,
+        elements,
+    }
+}
+
+fn anvil() -> Template {
+    Template {
+        name: "anvil",
+        description: "Anvil: 2 input slots, output, level cost text, repair progress",
+        default_width: 176,
+        default_height: 166,
+        elements: vec![
+            Element {
+                id: "bg".into(), element_type: ElementType::Texture,
+                x: 0, y: 0, width: Some(176), height: Some(166),
+                size: None, asset: Some("textures/background.png".into()),
+                direction: None, content: None, font: None, color: None,
+                shadow: None, animation: None, visible: true, uv: None,
+                layer: Layer::Background,
+            },
+            Element {
+                id: "title".into(), element_type: ElementType::Text,
+                x: 8, y: 6,
+                width: None, height: None, size: None, asset: None,
+                direction: None, content: Some("{item_name}".into()),
+                font: Some("minecraft:default".into()), color: Some(0x404040),
+                shadow: Some(true), animation: None, visible: true, uv: None,
+                layer: Layer::Overlay,
+            },
+            Element {
+                id: "input_slot_1".into(), element_type: ElementType::Slot,
+                x: 27, y: 23, size: Some(18),
+                width: None, height: None, asset: None, direction: None,
+                content: None, font: None, color: None, shadow: None,
+                animation: None, visible: true, uv: None,
+                layer: Layer::Background,
+            },
+            Element {
+                id: "input_slot_2".into(), element_type: ElementType::Slot,
+                x: 27, y: 47, size: Some(18),
+                width: None, height: None, asset: None, direction: None,
+                content: None, font: None, color: None, shadow: None,
+                animation: None, visible: true, uv: None,
+                layer: Layer::Background,
+            },
+            Element {
+                id: "output_slot".into(), element_type: ElementType::Slot,
+                x: 107, y: 35, size: Some(18),
+                width: None, height: None, asset: None, direction: None,
+                content: None, font: None, color: None, shadow: None,
+                animation: None, visible: true, uv: None,
+                layer: Layer::Background,
+            },
+            Element {
+                id: "cost_text".into(), element_type: ElementType::Text,
+                x: 130, y: 50,
+                width: None, height: None, size: None, asset: None,
+                direction: None, content: Some("{cost}".into()),
+                font: Some("minecraft:default".into()), color: Some(0x00FF00),
+                shadow: Some(false), animation: None, visible: true, uv: None,
+                layer: Layer::Overlay,
+            },
+            Element {
+                id: "progress_arrow".into(), element_type: ElementType::Progress,
+                x: 75, y: 35, width: Some(22), height: Some(15),
+                size: None, asset: None,
+                direction: Some(crate::project::FillDirection::LeftToRight),
+                content: None, font: None, color: None, shadow: None,
+                animation: Some("repair_progress".into()), visible: true, uv: None,
+                layer: Layer::Animatable,
+            },
+        ],
+    }
+}
+
+fn custom_grid_default() -> Template {
+    let mut elements = vec![
+        Element {
+            id: "bg".into(), element_type: ElementType::Texture,
+            x: 0, y: 0, width: Some(176), height: Some(166),
+            size: None, asset: Some("textures/background.png".into()),
+            direction: None, content: None, font: None, color: None,
+            shadow: None, animation: None, visible: true, uv: None,
+            layer: Layer::Background,
+        },
+    ];
+
+    for row in 0..3 {
+        for col in 0..3 {
+            elements.push(Element {
+                id: format!("grid_{}_{}", row, col),
+                element_type: ElementType::Slot,
+                x: 30 + col * (18 + 2), y: 17 + row * (18 + 2),
+                size: Some(18),
+                width: None, height: None, asset: None, direction: None,
+                content: None, font: None, color: None, shadow: None,
+                animation: None, visible: true, uv: None,
+                layer: Layer::Background,
+            });
+        }
+    }
+
+    elements.push(Element {
+        id: "progress_arrow".into(), element_type: ElementType::Progress,
+        x: 98, y: 36, width: Some(22), height: Some(15),
+        size: None, asset: None,
+        direction: Some(crate::project::FillDirection::LeftToRight),
+        content: None, font: None, color: None, shadow: None,
+        animation: Some("custom_progress".into()), visible: true, uv: None,
+        layer: Layer::Animatable,
+    });
+
+    elements.push(Element {
+        id: "output_slot".into(), element_type: ElementType::Slot,
+        x: 134, y: 35, size: Some(18),
+        width: None, height: None, asset: None, direction: None,
+        content: None, font: None, color: None, shadow: None,
+        animation: None, visible: true, uv: None,
+        layer: Layer::Background,
+    });
+
+    for row in 0..3 {
+        for col in 0..9 {
+            elements.push(Element {
+                id: format!("inv_{}_{}", row, col),
+                element_type: ElementType::Slot,
+                x: 8 + col * (18 + 2), y: 86 + row * (18 + 2),
+                size: Some(18),
+                width: None, height: None, asset: None, direction: None,
+                content: None, font: None, color: None, shadow: None,
+                animation: None, visible: true, uv: None,
+                layer: Layer::Background,
+            });
+        }
+    }
+
+    Template {
+        name: "custom_grid",
+        description: "Custom N×M grid with optional output, progress, and inventory",
+        default_width: 176,
+        default_height: 166,
         elements,
     }
 }
