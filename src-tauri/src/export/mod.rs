@@ -863,22 +863,7 @@ public final class GuiLayout {{
         if (animation == null) {{
             return;
         }}
-        for (Element element : elements) {{
-            if (!element.isVisible() || !animationId.equals(element.animation)) {{
-                continue;
-            }}
-            int x = left + element.x;
-            int y = top + element.y;
-            int width = element.widthOrDefault(22);
-            int height = element.heightOrDefault(15);
-            float ratio = animation.normalize(value);
-            switch (animation.directionOrDefault()) {{
-                case "right_to_left" -> graphics.fill(x + width - Math.round(width * ratio), y, x + width, y + height, 0xFFE9A23B);
-                case "bottom_to_top" -> graphics.fill(x, y + height - Math.round(height * ratio), x + width, y + height, 0xFF3B82E9);
-                case "top_to_bottom" -> graphics.fill(x, y, x + width, y + Math.round(height * ratio), 0xFF3B82E9);
-                default -> graphics.fill(x, y, x + Math.round(width * ratio), y + height, 0xFFE9A23B);
-            }}
-        }}
+{progress_body}
     }}
 
     private Animation findAnimation(String id) {{
@@ -962,11 +947,105 @@ public final class GuiLayout {{
         package = export.package,
         width = project.gui_size.width,
         height = project.gui_size.height,
-        resource_location_ctor = resource_location_ctor
+        resource_location_ctor = resource_location_ctor,
+        progress_body = progress_body
     )
 }
 
 fn generate_fabric_layout_java(export: &SanitizedExport, project: &Project) -> String {
+    let has_overlay = project.elements.iter().any(|e| e.layer == Layer::Overlay);
+    let has_animatable = project
+        .elements
+        .iter()
+        .any(|e| e.layer == Layer::Animatable);
+
+    let overlay_field = if has_overlay {
+        "private final Identifier overlay;\n    "
+    } else {
+        ""
+    };
+    let overlay_ctor = if has_overlay {
+        ", Identifier overlay"
+    } else {
+        ""
+    };
+    let overlay_assign = if has_overlay {
+        "this.overlay = overlay;\n        "
+    } else {
+        ""
+    };
+    let layout_ctor_args = if has_overlay {
+        "data.elements, data.animations, bgId, overlayId"
+    } else {
+        "data.elements, data.animations, bgId"
+    };
+    let overlay_render = if has_overlay {
+        r#"
+    public void renderOverlay(DrawContext context, int left, int top) {{
+        if (overlay != null) {{
+            context.drawTexture(overlay, left, top, 0, 0, WIDTH, HEIGHT, WIDTH, HEIGHT);
+        }}
+    }}
+"#
+    } else {
+        r#"
+    public void renderOverlay(DrawContext context, int left, int top) {{
+        // No overlay elements in this layout
+    }}
+"#
+    };
+
+    let progress_body = if has_animatable {
+        r#"        Element element = findElementByAnimation(animationId);
+        if (element == null || element.texture == null) {{
+            return;
+        }}
+        Identifier spriteTexture = resource(namespace, element.texture);
+        int x = left + element.x;
+        int y = top + element.y;
+        int width = element.widthOrDefault(22);
+        int height = element.heightOrDefault(15);
+        float ratio = animation.normalize(value);
+        switch (animation.directionOrDefault()) {{
+            case "right_to_left" -> context.drawTexture(spriteTexture, x + width - Math.round(width * ratio), y, 0, 0, Math.round(width * ratio), height, width, height);
+            case "bottom_to_top" -> context.drawTexture(spriteTexture, x, y + height - Math.round(height * ratio), 0, height - Math.round(height * ratio), width, Math.round(height * ratio), width, height);
+            case "top_to_bottom" -> context.drawTexture(spriteTexture, x, y, 0, 0, width, Math.round(height * ratio), width, height);
+            default -> context.drawTexture(spriteTexture, x, y, 0, 0, Math.round(width * ratio), height, width, height);
+        }}"#
+    } else {
+        r#"        for (Element element : elements) {{
+            if (!element.isVisible() || !animationId.equals(element.animation)) {{
+                continue;
+            }}
+            int x = left + element.x;
+            int y = top + element.y;
+            int width = element.widthOrDefault(22);
+            int height = element.heightOrDefault(15);
+            float ratio = animation.normalize(value);
+            switch (animation.directionOrDefault()) {{
+                case "right_to_left" -> context.fill(x + width - Math.round(width * ratio), y, x + width, y + height, 0xFFE9A23B);
+                case "bottom_to_top" -> context.fill(x, y + height - Math.round(height * ratio), x + width, y + height, 0xFF3B82E9);
+                case "top_to_bottom" -> context.fill(x, y, x + width, y + Math.round(height * ratio), 0xFF3B82E9);
+                default -> context.fill(x, y, x + Math.round(width * ratio), y + height, 0xFFE9A23B);
+            }}
+        }}"#
+    };
+
+    let find_element_method = if has_animatable {
+        r#"    private Element findElementByAnimation(String animationId) {{
+        for (Element element : elements) {{
+            if (animationId.equals(element.animation)) {{
+                return element;
+            }}
+        }}
+        return null;
+    }}
+
+"#
+    } else {
+        ""
+    };
+
     format!(
         r#"package {package};
 
@@ -987,11 +1066,14 @@ public final class GuiLayout {{
     private final List<Element> elements;
     private final List<Animation> animations;
     private final Identifier texture;
+    {overlay_field}
+    private String namespace;
 
-    private GuiLayout(List<Element> elements, List<Animation> animations, Identifier texture) {{
+    private GuiLayout(List<Element> elements, List<Animation> animations, Identifier texture{overlay_ctor}) {{
         this.elements = elements == null ? List.of() : elements;
         this.animations = animations == null ? List.of() : animations;
         this.texture = texture;
+        {overlay_assign}
     }}
 
     public static Identifier resource(String namespace, String path) {{
@@ -1000,14 +1082,17 @@ public final class GuiLayout {{
 
     public static GuiLayout load(String namespace, String layoutPath, String texturePath) {{
         Identifier layoutId = resource(namespace, layoutPath);
-        Identifier textureId = resource(namespace, texturePath);
         String classpathResource = "assets/" + layoutId.getNamespace() + "/" + layoutId.getPath();
         try (InputStreamReader reader = new InputStreamReader(
                 GuiLayout.class.getClassLoader().getResourceAsStream(classpathResource),
                 StandardCharsets.UTF_8)) {{
             Gson gson = new Gson();
             LayoutData data = gson.fromJson(reader, new TypeToken<LayoutData>() {{}}.getType());
-            return new GuiLayout(data.elements, data.animations, textureId);
+            Identifier bgId = resource(namespace, data.textures.background);
+            Identifier overlayId = data.textures.overlay != null ? resource(namespace, data.textures.overlay) : null;
+            GuiLayout layout = new GuiLayout({layout_ctor_args});
+            layout.namespace = namespace;
+            return layout;
         }} catch (Exception error) {{
             throw new IllegalStateException("Failed to load GUI layout " + layoutId, error);
         }}
@@ -1016,7 +1101,7 @@ public final class GuiLayout {{
     public void renderTexture(DrawContext context, int left, int top) {{
         context.drawTexture(texture, left, top, 0, 0, WIDTH, HEIGHT, WIDTH, HEIGHT);
     }}
-
+{overlay_render}
     public void renderStaticElements(DrawContext context, int left, int top) {{
         TextRenderer textRenderer = MinecraftClient.getInstance().textRenderer;
         for (Element element : elements) {{
@@ -1039,22 +1124,7 @@ public final class GuiLayout {{
         if (animation == null) {{
             return;
         }}
-        for (Element element : elements) {{
-            if (!element.isVisible() || !animationId.equals(element.animation)) {{
-                continue;
-            }}
-            int x = left + element.x;
-            int y = top + element.y;
-            int width = element.widthOrDefault(22);
-            int height = element.heightOrDefault(15);
-            float ratio = animation.normalize(value);
-            switch (animation.directionOrDefault()) {{
-                case "right_to_left" -> context.fill(x + width - Math.round(width * ratio), y, x + width, y + height, 0xFFE9A23B);
-                case "bottom_to_top" -> context.fill(x, y + height - Math.round(height * ratio), x + width, y + height, 0xFF3B82E9);
-                case "top_to_bottom" -> context.fill(x, y, x + width, y + Math.round(height * ratio), 0xFF3B82E9);
-                default -> context.fill(x, y, x + Math.round(width * ratio), y + height, 0xFFE9A23B);
-            }}
-        }}
+{progress_body}
     }}
 
     private Animation findAnimation(String id) {{
@@ -1066,7 +1136,7 @@ public final class GuiLayout {{
         return null;
     }}
 
-    private static void renderSlot(DrawContext context, int x, int y, int size) {{
+{find_element_method}    private static void renderSlot(DrawContext context, int x, int y, int size) {{
         context.fill(x, y, x + size, y + size, 0xFF8B8B8B);
         context.fill(x + 1, y + 1, x + size - 1, y + size - 1, 0xFF373737);
         context.fill(x + 2, y + 2, x + size - 2, y + size - 2, 0xFFC6C6C6);
@@ -1078,8 +1148,14 @@ public final class GuiLayout {{
     }}
 
     private static final class LayoutData {{
+        TexturesData textures;
         List<Element> elements;
         List<Animation> animations;
+    }}
+
+    private static final class TexturesData {{
+        String background;
+        String overlay;
     }}
 
     private static final class Element {{
@@ -1095,6 +1171,7 @@ public final class GuiLayout {{
         Boolean shadow;
         String animation;
         Boolean visible;
+        String texture;
 
         boolean isVisible() {{ return visible == null || visible; }}
         int widthOrDefault(int fallback) {{ return width == null ? fallback : width; }}
@@ -1130,7 +1207,14 @@ public final class GuiLayout {{
 "#,
         package = export.package,
         width = project.gui_size.width,
-        height = project.gui_size.height
+        height = project.gui_size.height,
+        overlay_field = overlay_field,
+        overlay_ctor = overlay_ctor,
+        overlay_assign = overlay_assign,
+        layout_ctor_args = layout_ctor_args,
+        overlay_render = overlay_render,
+        progress_body = progress_body,
+        find_element_method = find_element_method
     )
 }
 
