@@ -1,5 +1,5 @@
 use crate::project::{FontAsset, FontSource, GlyphInfo, GlyphMap};
-use ab_glyph::Font;
+use ab_glyph::{Font, ScaleFont};
 use image::{ImageFormat, Rgba, RgbaImage};
 use std::io::Cursor;
 
@@ -17,6 +17,7 @@ pub fn rasterize_ttf(font_data: &[u8], font_size: u32, id: &str) -> Result<FontA
     let atlas_width = 256u32;
     let atlas_height = 256u32;
     let mut atlas = RgbaImage::from_pixel(atlas_width, atlas_height, Rgba([0, 0, 0, 0]));
+    let scaled_font = font.as_scaled(scale);
     let mut x_offset = 0u32;
     let mut y_offset = 0u32;
     let mut row_height = 0u32;
@@ -24,6 +25,7 @@ pub fn rasterize_ttf(font_data: &[u8], font_size: u32, id: &str) -> Result<FontA
     // Rasterize ASCII range
     for c in ' '..='~' {
         let glyph_id: ab_glyph::GlyphId = font.glyph_id(c);
+        let advance = scaled_font.h_advance(glyph_id).ceil().max(0.0) as u32;
         let glyph: ab_glyph::Glyph = ab_glyph::Glyph {
             id: glyph_id,
             scale,
@@ -35,6 +37,8 @@ pub fn rasterize_ttf(font_data: &[u8], font_size: u32, id: &str) -> Result<FontA
             let w = (bounds.width().ceil() as u32).max(1);
             let h = (bounds.height().ceil() as u32).max(1);
             let ascent = (-bounds.min.y).ceil() as i32;
+            let bearing_x = bounds.min.x.floor() as i32;
+            let bearing_y = bounds.min.y.floor() as i32;
 
             if x_offset + w > atlas_width {
                 x_offset = 0;
@@ -42,7 +46,7 @@ pub fn rasterize_ttf(font_data: &[u8], font_size: u32, id: &str) -> Result<FontA
                 row_height = 0;
             }
             if y_offset + h > atlas_height {
-                break;
+                return Err("Font atlas is too small for ASCII glyph range".to_string());
             }
 
             glyph_map.insert(
@@ -53,6 +57,9 @@ pub fn rasterize_ttf(font_data: &[u8], font_size: u32, id: &str) -> Result<FontA
                     width: w,
                     height: h,
                     ascent,
+                    advance,
+                    bearing_x,
+                    bearing_y,
                 },
             );
 
@@ -69,6 +76,20 @@ pub fn rasterize_ttf(font_data: &[u8], font_size: u32, id: &str) -> Result<FontA
 
             x_offset += w;
             row_height = row_height.max(h);
+        } else {
+            glyph_map.insert(
+                c,
+                GlyphInfo {
+                    x: 0,
+                    y: 0,
+                    width: 0,
+                    height: 0,
+                    ascent: 0,
+                    advance,
+                    bearing_x: 0,
+                    bearing_y: 0,
+                },
+            );
         }
     }
 

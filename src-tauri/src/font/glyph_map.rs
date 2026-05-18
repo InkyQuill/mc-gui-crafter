@@ -18,6 +18,9 @@ pub fn build_glyph_map(providers: &[crate::project::BitmapProvider]) -> GlyphMap
                         width: glyph_w,
                         height: glyph_h,
                         ascent: provider.ascent,
+                        advance: glyph_w,
+                        bearing_x: 0,
+                        bearing_y: 0,
                     },
                 );
             }
@@ -36,6 +39,9 @@ pub fn lookup_glyph(map: &GlyphMap, ch: char) -> GlyphInfo {
             width: 8,
             height: 8,
             ascent: 0,
+            advance: 8,
+            bearing_x: 0,
+            bearing_y: 0,
         })
     })
 }

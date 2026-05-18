@@ -5,6 +5,8 @@ use crate::templates::TemplateInfo;
 use crate::AppState;
 use tauri::State;
 
+const MAX_FONT_FILE_SIZE: u64 = 16 * 1024 * 1024;
+
 #[tauri::command(rename_all = "snake_case")]
 pub fn template_list() -> Vec<TemplateInfo> {
     crate::templates::list_template_info()
@@ -587,6 +589,13 @@ fn font_list_json(project: &Project) -> Vec<serde_json::Value> {
     fonts
 }
 
+fn validate_font_file_size(size: u64) -> Result<(), String> {
+    if size > MAX_FONT_FILE_SIZE {
+        return Err("Font file is too large; maximum supported size is 16 MiB".to_string());
+    }
+    Ok(())
+}
+
 #[tauri::command(rename_all = "snake_case")]
 pub fn font_import(
     state: State<AppState>,
@@ -594,6 +603,10 @@ pub fn font_import(
     project_id: Option<String>,
 ) -> Result<serde_json::Value, String> {
     use std::io::Read;
+
+    let metadata = std::fs::metadata(&file_path)
+        .map_err(|e| format!("Failed to inspect font file metadata: {e}"))?;
+    validate_font_file_size(metadata.len())?;
 
     let mut file =
         std::fs::File::open(&file_path).map_err(|e| format!("Failed to open font file: {e}"))?;
@@ -1918,5 +1931,14 @@ mod tests {
             .any(|provider| provider["image_data_url"]
                 .as_str()
                 .is_some_and(|data_url| data_url.starts_with("data:image/png;base64,"))));
+    }
+
+    #[test]
+    fn validate_font_file_size_rejects_files_over_16_mib() {
+        assert!(validate_font_file_size(MAX_FONT_FILE_SIZE).is_ok());
+        assert_eq!(
+            validate_font_file_size(MAX_FONT_FILE_SIZE + 1).unwrap_err(),
+            "Font file is too large; maximum supported size is 16 MiB"
+        );
     }
 }

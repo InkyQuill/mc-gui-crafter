@@ -61,6 +61,9 @@ pub fn parse_font_json(
                                 width: 8,
                                 height: 8,
                                 ascent,
+                                advance: 8,
+                                bearing_x: 0,
+                                bearing_y: 0,
                             },
                         );
                     }
@@ -91,6 +94,9 @@ pub fn parse_font_json(
                         width: 4,
                         height: 0,
                         ascent: 0,
+                        advance: 4,
+                        bearing_x: 0,
+                        bearing_y: 0,
                     });
                 }
             }

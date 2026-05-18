@@ -12,6 +12,12 @@ struct LayoutData {
     groups: Vec<crate::project::Group>,
 }
 
+#[derive(Deserialize)]
+struct FontsData {
+    #[serde(default)]
+    fonts: Vec<crate::project::FontAsset>,
+}
+
 pub fn load_from_mcgui(path: &str) -> Result<Project, String> {
     let file = std::fs::File::open(path).map_err(|e| format!("Failed to open project: {e}"))?;
 
@@ -45,6 +51,12 @@ pub fn load_from_mcgui(path: &str) -> Result<Project, String> {
     if let Ok(anim_json) = read_json_entry(&mut archive, "animations.json") {
         project.animations = serde_json::from_str(&anim_json)
             .map_err(|e| format!("Failed to parse animations.json: {e}"))?;
+    }
+
+    if let Ok(fonts_json) = read_json_entry(&mut archive, "fonts.json") {
+        let fonts: FontsData = serde_json::from_str(&fonts_json)
+            .map_err(|e| format!("Failed to parse fonts.json: {e}"))?;
+        project.fonts = fonts.fonts;
     }
 
     // Collect asset names and read texture data
@@ -127,6 +139,18 @@ pub fn save_to_mcgui(project: &Project) -> Result<(), String> {
             .map_err(|e| format!("Write error: {e}"))?;
     }
 
+    if !project.fonts.is_empty() {
+        let fonts = serde_json::json!({
+            "fonts": project.fonts,
+        });
+        zip_writer
+            .start_file("fonts.json", options)
+            .map_err(|e| format!("Zip error: {e}"))?;
+        zip_writer
+            .write_all(serde_json::to_string_pretty(&fonts).unwrap().as_bytes())
+            .map_err(|e| format!("Write error: {e}"))?;
+    }
+
     // Write texture data
     for (name, data) in &project.texture_data {
         zip_writer
@@ -162,7 +186,10 @@ fn read_json_entry(archive: &mut ZipArchive<std::fs::File>, name: &str) -> Resul
 mod tests {
     use super::*;
     use crate::animation::{Animation, AnimationType};
-    use crate::project::{Element, ElementType, FillDirection, Group, ModTarget, Project, UvRect};
+    use crate::project::{
+        Element, ElementType, FillDirection, FontAsset, FontSource, GlyphInfo, GlyphMap, Group,
+        ModTarget, Project, UvRect,
+    };
 
     fn temp_project_path() -> String {
         std::env::temp_dir()
@@ -234,9 +261,61 @@ mod tests {
         assert_eq!(loaded.elements, project.elements);
         assert_eq!(loaded.groups, project.groups);
         assert_eq!(loaded.animations, project.animations);
+        assert!(loaded.fonts.is_empty());
         assert_eq!(
             loaded.texture_data.get("textures/widget.png"),
             Some(&vec![137, 80, 78, 71])
         );
+    }
+
+    #[test]
+    fn mcgui_round_trip_preserves_ttf_fonts() {
+        let path = temp_project_path();
+        let mut project = Project::new("Fonts", 176, 166, ModTarget::Forge);
+        project.project_path = Some(path.clone());
+        let mut glyph_map = GlyphMap::new();
+        glyph_map.insert(
+            'A',
+            GlyphInfo {
+                x: 4,
+                y: 5,
+                width: 6,
+                height: 7,
+                ascent: 8,
+                advance: 9,
+                bearing_x: 1,
+                bearing_y: -2,
+            },
+        );
+        project.fonts.push(FontAsset {
+            id: "custom".to_string(),
+            source: FontSource::Ttf {
+                atlas_png: vec![1, 2, 3, 4],
+                font_size: 16,
+                glyph_map,
+            },
+        });
+
+        save_to_mcgui(&project).unwrap();
+        let loaded = load_from_mcgui(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+
+        assert_eq!(loaded.fonts.len(), 1);
+        assert_eq!(loaded.fonts[0].id, "custom");
+        match &loaded.fonts[0].source {
+            FontSource::Ttf {
+                atlas_png,
+                font_size,
+                glyph_map,
+            } => {
+                assert_eq!(atlas_png, &vec![1, 2, 3, 4]);
+                assert_eq!(*font_size, 16);
+                let glyph = glyph_map.get(&'A').unwrap();
+                assert_eq!(glyph.advance, 9);
+                assert_eq!(glyph.bearing_x, 1);
+                assert_eq!(glyph.bearing_y, -2);
+            }
+            FontSource::Minecraft { .. } => panic!("expected TTF font"),
+        }
     }
 }

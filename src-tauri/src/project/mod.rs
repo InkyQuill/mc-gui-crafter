@@ -84,6 +84,12 @@ pub struct GlyphInfo {
     pub width: u32,
     pub height: u32,
     pub ascent: i32,
+    #[serde(default)]
+    pub advance: u32,
+    #[serde(default)]
+    pub bearing_x: i32,
+    #[serde(default)]
+    pub bearing_y: i32,
 }
 
 pub type GlyphMap = HashMap<char, GlyphInfo>;
@@ -594,6 +600,9 @@ mod tests {
                 width: 8,
                 height: 8,
                 ascent: 7,
+                advance: 9,
+                bearing_x: 1,
+                bearing_y: 2,
             },
         );
 
@@ -613,7 +622,27 @@ mod tests {
         assert_eq!(value["source"]["font_size"], 16);
 
         let glyph_map_val = &value["source"]["glyph_map"];
-        assert!(glyph_map_val.get("A").is_some());
+        let glyph = glyph_map_val.get("A").unwrap();
+        assert_eq!(glyph["advance"], 9);
+        assert_eq!(glyph["bearing_x"], 1);
+        assert_eq!(glyph["bearing_y"], 2);
+    }
+
+    #[test]
+    fn glyph_info_deserializes_legacy_maps_without_metrics() {
+        let value = serde_json::json!({
+            "x": 1,
+            "y": 2,
+            "width": 3,
+            "height": 4,
+            "ascent": 5
+        });
+
+        let glyph: GlyphInfo = serde_json::from_value(value).unwrap();
+
+        assert_eq!(glyph.advance, 0);
+        assert_eq!(glyph.bearing_x, 0);
+        assert_eq!(glyph.bearing_y, 0);
     }
 
     #[test]
