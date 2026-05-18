@@ -697,11 +697,6 @@ fn generate_forge_like_layout_java(
     };
 
     let has_overlay = project.elements.iter().any(|e| e.layer == Layer::Overlay);
-    let has_animatable = project
-        .elements
-        .iter()
-        .any(|e| e.layer == Layer::Animatable);
-
     let overlay_field = if has_overlay {
         "private final ResourceLocation overlay;\n    "
     } else {
@@ -743,25 +738,7 @@ fn generate_forge_like_layout_java(
 "#
     };
 
-    let progress_body = if has_animatable {
-        r#"        Element element = findElementByAnimation(animationId);
-        if (element == null || element.texture == null) {
-            return;
-        }
-        ResourceLocation spriteTexture = resource(namespace, element.texture);
-        int x = left + element.x;
-        int y = top + element.y;
-        int width = element.widthOrDefault(22);
-        int height = element.heightOrDefault(15);
-        float ratio = animation.normalize(value);
-        switch (animation.directionOrDefault()) {
-            case "right_to_left" -> graphics.blit(spriteTexture, x + width - Math.round(width * ratio), y, 0, 0, Math.round(width * ratio), height, width, height);
-            case "bottom_to_top" -> graphics.blit(spriteTexture, x, y + height - Math.round(height * ratio), 0, height - Math.round(height * ratio), width, Math.round(height * ratio), width, height);
-            case "top_to_bottom" -> graphics.blit(spriteTexture, x, y, 0, 0, width, Math.round(height * ratio), width, height);
-            default -> graphics.blit(spriteTexture, x, y, 0, 0, Math.round(width * ratio), height, width, height);
-        }"#
-    } else {
-        r#"        for (Element element : elements) {
+    let progress_body = r#"        for (Element element : elements) {
             if (!element.isVisible() || !animationId.equals(element.animation)) {
                 continue;
             }
@@ -770,29 +747,23 @@ fn generate_forge_like_layout_java(
             int width = element.widthOrDefault(22);
             int height = element.heightOrDefault(15);
             float ratio = animation.normalize(value);
-            switch (animation.directionOrDefault()) {
-                case "right_to_left" -> graphics.fill(x + width - Math.round(width * ratio), y, x + width, y + height, 0xFFE9A23B);
-                case "bottom_to_top" -> graphics.fill(x, y + height - Math.round(height * ratio), x + width, y + height, 0xFF3B82E9);
-                case "top_to_bottom" -> graphics.fill(x, y, x + width, y + Math.round(height * ratio), 0xFF3B82E9);
-                default -> graphics.fill(x, y, x + Math.round(width * ratio), y + height, 0xFFE9A23B);
+            if (element.texture != null) {
+                ResourceLocation spriteTexture = resource(namespace, element.texture);
+                switch (animation.directionOrDefault()) {
+                    case "right_to_left" -> graphics.blit(spriteTexture, x + width - Math.round(width * ratio), y, 0, 0, Math.round(width * ratio), height, width, height);
+                    case "bottom_to_top" -> graphics.blit(spriteTexture, x, y + height - Math.round(height * ratio), 0, height - Math.round(height * ratio), width, Math.round(height * ratio), width, height);
+                    case "top_to_bottom" -> graphics.blit(spriteTexture, x, y, 0, 0, width, Math.round(height * ratio), width, height);
+                    default -> graphics.blit(spriteTexture, x, y, 0, 0, Math.round(width * ratio), height, width, height);
+                }
+            } else {
+                switch (animation.directionOrDefault()) {
+                    case "right_to_left" -> graphics.fill(x + width - Math.round(width * ratio), y, x + width, y + height, 0xFFE9A23B);
+                    case "bottom_to_top" -> graphics.fill(x, y + height - Math.round(height * ratio), x + width, y + height, 0xFF3B82E9);
+                    case "top_to_bottom" -> graphics.fill(x, y, x + width, y + Math.round(height * ratio), 0xFF3B82E9);
+                    default -> graphics.fill(x, y, x + Math.round(width * ratio), y + height, 0xFFE9A23B);
+                }
             }
-        }"#
-    };
-
-    let find_element_method = if has_animatable {
-        r#"    private Element findElementByAnimation(String animationId) {
-        for (Element element : elements) {
-            if (animationId.equals(element.animation)) {
-                return element;
-            }
-        }
-        return null;
-    }
-
-"#
-    } else {
-        ""
-    };
+        }"#;
 
     format!(
         r#"package {package};
@@ -882,7 +853,7 @@ public final class GuiLayout {{
         return null;
     }}
 
-{find_element_method}    private static void renderSlot(GuiGraphics graphics, int x, int y, int size) {{
+    private static void renderSlot(GuiGraphics graphics, int x, int y, int size) {{
         graphics.fill(x, y, x + size, y + size, 0xFF8B8B8B);
         graphics.fill(x + 1, y + 1, x + size - 1, y + size - 1, 0xFF373737);
         graphics.fill(x + 2, y + 2, x + size - 2, y + size - 2, 0xFFC6C6C6);
@@ -962,11 +933,6 @@ public final class GuiLayout {{
 
 fn generate_fabric_layout_java(export: &SanitizedExport, project: &Project) -> String {
     let has_overlay = project.elements.iter().any(|e| e.layer == Layer::Overlay);
-    let has_animatable = project
-        .elements
-        .iter()
-        .any(|e| e.layer == Layer::Animatable);
-
     let overlay_field = if has_overlay {
         "private final Identifier overlay;\n    "
     } else {
@@ -1003,25 +969,7 @@ fn generate_fabric_layout_java(export: &SanitizedExport, project: &Project) -> S
 "#
     };
 
-    let progress_body = if has_animatable {
-        r#"        Element element = findElementByAnimation(animationId);
-        if (element == null || element.texture == null) {
-            return;
-        }
-        Identifier spriteTexture = resource(namespace, element.texture);
-        int x = left + element.x;
-        int y = top + element.y;
-        int width = element.widthOrDefault(22);
-        int height = element.heightOrDefault(15);
-        float ratio = animation.normalize(value);
-        switch (animation.directionOrDefault()) {
-            case "right_to_left" -> context.drawTexture(spriteTexture, x + width - Math.round(width * ratio), y, 0, 0, Math.round(width * ratio), height, width, height);
-            case "bottom_to_top" -> context.drawTexture(spriteTexture, x, y + height - Math.round(height * ratio), 0, height - Math.round(height * ratio), width, Math.round(height * ratio), width, height);
-            case "top_to_bottom" -> context.drawTexture(spriteTexture, x, y, 0, 0, width, Math.round(height * ratio), width, height);
-            default -> context.drawTexture(spriteTexture, x, y, 0, 0, Math.round(width * ratio), height, width, height);
-        }"#
-    } else {
-        r#"        for (Element element : elements) {
+    let progress_body = r#"        for (Element element : elements) {
             if (!element.isVisible() || !animationId.equals(element.animation)) {
                 continue;
             }
@@ -1030,29 +978,23 @@ fn generate_fabric_layout_java(export: &SanitizedExport, project: &Project) -> S
             int width = element.widthOrDefault(22);
             int height = element.heightOrDefault(15);
             float ratio = animation.normalize(value);
-            switch (animation.directionOrDefault()) {
-                case "right_to_left" -> context.fill(x + width - Math.round(width * ratio), y, x + width, y + height, 0xFFE9A23B);
-                case "bottom_to_top" -> context.fill(x, y + height - Math.round(height * ratio), x + width, y + height, 0xFF3B82E9);
-                case "top_to_bottom" -> context.fill(x, y, x + width, y + Math.round(height * ratio), 0xFF3B82E9);
-                default -> context.fill(x, y, x + Math.round(width * ratio), y + height, 0xFFE9A23B);
+            if (element.texture != null) {
+                Identifier spriteTexture = resource(namespace, element.texture);
+                switch (animation.directionOrDefault()) {
+                    case "right_to_left" -> context.drawTexture(spriteTexture, x + width - Math.round(width * ratio), y, 0, 0, Math.round(width * ratio), height, width, height);
+                    case "bottom_to_top" -> context.drawTexture(spriteTexture, x, y + height - Math.round(height * ratio), 0, height - Math.round(height * ratio), width, Math.round(height * ratio), width, height);
+                    case "top_to_bottom" -> context.drawTexture(spriteTexture, x, y, 0, 0, width, Math.round(height * ratio), width, height);
+                    default -> context.drawTexture(spriteTexture, x, y, 0, 0, Math.round(width * ratio), height, width, height);
+                }
+            } else {
+                switch (animation.directionOrDefault()) {
+                    case "right_to_left" -> context.fill(x + width - Math.round(width * ratio), y, x + width, y + height, 0xFFE9A23B);
+                    case "bottom_to_top" -> context.fill(x, y + height - Math.round(height * ratio), x + width, y + height, 0xFF3B82E9);
+                    case "top_to_bottom" -> context.fill(x, y, x + width, y + Math.round(height * ratio), 0xFF3B82E9);
+                    default -> context.fill(x, y, x + Math.round(width * ratio), y + height, 0xFFE9A23B);
+                }
             }
-        }"#
-    };
-
-    let find_element_method = if has_animatable {
-        r#"    private Element findElementByAnimation(String animationId) {
-        for (Element element : elements) {
-            if (animationId.equals(element.animation)) {
-                return element;
-            }
-        }
-        return null;
-    }
-
-"#
-    } else {
-        ""
-    };
+        }"#;
 
     format!(
         r#"package {package};
@@ -1144,7 +1086,7 @@ public final class GuiLayout {{
         return null;
     }}
 
-{find_element_method}    private static void renderSlot(DrawContext context, int x, int y, int size) {{
+    private static void renderSlot(DrawContext context, int x, int y, int size) {{
         context.fill(x, y, x + size, y + size, 0xFF8B8B8B);
         context.fill(x + 1, y + 1, x + size - 1, y + size - 1, 0xFF373737);
         context.fill(x + 2, y + 2, x + size - 2, y + size - 2, 0xFFC6C6C6);
@@ -1221,8 +1163,7 @@ public final class GuiLayout {{
         overlay_assign = overlay_assign,
         layout_ctor_args = layout_ctor_args,
         overlay_render = overlay_render,
-        progress_body = progress_body,
-        find_element_method = find_element_method
+        progress_body = progress_body
     )
 }
 
@@ -1884,11 +1825,66 @@ mod tests {
 
         assert!(layout
             .contains("ResourceLocation spriteTexture = resource(namespace, element.texture);"));
+        assert!(layout.contains("if (element.texture != null)"));
         assert!(layout.contains("graphics.blit(spriteTexture"));
         assert!(!layout.contains("switch (animation.directionOrDefault()) {{"));
-        assert!(!layout.contains(
+    }
+
+    #[test]
+    fn mixed_progress_export_keeps_sprite_and_fill_runtime_paths() {
+        let output_dir = TempExportDir::new("mixed-progress-runtime");
+        let config = ExportConfig {
+            mod_id: "testmod".to_string(),
+            package: "com.example".to_string(),
+            class_name: "LayeredGui".to_string(),
+            output_dir: output_dir.path().to_string_lossy().to_string(),
+        };
+        let mut project = layered_project(ModTarget::Forge);
+        project.elements.push(Element {
+            id: "burn_time".to_string(),
+            element_type: ElementType::Progress,
+            x: 52,
+            y: 38,
+            width: Some(14),
+            height: Some(14),
+            size: None,
+            asset: None,
+            direction: Some(FillDirection::LeftToRight),
+            content: None,
+            font: None,
+            color: None,
+            shadow: None,
+            animation: Some("burn_time".to_string()),
+            visible: true,
+            uv: None,
+            layer: Layer::Background,
+        });
+        project.animations.push(Animation {
+            id: "burn_time".to_string(),
+            animation_type: AnimationType::Fill,
+            data_key: "burn_time".to_string(),
+            texture: None,
+            direction: Some(FillDirection::LeftToRight),
+            frame_count: None,
+            fps: None,
+            min_value: Some(0.0),
+            max_value: Some(100.0),
+            triggers_on: None,
+        });
+
+        export_project(&project, &config, "forge").unwrap();
+        let layout = read(
+            &output_dir
+                .path()
+                .join("src/main/java/com/example/GuiLayout.java"),
+        );
+
+        assert!(layout.contains("if (element.texture != null)"));
+        assert!(layout.contains("graphics.blit(spriteTexture"));
+        assert!(layout.contains(
             "graphics.fill(x, y, x + Math.round(width * ratio), y + height, 0xFFE9A23B);"
         ));
+        assert!(!layout.contains("findElementByAnimation"));
     }
 
     #[test]
