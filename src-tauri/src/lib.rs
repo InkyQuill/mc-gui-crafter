@@ -1,6 +1,7 @@
 mod animation;
 mod commands;
 mod export;
+mod font;
 mod format;
 #[allow(dead_code)]
 mod mcp;
