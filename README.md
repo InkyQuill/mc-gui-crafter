@@ -10,7 +10,9 @@ Built with **Tauri 2 + Svelte 5 + Rust**.
 - Drag-and-drop elements: slots, textures, text labels, progress bars, fluid tanks, energy bars
 - Animation timeline: fill, cycle, pulse, toggle
 - Pixel-art texture editor and numeric UV region editing for sprite sheets
-- Templates: furnace, crafting table, chest (9×3, 9×6)
+- Templates: furnace, crafting table, chest (9×3, 9×6), advanced machine, fluid tank, brewing stand, anvil, and a Custom Grid default 3×3 starter layout
+- Parameterized custom grid generation is planned for a later template pass
+- Font import supports project font selection and canvas preview; exported Minecraft runtime currently uses the platform text renderer unless custom runtime font support is added
 - Start panel with recent projects, GUI size presets, and MCP endpoint status
 - Persisted editor preferences for grid visibility, snap, grid sizing, default preset, and theme
 - Keyboard shortcut reference and compact status notifications

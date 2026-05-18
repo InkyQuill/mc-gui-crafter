@@ -16,6 +16,11 @@
   let width = $state(initialPreset?.width ?? 176);
   let height = $state(initialPreset?.height ?? 166);
   let modTarget = $state<"forge" | "fabric" | "neoforge">("forge");
+  let customGridWidth = $state(3);
+  let customGridHeight = $state(3);
+  let customGridOutputSlot = $state(true);
+  let customGridProgressArrow = $state(true);
+  let customGridPlayerInventory = $state(true);
 
   $effect(() => {
     api.templateList().then(t => { templates = t; });
@@ -53,6 +58,20 @@
     selectedTemplate = "empty";
   }
 
+  function updateCustomGridDimension(dimension: "width" | "height", event: Event) {
+    const input = event.currentTarget as HTMLInputElement;
+    const value = Math.min(
+      Number(input.max),
+      Math.max(Number(input.min), Math.round(input.valueAsNumber || Number(input.min))),
+    );
+
+    if (dimension === "width") {
+      customGridWidth = value;
+    } else {
+      customGridHeight = value;
+    }
+  }
+
   async function handleCreate() {
     const template = selectedTemplate === "empty" ? undefined : selectedTemplate;
     await project.newProject("Untitled GUI", width, height, modTarget, template);
@@ -78,7 +97,7 @@
     <h2 id="new-project-title">New Project</h2>
 
     <div class="template-grid">
-      {#each templates as t}
+      {#each templates as t (t.name)}
         <button
           class="template-card"
           class:selected={selectedTemplate === t.name}
@@ -92,10 +111,75 @@
       {/each}
     </div>
 
+    {#if selectedTemplate === "custom_grid"}
+      <div class="custom-grid-options" aria-labelledby="custom-grid-options-title">
+        <div class="custom-grid-header">
+          <span id="custom-grid-options-title">Custom Grid Options</span>
+          <span class="custom-grid-note">
+            Current backend creates the default 3×3 custom grid. These choices are for a later
+            parameterized-template pass.
+          </span>
+        </div>
+
+        <div class="custom-grid-fields">
+          <label for="np-custom-grid-width">
+            <span>Grid W</span>
+            <input
+              id="np-custom-grid-width"
+              type="number"
+              value={customGridWidth}
+              min="1"
+              max="9"
+              oninput={(event) => updateCustomGridDimension("width", event)}
+            />
+          </label>
+
+          <label for="np-custom-grid-height">
+            <span>Grid H</span>
+            <input
+              id="np-custom-grid-height"
+              type="number"
+              value={customGridHeight}
+              min="1"
+              max="6"
+              oninput={(event) => updateCustomGridDimension("height", event)}
+            />
+          </label>
+
+          <label class="custom-grid-check" for="np-custom-grid-output">
+            <input
+              id="np-custom-grid-output"
+              type="checkbox"
+              bind:checked={customGridOutputSlot}
+            />
+            <span>Output slot</span>
+          </label>
+
+          <label class="custom-grid-check" for="np-custom-grid-progress">
+            <input
+              id="np-custom-grid-progress"
+              type="checkbox"
+              bind:checked={customGridProgressArrow}
+            />
+            <span>Progress arrow</span>
+          </label>
+
+          <label class="custom-grid-check" for="np-custom-grid-inventory">
+            <input
+              id="np-custom-grid-inventory"
+              type="checkbox"
+              bind:checked={customGridPlayerInventory}
+            />
+            <span>Player inventory</span>
+          </label>
+        </div>
+      </div>
+    {/if}
+
     <div class="form-row">
       <label for="np-preset">Preset</label>
       <select id="np-preset" value={selectedPreset} onchange={selectPreset}>
-        {#each guiPresets as preset}
+        {#each guiPresets as preset (preset.id)}
           <option value={preset.id}>{preset.label} ({preset.width}×{preset.height})</option>
         {/each}
       </select>
@@ -260,6 +344,77 @@
   select:focus {
     outline: 2px solid #e94560;
     outline-offset: 2px;
+  }
+
+  .custom-grid-options {
+    background: #12121f;
+    border: 1px solid #0f3460;
+    border-radius: 6px;
+    padding: 10px;
+    margin-bottom: 12px;
+  }
+
+  .custom-grid-header {
+    display: grid;
+    gap: 4px;
+    margin-bottom: 8px;
+    min-width: 0;
+  }
+
+  .custom-grid-header > span:first-child {
+    color: #e0e0e0;
+    font-size: 12px;
+    font-weight: 600;
+  }
+
+  .custom-grid-note {
+    color: #808090;
+    font-size: 11px;
+    line-height: 1.35;
+    overflow-wrap: anywhere;
+  }
+
+  .custom-grid-fields {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(118px, 1fr));
+    gap: 8px;
+    min-width: 0;
+  }
+
+  .custom-grid-fields label {
+    min-width: 0;
+  }
+
+  .custom-grid-fields label:not(.custom-grid-check) {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 56px;
+    align-items: center;
+    gap: 6px;
+    color: #606080;
+    font-size: 11px;
+  }
+
+  .custom-grid-fields input[type="number"] {
+    width: 56px;
+  }
+
+  .custom-grid-check {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: #a0a0b0;
+    font-size: 11px;
+    min-height: 26px;
+  }
+
+  .custom-grid-check input {
+    flex: 0 0 auto;
+  }
+
+  .custom-grid-check span,
+  .custom-grid-fields label:not(.custom-grid-check) span {
+    min-width: 0;
+    overflow-wrap: anywhere;
   }
 
   .dialog-actions {

@@ -101,11 +101,13 @@
 
 ## Phase 6.x / Phase 7 Candidates
 
-- [ ] More templates: advanced machine, fluid tank, brewing stand, anvil, custom grid
+- [x] More starter templates: advanced machine, fluid tank, brewing stand, anvil, and Custom Grid as a default 3×3 starter layout
+- [ ] Parameterized custom grid generation
 - [ ] Expression support in animation bindings (`cook_time / total_cook_time`)
-- [ ] Resource pack export (Bedrock JSON UI) — research
-- [ ] Custom font import (Minecraft bitmap font format)
-- [ ] CI/CD pipeline (Tauri bundling for all platforms)
+- [ ] Resource pack export (Bedrock JSON UI) — research, not implemented
+- [x] Font import for project font selection and canvas preview
+- [ ] Custom runtime font support for exported Minecraft screens; exported runtime currently uses the platform text renderer
+- [ ] CI/CD pipeline and installer builds (MSI, DMG, AppImage, deb)
 
 ---
 
