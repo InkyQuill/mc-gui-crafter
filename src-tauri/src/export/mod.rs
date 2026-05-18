@@ -719,65 +719,65 @@ fn generate_forge_like_layout_java(
     };
     let overlay_render = if has_overlay {
         r#"
-    public void renderOverlay(GuiGraphics graphics, int left, int top) {{
-        if (overlay != null) {{
+    public void renderOverlay(GuiGraphics graphics, int left, int top) {
+        if (overlay != null) {
             graphics.blit(overlay, left, top, 0, 0, WIDTH, HEIGHT, WIDTH, HEIGHT);
-        }}
-    }}
+        }
+    }
 "#
     } else {
         r#"
-    public void renderOverlay(GuiGraphics graphics, int left, int top) {{
+    public void renderOverlay(GuiGraphics graphics, int left, int top) {
         // No overlay elements in this layout
-    }}
+    }
 "#
     };
 
     let progress_body = if has_animatable {
         r#"        Element element = findElementByAnimation(animationId);
-        if (element == null || element.texture == null) {{
+        if (element == null || element.texture == null) {
             return;
-        }}
+        }
         ResourceLocation spriteTexture = resource(namespace, element.texture);
         int x = left + element.x;
         int y = top + element.y;
         int width = element.widthOrDefault(22);
         int height = element.heightOrDefault(15);
         float ratio = animation.normalize(value);
-        switch (animation.directionOrDefault()) {{
+        switch (animation.directionOrDefault()) {
             case "right_to_left" -> graphics.blit(spriteTexture, x + width - Math.round(width * ratio), y, 0, 0, Math.round(width * ratio), height, width, height);
             case "bottom_to_top" -> graphics.blit(spriteTexture, x, y + height - Math.round(height * ratio), 0, height - Math.round(height * ratio), width, Math.round(height * ratio), width, height);
             case "top_to_bottom" -> graphics.blit(spriteTexture, x, y, 0, 0, width, Math.round(height * ratio), width, height);
             default -> graphics.blit(spriteTexture, x, y, 0, 0, Math.round(width * ratio), height, width, height);
-        }}"#
+        }"#
     } else {
-        r#"        for (Element element : elements) {{
-            if (!element.isVisible() || !animationId.equals(element.animation)) {{
+        r#"        for (Element element : elements) {
+            if (!element.isVisible() || !animationId.equals(element.animation)) {
                 continue;
-            }}
+            }
             int x = left + element.x;
             int y = top + element.y;
             int width = element.widthOrDefault(22);
             int height = element.heightOrDefault(15);
             float ratio = animation.normalize(value);
-            switch (animation.directionOrDefault()) {{
+            switch (animation.directionOrDefault()) {
                 case "right_to_left" -> graphics.fill(x + width - Math.round(width * ratio), y, x + width, y + height, 0xFFE9A23B);
                 case "bottom_to_top" -> graphics.fill(x, y + height - Math.round(height * ratio), x + width, y + height, 0xFF3B82E9);
                 case "top_to_bottom" -> graphics.fill(x, y, x + width, y + Math.round(height * ratio), 0xFF3B82E9);
                 default -> graphics.fill(x, y, x + Math.round(width * ratio), y + height, 0xFFE9A23B);
-            }}
-        }}"#
+            }
+        }"#
     };
 
     let find_element_method = if has_animatable {
-        r#"    private Element findElementByAnimation(String animationId) {{
-        for (Element element : elements) {{
-            if (animationId.equals(element.animation)) {{
+        r#"    private Element findElementByAnimation(String animationId) {
+        for (Element element : elements) {
+            if (animationId.equals(element.animation)) {
                 return element;
-            }}
-        }}
+            }
+        }
         return null;
-    }}
+    }
 
 "#
     } else {
@@ -981,65 +981,65 @@ fn generate_fabric_layout_java(export: &SanitizedExport, project: &Project) -> S
     };
     let overlay_render = if has_overlay {
         r#"
-    public void renderOverlay(DrawContext context, int left, int top) {{
-        if (overlay != null) {{
+    public void renderOverlay(DrawContext context, int left, int top) {
+        if (overlay != null) {
             context.drawTexture(overlay, left, top, 0, 0, WIDTH, HEIGHT, WIDTH, HEIGHT);
-        }}
-    }}
+        }
+    }
 "#
     } else {
         r#"
-    public void renderOverlay(DrawContext context, int left, int top) {{
+    public void renderOverlay(DrawContext context, int left, int top) {
         // No overlay elements in this layout
-    }}
+    }
 "#
     };
 
     let progress_body = if has_animatable {
         r#"        Element element = findElementByAnimation(animationId);
-        if (element == null || element.texture == null) {{
+        if (element == null || element.texture == null) {
             return;
-        }}
+        }
         Identifier spriteTexture = resource(namespace, element.texture);
         int x = left + element.x;
         int y = top + element.y;
         int width = element.widthOrDefault(22);
         int height = element.heightOrDefault(15);
         float ratio = animation.normalize(value);
-        switch (animation.directionOrDefault()) {{
+        switch (animation.directionOrDefault()) {
             case "right_to_left" -> context.drawTexture(spriteTexture, x + width - Math.round(width * ratio), y, 0, 0, Math.round(width * ratio), height, width, height);
             case "bottom_to_top" -> context.drawTexture(spriteTexture, x, y + height - Math.round(height * ratio), 0, height - Math.round(height * ratio), width, Math.round(height * ratio), width, height);
             case "top_to_bottom" -> context.drawTexture(spriteTexture, x, y, 0, 0, width, Math.round(height * ratio), width, height);
             default -> context.drawTexture(spriteTexture, x, y, 0, 0, Math.round(width * ratio), height, width, height);
-        }}"#
+        }"#
     } else {
-        r#"        for (Element element : elements) {{
-            if (!element.isVisible() || !animationId.equals(element.animation)) {{
+        r#"        for (Element element : elements) {
+            if (!element.isVisible() || !animationId.equals(element.animation)) {
                 continue;
-            }}
+            }
             int x = left + element.x;
             int y = top + element.y;
             int width = element.widthOrDefault(22);
             int height = element.heightOrDefault(15);
             float ratio = animation.normalize(value);
-            switch (animation.directionOrDefault()) {{
+            switch (animation.directionOrDefault()) {
                 case "right_to_left" -> context.fill(x + width - Math.round(width * ratio), y, x + width, y + height, 0xFFE9A23B);
                 case "bottom_to_top" -> context.fill(x, y + height - Math.round(height * ratio), x + width, y + height, 0xFF3B82E9);
                 case "top_to_bottom" -> context.fill(x, y, x + width, y + Math.round(height * ratio), 0xFF3B82E9);
                 default -> context.fill(x, y, x + Math.round(width * ratio), y + height, 0xFFE9A23B);
-            }}
-        }}"#
+            }
+        }"#
     };
 
     let find_element_method = if has_animatable {
-        r#"    private Element findElementByAnimation(String animationId) {{
-        for (Element element : elements) {{
-            if (animationId.equals(element.animation)) {{
+        r#"    private Element findElementByAnimation(String animationId) {
+        for (Element element : elements) {
+            if (animationId.equals(element.animation)) {
                 return element;
-            }}
-        }}
+            }
+        }
         return null;
-    }}
+    }
 
 "#
     } else {
@@ -1808,6 +1808,7 @@ mod tests {
         let layout = read(&java_dir.join("GuiLayout.java"));
         assert!(layout.contains("new ResourceLocation(namespace, path)"));
         assert!(!layout.contains("net.minecraft.client.gui.DrawContext"));
+        assert!(!layout.contains("switch (animation.directionOrDefault()) {{"));
 
         let layout_json = read(&asset_dir.join("gui/123_furnace_gui_layout.json"));
         assert!(layout_json.contains("\"width\": 187"));
@@ -1844,6 +1845,7 @@ mod tests {
             layout.contains("public void renderOverlay(DrawContext context, int left, int top)")
         );
         assert!(layout.contains("data.textures.overlay"));
+        assert!(!layout.contains("switch (animation.directionOrDefault()) {{"));
         assert!(screen.contains("layout.renderOverlay(context, x, y);"));
     }
 
@@ -1873,6 +1875,7 @@ mod tests {
         assert!(layout
             .contains("ResourceLocation spriteTexture = resource(namespace, element.texture);"));
         assert!(layout.contains("graphics.blit(spriteTexture"));
+        assert!(!layout.contains("switch (animation.directionOrDefault()) {{"));
         assert!(!layout.contains(
             "graphics.fill(x, y, x + Math.round(width * ratio), y + height, 0xFFE9A23B);"
         ));
@@ -1894,6 +1897,7 @@ mod tests {
         assert!(layout.contains("net.minecraft.client.gui.DrawContext"));
         assert!(layout.contains("Identifier.of(namespace, path)"));
         assert!(!layout.contains("net.minecraft.resources.ResourceLocation"));
+        assert!(!layout.contains("switch (animation.directionOrDefault()) {{"));
         assert!(dir.join("src/main/resources/fabric.mod.json").exists());
 
         let _ = fs::remove_dir_all(dir);
