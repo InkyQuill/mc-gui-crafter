@@ -77,6 +77,53 @@ pub struct UvRect {
     pub height: u32,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub struct GlyphInfo {
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+    pub ascent: i32,
+}
+
+pub type GlyphMap = HashMap<char, GlyphInfo>;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct BitmapProvider {
+    pub file: String,
+    pub ascent: i32,
+    pub chars: Vec<String>,
+    #[serde(skip)]
+    pub image_data: Vec<u8>,
+    #[serde(skip)]
+    pub image_width: u32,
+    #[serde(skip)]
+    pub image_height: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case", tag = "type")]
+pub enum FontSource {
+    #[serde(rename = "minecraft")]
+    Minecraft {
+        providers: Vec<BitmapProvider>,
+        glyph_map: GlyphMap,
+    },
+    #[serde(rename = "ttf")]
+    Ttf {
+        #[serde(skip)]
+        font_data: Vec<u8>,
+        font_size: u32,
+        glyph_map: GlyphMap,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FontAsset {
+    pub id: String,
+    pub source: FontSource,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Element {
     pub id: String,
@@ -135,6 +182,8 @@ pub struct Project {
     pub is_dirty: bool,
     #[serde(skip)]
     pub texture_data: HashMap<String, Vec<u8>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fonts: Vec<FontAsset>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -331,6 +380,7 @@ impl Project {
             project_path: None,
             is_dirty: true,
             texture_data: HashMap::new(),
+            fonts: Vec::new(),
         }
     }
 
@@ -531,6 +581,44 @@ mod tests {
         };
         let value = serde_json::to_value(&element).unwrap();
         assert!(!value.as_object().unwrap().contains_key("layer"));
+    }
+
+    #[test]
+    fn font_asset_serialization() {
+        let mut glyph_map = GlyphMap::new();
+        glyph_map.insert('A', GlyphInfo { x: 0, y: 0, width: 8, height: 8, ascent: 7 });
+
+        let font = FontAsset {
+            id: "minecraft:default".into(),
+            source: FontSource::Ttf {
+                font_data: vec![],
+                font_size: 16,
+                glyph_map: glyph_map.clone(),
+            },
+        };
+
+        let value = serde_json::to_value(&font).unwrap();
+        assert_eq!(value["id"], "minecraft:default");
+        assert_eq!(value["source"]["type"], "ttf");
+        assert_eq!(value["source"]["font_size"], 16);
+
+        let glyph_map_val = &value["source"]["glyph_map"];
+        assert!(glyph_map_val.get("A").is_some());
+    }
+
+    #[test]
+    fn project_fonts_defaults_to_empty() {
+        let value = serde_json::json!({
+            "name": "Test",
+            "gui_size": { "width": 176, "height": 166 },
+            "mod_target": "forge",
+            "elements": [],
+            "groups": [],
+            "animations": [],
+            "assets": []
+        });
+        let project: Project = serde_json::from_value(value).unwrap();
+        assert!(project.fonts.is_empty());
     }
 
     #[test]

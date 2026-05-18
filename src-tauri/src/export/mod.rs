@@ -1449,6 +1449,7 @@ mod tests {
             project_path: None,
             is_dirty: true,
             texture_data,
+            fonts: Vec::new(),
         }
     }
 
