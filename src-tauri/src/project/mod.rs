@@ -56,6 +56,19 @@ pub enum FillDirection {
     TopToBottom,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum Layer {
+    #[default]
+    Background,
+    Overlay,
+    Animatable,
+}
+
+fn is_default_layer(layer: &Layer) -> bool {
+    *layer == Layer::Background
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct UvRect {
     pub x: u32,
@@ -95,6 +108,8 @@ pub struct Element {
     pub visible: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub uv: Option<UvRect>,
+    #[serde(default, skip_serializing_if = "is_default_layer")]
+    pub layer: Layer,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -408,29 +423,40 @@ impl Project {
 mod tests {
     use super::*;
 
-    fn sample_element(id: &str) -> Element {
+    fn sample_element_defaults() -> Element {
         Element {
-            id: id.to_string(),
+            id: String::new(),
             element_type: ElementType::Slot,
-            x: 8,
-            y: 18,
+            x: 0,
+            y: 0,
             width: None,
             height: None,
-            size: Some(18),
+            size: None,
             asset: None,
-            direction: Some(FillDirection::LeftToRight),
+            direction: None,
             content: None,
             font: None,
             color: None,
             shadow: None,
             animation: None,
             visible: true,
+            uv: None,
+            layer: Layer::Background,
+        }
+    }
+
+    fn sample_element(id: &str) -> Element {
+        Element {
+            id: id.to_string(),
+            direction: Some(FillDirection::LeftToRight),
+            size: Some(18),
             uv: Some(UvRect {
                 x: 1,
                 y: 2,
                 width: 16,
                 height: 16,
             }),
+            ..sample_element_defaults()
         }
     }
 
@@ -464,6 +490,47 @@ mod tests {
         let element: Element = serde_json::from_value(value).unwrap();
 
         assert!(element.visible);
+    }
+
+    #[test]
+    fn element_layer_defaults_to_background_when_missing() {
+        let value = serde_json::json!({
+            "id": "slot_1",
+            "type": "slot",
+            "x": 8,
+            "y": 18,
+            "size": 18
+        });
+        let element: Element = serde_json::from_value(value).unwrap();
+        assert_eq!(element.layer, Layer::Background);
+    }
+
+    #[test]
+    fn element_layer_serializes_animatable() {
+        let element = Element {
+            id: "arrow".into(),
+            element_type: ElementType::Progress,
+            x: 79,
+            y: 35,
+            layer: Layer::Animatable,
+            ..sample_element_defaults()
+        };
+        let value = serde_json::to_value(&element).unwrap();
+        assert_eq!(value["layer"], "animatable");
+    }
+
+    #[test]
+    fn element_layer_skips_background_default() {
+        let element = Element {
+            id: "bg".into(),
+            element_type: ElementType::Texture,
+            x: 0,
+            y: 0,
+            layer: Layer::Background,
+            ..sample_element_defaults()
+        };
+        let value = serde_json::to_value(&element).unwrap();
+        assert!(!value.as_object().unwrap().contains_key("layer"));
     }
 
     #[test]

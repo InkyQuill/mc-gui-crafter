@@ -1080,6 +1080,7 @@ mod tests {
             animation: None,
             visible: true,
             uv: None,
+            layer: crate::project::Layer::Background,
         }
     }
 

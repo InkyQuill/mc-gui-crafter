@@ -1355,7 +1355,7 @@ fn escape_java_string(value: &str) -> String {
 mod tests {
     use super::*;
     use crate::animation::{Animation, AnimationType};
-    use crate::project::{Element, FillDirection, ModTarget, Size};
+    use crate::project::{Element, FillDirection, Layer, ModTarget, Size};
     use image::{Rgba, RgbaImage};
     use std::collections::HashMap;
 
@@ -1391,6 +1391,7 @@ mod tests {
                     animation: None,
                     visible: true,
                     uv: None,
+                    layer: Layer::Background,
                 },
                 Element {
                     id: "slot_1".to_string(),
@@ -1409,6 +1410,7 @@ mod tests {
                     animation: None,
                     visible: true,
                     uv: None,
+                    layer: Layer::Background,
                 },
                 Element {
                     id: "progress_arrow".to_string(),
@@ -1427,6 +1429,7 @@ mod tests {
                     animation: Some("cook_progress".to_string()),
                     visible: true,
                     uv: None,
+                    layer: Layer::Background,
                 },
             ],
             groups: Vec::new(),

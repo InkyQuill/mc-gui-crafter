@@ -1,4 +1,4 @@
-use crate::project::Project;
+use crate::project::{Layer, Project};
 use image::{GenericImageView, RgbaImage};
 
 pub fn composite_atlas(project: &Project) -> Result<Vec<u8>, String> {
@@ -95,6 +95,7 @@ mod tests {
                 width: 1,
                 height: 1,
             }),
+            layer: Layer::Background,
         });
 
         let atlas = composite_atlas(&project).unwrap();

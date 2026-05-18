@@ -1,4 +1,4 @@
-use crate::project::{Element, ElementType, Project};
+use crate::project::{Element, ElementType, Layer, Project};
 
 pub struct Template {
     pub name: &'static str,
@@ -74,6 +74,7 @@ fn furnace() -> Template {
                 animation: None,
                 visible: true,
                 uv: None,
+                layer: Layer::Background,
             },
             Element {
                 id: "input_slot".into(),
@@ -92,6 +93,7 @@ fn furnace() -> Template {
                 animation: None,
                 visible: true,
                 uv: None,
+                layer: Layer::Background,
             },
             Element {
                 id: "fuel_slot".into(),
@@ -110,6 +112,7 @@ fn furnace() -> Template {
                 animation: None,
                 visible: true,
                 uv: None,
+                layer: Layer::Background,
             },
             Element {
                 id: "output_slot".into(),
@@ -128,6 +131,7 @@ fn furnace() -> Template {
                 animation: None,
                 visible: true,
                 uv: None,
+                layer: Layer::Background,
             },
             Element {
                 id: "progress_arrow".into(),
@@ -146,6 +150,7 @@ fn furnace() -> Template {
                 animation: Some("arrow_fill".into()),
                 visible: true,
                 uv: None,
+                layer: Layer::Background,
             },
             Element {
                 id: "title".into(),
@@ -164,6 +169,7 @@ fn furnace() -> Template {
                 animation: None,
                 visible: true,
                 uv: None,
+                layer: Layer::Background,
             },
         ],
     }
@@ -187,6 +193,7 @@ fn crafting_3x3() -> Template {
         animation: None,
         visible: true,
         uv: None,
+                layer: Layer::Background,
     }];
 
     // 3x3 crafting grid (x=30, y=17 to x=84, y=71)
@@ -209,6 +216,7 @@ fn crafting_3x3() -> Template {
                 animation: None,
                 visible: true,
                 uv: None,
+                layer: Layer::Background,
             });
         }
     }
@@ -231,6 +239,7 @@ fn crafting_3x3() -> Template {
         animation: Some("craft_progress".into()),
         visible: true,
         uv: None,
+                layer: Layer::Background,
     });
 
     // Output slot
@@ -251,6 +260,7 @@ fn crafting_3x3() -> Template {
         animation: None,
         visible: true,
         uv: None,
+                layer: Layer::Background,
     });
 
     Template {
@@ -280,6 +290,7 @@ fn chest_9x3() -> Template {
         animation: None,
         visible: true,
         uv: None,
+                layer: Layer::Background,
     }];
 
     for row in 0..3 {
@@ -301,6 +312,7 @@ fn chest_9x3() -> Template {
                 animation: None,
                 visible: true,
                 uv: None,
+                layer: Layer::Background,
             });
         }
     }
@@ -332,6 +344,7 @@ fn chest_9x6() -> Template {
         animation: None,
         visible: true,
         uv: None,
+                layer: Layer::Background,
     }];
 
     for row in 0..6 {
@@ -353,6 +366,7 @@ fn chest_9x6() -> Template {
                 animation: None,
                 visible: true,
                 uv: None,
+                layer: Layer::Background,
             });
         }
     }

@@ -1,4 +1,4 @@
-use crate::project::Project;
+use crate::project::{Layer, Project};
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::io::{Read, Write};
@@ -201,6 +201,7 @@ mod tests {
                 width: 12,
                 height: 10,
             }),
+            layer: Layer::Background,
         });
         project.groups.push(Group {
             id: "group_1".to_string(),
