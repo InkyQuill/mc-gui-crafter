@@ -483,6 +483,151 @@ pub fn project_redo(
     sessions.redo(project_id.as_deref())
 }
 
+#[tauri::command(rename_all = "snake_case")]
+pub fn list_minecraft_sources() -> Vec<serde_json::Value> {
+    let mut sources = Vec::new();
+    let home = std::env::var("HOME")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_default();
+
+    // Scan PrismLauncher instances
+    let prism_path = home.join(".local/share/PrismLauncher/instances");
+    if let Ok(entries) = std::fs::read_dir(&prism_path) {
+        for entry in entries.flatten() {
+            if entry.path().is_dir() {
+                sources.push(serde_json::json!({
+                    "name": entry.file_name().to_string_lossy(),
+                    "path": entry.path().to_string_lossy(),
+                    "source_type": "prismlauncher"
+                }));
+            }
+        }
+    }
+
+    // Scan Gradle dev workspaces
+    let dev_path = home.join("Development/minecraft");
+    if let Ok(entries) = std::fs::read_dir(&dev_path) {
+        for entry in entries.flatten() {
+            if entry.path().is_dir() {
+                sources.push(serde_json::json!({
+                    "name": entry.file_name().to_string_lossy(),
+                    "path": entry.path().to_string_lossy(),
+                    "source_type": "gradle_dev"
+                }));
+            }
+        }
+    }
+
+    sources
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub fn font_import(
+    state: State<AppState>,
+    file_path: String,
+    project_id: Option<String>,
+) -> Result<serde_json::Value, String> {
+    use std::io::Read;
+
+    let mut file = std::fs::File::open(&file_path)
+        .map_err(|e| format!("Failed to open font file: {e}"))?;
+    let mut data = Vec::new();
+    file.read_to_end(&mut data)
+        .map_err(|e| format!("Failed to read font file: {e}"))?;
+
+    let ext = std::path::Path::new(&file_path)
+        .extension()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+
+    let font_id = std::path::Path::new(&file_path)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("imported_font");
+
+    let font_asset = match ext.as_str() {
+        "ttf" | "otf" => crate::font::rasterizer::rasterize_ttf(&data, 16, font_id)
+            .map_err(|e| format!("Failed to rasterize font: {e}"))?,
+        _ => return Err(format!("Unsupported font format: .{ext}. Use .ttf or .otf")),
+    };
+
+    let mut sessions = state.sessions.lock().unwrap();
+    sessions.record_history(project_id.as_deref())?;
+    let session = sessions.resolve_mut(project_id.as_deref())?;
+
+    // Replace existing font with same ID, or add new
+    session.project.fonts.retain(|f| f.id != font_asset.id);
+    session.project.fonts.push(font_asset.clone());
+    sessions.mark_changed(project_id.as_deref())?;
+
+    Ok(serde_json::to_value(&font_asset).unwrap_or_default())
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub fn font_list(
+    state: State<AppState>,
+    project_id: Option<String>,
+) -> Result<Vec<serde_json::Value>, String> {
+    let sessions = state.sessions.lock().unwrap();
+    let session = sessions.resolve(project_id.as_deref())?;
+
+    let fonts: Vec<_> = if session.project.fonts.is_empty() {
+        vec![serde_json::json!({
+            "id": "minecraft:default",
+            "source": { "type": "minecraft" }
+        })]
+    } else {
+        session
+            .project
+            .fonts
+            .iter()
+            .map(|f| {
+                let source_type = match &f.source {
+                    crate::project::FontSource::Minecraft { .. } => "minecraft",
+                    crate::project::FontSource::Ttf { .. } => "ttf",
+                };
+                serde_json::json!({
+                    "id": f.id,
+                    "source": { "type": source_type }
+                })
+            })
+            .collect()
+    };
+
+    Ok(fonts)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub fn font_glyph_map(
+    state: State<AppState>,
+    font_id: String,
+    project_id: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let sessions = state.sessions.lock().unwrap();
+    let session = sessions.resolve(project_id.as_deref())?;
+
+    let font = session
+        .project
+        .fonts
+        .iter()
+        .find(|f| f.id == font_id)
+        .ok_or_else(|| format!("Font not found: {font_id}"))?;
+
+    let glyph_map = match &font.source {
+        crate::project::FontSource::Minecraft { glyph_map, .. } => glyph_map,
+        crate::project::FontSource::Ttf { glyph_map, .. } => glyph_map,
+    };
+
+    serde_json::to_value(glyph_map).map_err(|e| format!("Failed to serialize glyph map: {e}"))
+}
+
+fn home_dir() -> std::path::PathBuf {
+    std::env::var("HOME")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_default()
+}
+
 fn parse_mod_target(mod_target: &str) -> ModTarget {
     match mod_target {
         "fabric" | "Fabric" => ModTarget::Fabric,

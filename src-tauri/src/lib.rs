@@ -71,6 +71,10 @@ pub fn run() {
             commands::animation_bind,
             commands::animation_unbind,
             mcp::mcp_status,
+            commands::list_minecraft_sources,
+            commands::font_import,
+            commands::font_list,
+            commands::font_glyph_map,
         ])
         .run(tauri::generate_context!())
         .expect("error while running MCGUI Crafter");
