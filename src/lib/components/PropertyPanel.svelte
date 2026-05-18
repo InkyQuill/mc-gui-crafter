@@ -68,6 +68,19 @@
         />
       </div>
 
+      <div class="prop-row">
+        <label for="prop-layer">Layer</label>
+        <select
+          id="prop-layer"
+          value={selectedEl.layer ?? "background"}
+          onchange={(e) => updateProp("layer", e.currentTarget.value)}
+        >
+          <option value="background">Background</option>
+          <option value="overlay">Overlay</option>
+          <option value="animatable">Animatable</option>
+        </select>
+      </div>
+
       {#if selectedEl.type === "slot"}
         <div class="prop-row">
           <label for="prop-size">Size</label>
@@ -180,6 +193,21 @@
             value={selectedEl.content ?? ""}
             oninput={(e) => updateProp("content", e.currentTarget.value)}
           />
+        </div>
+        <div class="prop-row">
+          <label for="prop-font">Font</label>
+          <select
+            id="prop-font"
+            value={selectedEl.font ?? "minecraft:default"}
+            onchange={(e) => updateProp("font", e.currentTarget.value)}
+          >
+            {#each project.fonts as font}
+              <option value={font.id}>{font.id}</option>
+            {/each}
+            {#if project.fonts.length === 0}
+              <option value="minecraft:default">minecraft:default</option>
+            {/if}
+          </select>
         </div>
         <div class="prop-row">
           <label for="prop-color">Color</label>
