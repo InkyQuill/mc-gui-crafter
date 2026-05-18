@@ -1660,6 +1660,28 @@ mod tests {
         dir
     }
 
+    struct TempExportDir {
+        path: PathBuf,
+    }
+
+    impl TempExportDir {
+        fn new(name: &str) -> Self {
+            Self {
+                path: temp_export_dir(name),
+            }
+        }
+
+        fn path(&self) -> &Path {
+            &self.path
+        }
+    }
+
+    impl Drop for TempExportDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
+
     fn export_sample(target: &str, project_target: ModTarget) -> (PathBuf, Vec<String>) {
         let output_dir = temp_export_dir(target);
         let config = ExportConfig {
@@ -1712,41 +1734,43 @@ mod tests {
 
     #[test]
     fn fabric_layered_export_defines_overlay_method_and_loads_overlay_texture() {
-        let output_dir = temp_export_dir("fabric-layered");
+        let output_dir = TempExportDir::new("fabric-layered");
         let config = ExportConfig {
             mod_id: "testmod".to_string(),
             package: "com.example".to_string(),
             class_name: "LayeredGui".to_string(),
-            output_dir: output_dir.to_string_lossy().to_string(),
+            output_dir: output_dir.path().to_string_lossy().to_string(),
         };
 
         let files = export_project(&layered_project(ModTarget::Fabric), &config, "fabric").unwrap();
-        let layout_path = output_dir.join("src/main/java/com/example/GuiLayout.java");
-        let screen_path = output_dir.join("src/main/java/com/example/LayeredGuiScreen.java");
+        let layout_path = output_dir
+            .path()
+            .join("src/main/java/com/example/GuiLayout.java");
+        let screen_path = output_dir
+            .path()
+            .join("src/main/java/com/example/LayeredGuiScreen.java");
         let layout = read(&layout_path);
         let screen = read(&screen_path);
 
         assert!(files
             .iter()
-            .any(|path| path.ends_with("layered_gui_overlay.png")));
+            .any(|path| path.ends_with("textures/gui/layeredgui_overlay.png")));
         assert!(layout.contains("private final Identifier overlay;"));
         assert!(
             layout.contains("public void renderOverlay(DrawContext context, int left, int top)")
         );
         assert!(layout.contains("data.textures.overlay"));
         assert!(screen.contains("layout.renderOverlay(context, x, y);"));
-
-        let _ = fs::remove_dir_all(output_dir);
     }
 
     #[test]
     fn animatable_layer_export_uses_generated_sprite_textures_in_runtime() {
-        let output_dir = temp_export_dir("animatable-runtime");
+        let output_dir = TempExportDir::new("animatable-runtime");
         let config = ExportConfig {
             mod_id: "testmod".to_string(),
             package: "com.example".to_string(),
             class_name: "LayeredGui".to_string(),
-            output_dir: output_dir.to_string_lossy().to_string(),
+            output_dir: output_dir.path().to_string_lossy().to_string(),
         };
 
         let preview = preview_export(&layered_project(ModTarget::Forge), &config, "forge").unwrap();
@@ -1756,7 +1780,11 @@ mod tests {
             .any(|path| path.ends_with("textures/gui/progress_arrow.png")));
 
         export_project(&layered_project(ModTarget::Forge), &config, "forge").unwrap();
-        let layout = read(&output_dir.join("src/main/java/com/example/GuiLayout.java"));
+        let layout = read(
+            &output_dir
+                .path()
+                .join("src/main/java/com/example/GuiLayout.java"),
+        );
 
         assert!(layout
             .contains("ResourceLocation spriteTexture = resource(namespace, element.texture);"));
@@ -1764,8 +1792,6 @@ mod tests {
         assert!(!layout.contains(
             "graphics.fill(x, y, x + Math.round(width * ratio), y + height, 0xFFE9A23B);"
         ));
-
-        let _ = fs::remove_dir_all(output_dir);
     }
 
     #[test]
