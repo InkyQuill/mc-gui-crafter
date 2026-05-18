@@ -696,6 +696,94 @@ fn generate_forge_like_layout_java(
         _ => "new ResourceLocation(namespace, path)",
     };
 
+    let has_overlay = project.elements.iter().any(|e| e.layer == Layer::Overlay);
+    let has_animatable = project
+        .elements
+        .iter()
+        .any(|e| e.layer == Layer::Animatable);
+
+    let overlay_field = if has_overlay {
+        "private final ResourceLocation overlay;\n    "
+    } else {
+        ""
+    };
+    let overlay_ctor = if has_overlay {
+        ", ResourceLocation overlay"
+    } else {
+        ""
+    };
+    let overlay_assign = if has_overlay {
+        "this.overlay = overlay;\n        "
+    } else {
+        ""
+    };
+    let overlay_render = if has_overlay {
+        r#"
+    public void renderOverlay(GuiGraphics graphics, int left, int top) {{
+        if (overlay != null) {{
+            graphics.blit(overlay, left, top, 0, 0, WIDTH, HEIGHT, WIDTH, HEIGHT);
+        }}
+    }}
+"#
+    } else {
+        r#"
+    public void renderOverlay(GuiGraphics graphics, int left, int top) {{
+        // No overlay elements in this layout
+    }}
+"#
+    };
+
+    let progress_body = if has_animatable {
+        r#"        Element element = findElementByAnimation(animationId);
+        if (element == null || element.texture == null) {{
+            return;
+        }}
+        ResourceLocation spriteTexture = resource(namespace, element.texture);
+        int x = left + element.x;
+        int y = top + element.y;
+        int width = element.widthOrDefault(22);
+        int height = element.heightOrDefault(15);
+        float ratio = animation.normalize(value);
+        switch (animation.directionOrDefault()) {{
+            case "right_to_left" -> graphics.blit(spriteTexture, x + width - Math.round(width * ratio), y, 0, 0, Math.round(width * ratio), height, width, height);
+            case "bottom_to_top" -> graphics.blit(spriteTexture, x, y + height - Math.round(height * ratio), 0, height - Math.round(height * ratio), width, Math.round(height * ratio), width, height);
+            case "top_to_bottom" -> graphics.blit(spriteTexture, x, y, 0, 0, width, Math.round(height * ratio), width, height);
+            default -> graphics.blit(spriteTexture, x, y, 0, 0, Math.round(width * ratio), height, width, height);
+        }}"#
+    } else {
+        r#"        for (Element element : elements) {{
+            if (!element.isVisible() || !animationId.equals(element.animation)) {{
+                continue;
+            }}
+            int x = left + element.x;
+            int y = top + element.y;
+            int width = element.widthOrDefault(22);
+            int height = element.heightOrDefault(15);
+            float ratio = animation.normalize(value);
+            switch (animation.directionOrDefault()) {{
+                case "right_to_left" -> graphics.fill(x + width - Math.round(width * ratio), y, x + width, y + height, 0xFFE9A23B);
+                case "bottom_to_top" -> graphics.fill(x, y + height - Math.round(height * ratio), x + width, y + height, 0xFF3B82E9);
+                case "top_to_bottom" -> graphics.fill(x, y, x + width, y + Math.round(height * ratio), 0xFF3B82E9);
+                default -> graphics.fill(x, y, x + Math.round(width * ratio), y + height, 0xFFE9A23B);
+            }}
+        }}"#
+    };
+
+    let find_element_method = if has_animatable {
+        r#"    private Element findElementByAnimation(String animationId) {{
+        for (Element element : elements) {{
+            if (animationId.equals(element.animation)) {{
+                return element;
+            }}
+        }}
+        return null;
+    }}
+
+"#
+    } else {
+        ""
+    };
+
     format!(
         r#"package {package};
 
@@ -705,6 +793,7 @@ import com.google.gson.reflect.TypeToken;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.Map;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.GuiGraphics;
@@ -716,11 +805,14 @@ public final class GuiLayout {{
     private final List<Element> elements;
     private final List<Animation> animations;
     private final ResourceLocation texture;
+    {overlay_field}
+    private String namespace;
 
-    private GuiLayout(List<Element> elements, List<Animation> animations, ResourceLocation texture) {{
+    private GuiLayout(List<Element> elements, List<Animation> animations, ResourceLocation texture{overlay_ctor}) {{
         this.elements = elements == null ? List.of() : elements;
         this.animations = animations == null ? List.of() : animations;
         this.texture = texture;
+        {overlay_assign}
     }}
 
     public static ResourceLocation resource(String namespace, String path) {{
@@ -729,14 +821,17 @@ public final class GuiLayout {{
 
     public static GuiLayout load(String namespace, String layoutPath, String texturePath) {{
         ResourceLocation layoutId = resource(namespace, layoutPath);
-        ResourceLocation textureId = resource(namespace, texturePath);
         String classpathResource = "assets/" + layoutId.getNamespace() + "/" + layoutId.getPath();
         try (InputStreamReader reader = new InputStreamReader(
                 GuiLayout.class.getClassLoader().getResourceAsStream(classpathResource),
                 StandardCharsets.UTF_8)) {{
             Gson gson = new Gson();
             LayoutData data = gson.fromJson(reader, new TypeToken<LayoutData>() {{}}.getType());
-            return new GuiLayout(data.elements, data.animations, textureId);
+            ResourceLocation bgId = resource(namespace, data.textures.background);
+            ResourceLocation overlayId = data.textures.overlay != null ? resource(namespace, data.textures.overlay) : null;
+            GuiLayout layout = new GuiLayout(data.elements, data.animations, bgId, overlayId);
+            layout.namespace = namespace;
+            return layout;
         }} catch (Exception error) {{
             throw new IllegalStateException("Failed to load GUI layout " + layoutId, error);
         }}
@@ -745,7 +840,7 @@ public final class GuiLayout {{
     public void renderTexture(GuiGraphics graphics, int left, int top) {{
         graphics.blit(texture, left, top, 0, 0, WIDTH, HEIGHT, WIDTH, HEIGHT);
     }}
-
+{overlay_render}
     public void renderStaticElements(GuiGraphics graphics, int left, int top) {{
         Font font = Minecraft.getInstance().font;
         for (Element element : elements) {{
@@ -795,7 +890,7 @@ public final class GuiLayout {{
         return null;
     }}
 
-    private static void renderSlot(GuiGraphics graphics, int x, int y, int size) {{
+{find_element_method}    private static void renderSlot(GuiGraphics graphics, int x, int y, int size) {{
         graphics.fill(x, y, x + size, y + size, 0xFF8B8B8B);
         graphics.fill(x + 1, y + 1, x + size - 1, y + size - 1, 0xFF373737);
         graphics.fill(x + 2, y + 2, x + size - 2, y + size - 2, 0xFFC6C6C6);
@@ -807,8 +902,14 @@ public final class GuiLayout {{
     }}
 
     private static final class LayoutData {{
+        TexturesData textures;
         List<Element> elements;
         List<Animation> animations;
+    }}
+
+    private static final class TexturesData {{
+        String background;
+        String overlay;
     }}
 
     private static final class Element {{
@@ -824,6 +925,7 @@ public final class GuiLayout {{
         Boolean shadow;
         String animation;
         Boolean visible;
+        String texture;
 
         boolean isVisible() {{ return visible == null || visible; }}
         int widthOrDefault(int fallback) {{ return width == null ? fallback : width; }}
@@ -1060,6 +1162,7 @@ public class {class_name}Screen extends AbstractContainerScreen<AbstractContaine
     @Override
     protected void renderBg(GuiGraphics graphics, float partialTick, int mouseX, int mouseY) {{
         layout.renderTexture(graphics, leftPos, topPos);
+        layout.renderOverlay(graphics, leftPos, topPos);
         layout.renderStaticElements(graphics, leftPos, topPos);
 {animation_hooks}
     }}
@@ -1111,6 +1214,7 @@ public class {class_name}Screen extends AbstractContainerScreen<AbstractContaine
     @Override
     protected void renderBg(GuiGraphics graphics, float partialTick, int mouseX, int mouseY) {{
         layout.renderTexture(graphics, leftPos, topPos);
+        layout.renderOverlay(graphics, leftPos, topPos);
         layout.renderStaticElements(graphics, leftPos, topPos);
 {animation_hooks}
     }}
@@ -1162,6 +1266,7 @@ public class {class_name}Screen extends HandledScreen<ScreenHandler> {{
     @Override
     protected void drawBackground(DrawContext context, float delta, int mouseX, int mouseY) {{
         layout.renderTexture(context, x, y);
+        layout.renderOverlay(context, x, y);
         layout.renderStaticElements(context, x, y);
 {animation_hooks}
     }}

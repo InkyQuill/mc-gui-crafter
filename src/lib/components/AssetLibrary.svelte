@@ -35,6 +35,29 @@
     }
   }
 
+  async function handleImportFont() {
+    let path: string | null = null;
+    try {
+      const dialog = await import("@tauri-apps/plugin-dialog");
+      const result = await dialog.open({
+        filters: [{ name: "Font Files", extensions: ["ttf", "otf"] }],
+        multiple: false,
+      });
+      if (!result) return;
+      path = result as string;
+    } catch {
+      status.warning("Font import requires the desktop app.");
+      return;
+    }
+
+    try {
+      await project.importFont(path!);
+      status.success(`Imported font from ${path}`);
+    } catch (error) {
+      status.error(`Failed to import font: ${readableError(error)}`);
+    }
+  }
+
   async function handleRemove(name: string) {
     try {
       const removed = await api.assetRemove(name, project.activeProjectId ?? undefined);
@@ -98,6 +121,22 @@
 
   <button class="import-btn" onclick={handleImport}>
     + Import PNG
+  </button>
+
+  {#if project.fonts.length > 0}
+    <h3>Fonts ({project.fonts.length})</h3>
+    <ul class="font-list">
+      {#each project.fonts as font}
+        <li class="font-item">
+          <span>{font.id}</span>
+          <span class="font-type">{font.source.type}</span>
+        </li>
+      {/each}
+    </ul>
+  {/if}
+
+  <button class="import-btn" onclick={handleImportFont}>
+    + Import Font
   </button>
 
   {#if editingAsset}
@@ -254,5 +293,29 @@
 
   .remove-btn:hover {
     color: #e94560;
+  }
+
+  .font-list {
+    list-style: none;
+    padding: 0;
+    margin: 0 0 8px 0;
+  }
+
+  .font-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 3px 6px;
+    font-size: 11px;
+    color: #a0b0d0;
+    background: #0a0a18;
+    border-radius: 3px;
+    margin-bottom: 2px;
+  }
+
+  .font-type {
+    font-size: 9px;
+    color: #505060;
+    text-transform: uppercase;
   }
 </style>
