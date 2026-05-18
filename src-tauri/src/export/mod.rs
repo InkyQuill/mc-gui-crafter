@@ -1,5 +1,5 @@
 use crate::animation::Animation;
-use crate::project::{ElementType, Project};
+use crate::project::{ElementType, Layer, Project};
 use std::borrow::Cow;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -191,11 +191,38 @@ fn plan_export(
         generate_gradle_properties(&export, target).into_bytes(),
     )?;
 
-    let atlas_data = crate::texture::composite_atlas(project)?;
-    let texture_path = export
+    // Background atlas
+    let bg_atlas = crate::texture::composite_atlas_for_layer(project, Layer::Background)?;
+    let bg_texture_path = export
         .asset_dir()
         .join(format!("textures/gui/{}_gui.png", export.resource_name));
-    plan_file(&mut files, texture_path, atlas_data)?;
+    plan_file(&mut files, bg_texture_path, bg_atlas)?;
+
+    // Overlay atlas (only if overlay elements exist)
+    let has_overlay = project
+        .elements
+        .iter()
+        .any(|e| e.layer == Layer::Overlay);
+    if has_overlay {
+        let overlay_atlas =
+            crate::texture::composite_atlas_for_layer(project, Layer::Overlay)?;
+        let overlay_texture_path = export
+            .asset_dir()
+            .join(format!("textures/gui/{}_overlay.png", export.resource_name));
+        plan_file(&mut files, overlay_texture_path, overlay_atlas)?;
+    }
+
+    // Animatable sprites
+    for element in &project.elements {
+        if element.layer == Layer::Animatable {
+            let sprite =
+                crate::texture::composite_single_element(element, project)?;
+            let sprite_path = export
+                .asset_dir()
+                .join(format!("textures/gui/{}.png", element.id));
+            plan_file(&mut files, sprite_path, sprite)?;
+        }
+    }
 
     for asset in referenced_texture_assets(project) {
         if let Some(data) = project.texture_data.get(asset.as_ref()) {
@@ -204,9 +231,33 @@ fn plan_export(
         }
     }
 
+    let mut textures_json = serde_json::json!({
+        "background": format!("textures/gui/{}_gui.png", export.resource_name),
+    });
+    if has_overlay {
+        textures_json["overlay"] = serde_json::json!(format!(
+            "textures/gui/{}_overlay.png",
+            export.resource_name
+        ));
+    }
+
+    let elements_json: Vec<serde_json::Value> = project
+        .elements
+        .iter()
+        .map(|e| {
+            let mut val = serde_json::to_value(e).unwrap();
+            if e.layer == Layer::Animatable {
+                val["texture"] =
+                    serde_json::json!(format!("textures/gui/{}.png", e.id));
+            }
+            val
+        })
+        .collect();
+
     let layout = serde_json::json!({
         "gui_size": project.gui_size,
-        "elements": project.elements,
+        "textures": textures_json,
+        "elements": elements_json,
         "groups": project.groups,
         "animations": project.animations,
     });

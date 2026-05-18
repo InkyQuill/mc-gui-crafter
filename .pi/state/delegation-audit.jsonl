@@ -30,3 +30,7 @@
 {"timestamp":"2026-05-18T09:39:19.116Z","tool":"edit","file":"/home/inky/Development/mc-gui-crafter/src/lib/api.ts","message":"Direct source file write — consider delegating to a subagent"}
 {"timestamp":"2026-05-18T09:39:32.319Z","tool":"edit","file":"/home/inky/Development/mc-gui-crafter/src/lib/stores/project.svelte.ts","message":"Direct source file write — consider delegating to a subagent"}
 {"timestamp":"2026-05-18T09:39:46.764Z","tool":"edit","file":"/home/inky/Development/mc-gui-crafter/src/lib/stores/project.svelte.ts","message":"Direct source file write — consider delegating to a subagent"}
+{"timestamp":"2026-05-18T10:26:08.618Z","tool":"edit","file":"/home/inky/Development/mc-gui-crafter/src-tauri/src/texture/mod.rs","message":"Direct source file write — consider delegating to a subagent"}
+{"timestamp":"2026-05-18T10:26:49.535Z","tool":"edit","file":"/home/inky/Development/mc-gui-crafter/src-tauri/src/export/mod.rs","message":"Direct source file write — consider delegating to a subagent"}
+{"timestamp":"2026-05-18T10:27:24.244Z","tool":"edit","file":"/home/inky/Development/mc-gui-crafter/src-tauri/src/export/mod.rs","message":"Direct source file write — consider delegating to a subagent"}
+{"timestamp":"2026-05-18T10:28:15.056Z","tool":"edit","file":"/home/inky/Development/mc-gui-crafter/src-tauri/src/commands.rs","message":"Direct source file write — consider delegating to a subagent"}

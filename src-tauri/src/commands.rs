@@ -622,12 +622,6 @@ pub fn font_glyph_map(
     serde_json::to_value(glyph_map).map_err(|e| format!("Failed to serialize glyph map: {e}"))
 }
 
-fn home_dir() -> std::path::PathBuf {
-    std::env::var("HOME")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_default()
-}
-
 fn parse_mod_target(mod_target: &str) -> ModTarget {
     match mod_target {
         "fabric" | "Fabric" => ModTarget::Fabric,
