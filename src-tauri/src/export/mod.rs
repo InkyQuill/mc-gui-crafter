@@ -717,6 +717,16 @@ fn generate_forge_like_layout_java(
     } else {
         ""
     };
+    let load_layout_body = if has_overlay {
+        r#"            ResourceLocation overlayId = data.textures.overlay != null ? resource(namespace, data.textures.overlay) : null;
+            GuiLayout layout = new GuiLayout(data.elements, data.animations, bgId, overlayId);
+            layout.namespace = namespace;
+            return layout;"#
+    } else {
+        r#"            GuiLayout layout = new GuiLayout(data.elements, data.animations, bgId);
+            layout.namespace = namespace;
+            return layout;"#
+    };
     let overlay_render = if has_overlay {
         r#"
     public void renderOverlay(GuiGraphics graphics, int left, int top) {
@@ -828,10 +838,7 @@ public final class GuiLayout {{
             Gson gson = new Gson();
             LayoutData data = gson.fromJson(reader, new TypeToken<LayoutData>() {{}}.getType());
             ResourceLocation bgId = resource(namespace, data.textures.background);
-            ResourceLocation overlayId = data.textures.overlay != null ? resource(namespace, data.textures.overlay) : null;
-            GuiLayout layout = new GuiLayout(data.elements, data.animations, bgId, overlayId);
-            layout.namespace = namespace;
-            return layout;
+{load_layout_body}
         }} catch (Exception error) {{
             throw new IllegalStateException("Failed to load GUI layout " + layoutId, error);
         }}
@@ -948,6 +955,7 @@ public final class GuiLayout {{
         width = project.gui_size.width,
         height = project.gui_size.height,
         resource_location_ctor = resource_location_ctor,
+        load_layout_body = load_layout_body,
         progress_body = progress_body
     )
 }
@@ -1809,6 +1817,8 @@ mod tests {
         assert!(layout.contains("new ResourceLocation(namespace, path)"));
         assert!(!layout.contains("net.minecraft.client.gui.DrawContext"));
         assert!(!layout.contains("switch (animation.directionOrDefault()) {{"));
+        assert!(layout.contains("new GuiLayout(data.elements, data.animations, bgId);"));
+        assert!(!layout.contains("overlayId"));
 
         let layout_json = read(&asset_dir.join("gui/123_furnace_gui_layout.json"));
         assert!(layout_json.contains("\"width\": 187"));
