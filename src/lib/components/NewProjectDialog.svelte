@@ -72,6 +72,14 @@
     }
   }
 
+  function templateDescription(template: TemplateInfo) {
+    if (template.name === "custom_grid") {
+      return "Default 3x3 custom grid starter layout";
+    }
+
+    return template.description;
+  }
+
   async function handleCreate() {
     const template = selectedTemplate === "empty" ? undefined : selectedTemplate;
     await project.newProject("Untitled GUI", width, height, modTarget, template);
@@ -105,7 +113,7 @@
         >
           <span class="template-name">{t.name.replace(/_/g, " ")}</span>
           <span class="template-size">{t.default_width}×{t.default_height}</span>
-          <span class="template-desc">{t.description}</span>
+          <span class="template-desc">{templateDescription(t)}</span>
           <span class="template-elements">{t.element_count} elements</span>
         </button>
       {/each}
