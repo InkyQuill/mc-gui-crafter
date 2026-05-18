@@ -1,4 +1,4 @@
-use crate::project::{Layer, Project};
+use crate::project::Project;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::io::{Read, Write};
@@ -188,7 +188,7 @@ mod tests {
     use crate::animation::{Animation, AnimationType};
     use crate::project::{
         Element, ElementType, FillDirection, FontAsset, FontSource, GlyphInfo, GlyphMap, Group,
-        ModTarget, Project, UvRect,
+        Layer, ModTarget, Project, UvRect,
     };
 
     fn temp_project_path() -> String {

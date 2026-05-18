@@ -1,18 +1,15 @@
 use crate::project::{Element, ElementType, Layer, Project};
 use image::{GenericImageView, Rgba, RgbaImage};
 
-pub fn composite_atlas(project: &Project) -> Result<Vec<u8>, String> {
-    composite_atlas_for_layer(project, Layer::Background)
-}
-
 pub fn composite_atlas_for_layer(project: &Project, layer: Layer) -> Result<Vec<u8>, String> {
     let w = project.gui_size.width;
     let h = project.gui_size.height;
 
     let mut img = RgbaImage::new(w, h);
-    let has_elements = project.elements.iter().any(|el| {
-        el.element_type == ElementType::Texture && el.layer == layer
-    });
+    let has_elements = project
+        .elements
+        .iter()
+        .any(|el| el.element_type == ElementType::Texture && el.layer == layer);
 
     if !has_elements {
         let mut buf = Vec::new();
@@ -74,8 +71,11 @@ pub fn composite_single_element(element: &Element, _project: &Project) -> Result
 
     let img = RgbaImage::from_pixel(w, h, color);
     let mut bytes = Vec::new();
-    img.write_to(&mut std::io::Cursor::new(&mut bytes), image::ImageFormat::Png)
-        .map_err(|e| e.to_string())?;
+    img.write_to(
+        &mut std::io::Cursor::new(&mut bytes),
+        image::ImageFormat::Png,
+    )
+    .map_err(|e| e.to_string())?;
     Ok(bytes)
 }
 
@@ -128,7 +128,7 @@ mod tests {
             layer: Layer::Background,
         });
 
-        let atlas = composite_atlas(&project).unwrap();
+        let atlas = composite_atlas_for_layer(&project, Layer::Background).unwrap();
         let pixel = image::load_from_memory(&atlas)
             .unwrap()
             .to_rgba8()

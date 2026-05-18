@@ -1,4 +1,3 @@
-pub mod glyph_map;
 pub mod parser;
 pub mod rasterizer;
 

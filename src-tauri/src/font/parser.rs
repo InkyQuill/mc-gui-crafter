@@ -12,7 +12,6 @@ struct BitmapProviderJson {
     file: Option<String>,
     ascent: Option<i32>,
     chars: Option<Vec<String>>,
-    id: Option<String>,
 }
 
 /// Parse a Minecraft font JSON file into a list of BitmapProviders and a GlyphMap.
@@ -77,16 +76,8 @@ pub fn parse_font_json(
             "space" => {
                 // Space providers add whitespace mappings
                 for ch in [
-                    ' ',
-                    '\u{2003}',
-                    '\u{2002}',
-                    '\u{2004}',
-                    '\u{2005}',
-                    '\u{2006}',
-                    '\u{2007}',
-                    '\u{2008}',
-                    '\u{2009}',
-                    '\u{200a}',
+                    ' ', '\u{2003}', '\u{2002}', '\u{2004}', '\u{2005}', '\u{2006}', '\u{2007}',
+                    '\u{2008}', '\u{2009}', '\u{200a}',
                 ] {
                     glyph_map.entry(ch).or_insert(crate::project::GlyphInfo {
                         x: 0,

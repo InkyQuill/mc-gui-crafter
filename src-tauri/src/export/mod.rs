@@ -199,13 +199,9 @@ fn plan_export(
     plan_file(&mut files, bg_texture_path, bg_atlas)?;
 
     // Overlay atlas (only if overlay elements exist)
-    let has_overlay = project
-        .elements
-        .iter()
-        .any(|e| e.layer == Layer::Overlay);
+    let has_overlay = project.elements.iter().any(|e| e.layer == Layer::Overlay);
     if has_overlay {
-        let overlay_atlas =
-            crate::texture::composite_atlas_for_layer(project, Layer::Overlay)?;
+        let overlay_atlas = crate::texture::composite_atlas_for_layer(project, Layer::Overlay)?;
         let overlay_texture_path = export
             .asset_dir()
             .join(format!("textures/gui/{}_overlay.png", export.resource_name));
@@ -215,8 +211,7 @@ fn plan_export(
     // Animatable sprites
     for element in &project.elements {
         if element.layer == Layer::Animatable {
-            let sprite =
-                crate::texture::composite_single_element(element, project)?;
+            let sprite = crate::texture::composite_single_element(element, project)?;
             let sprite_path = export
                 .asset_dir()
                 .join(format!("textures/gui/{}.png", element.id));
@@ -235,10 +230,8 @@ fn plan_export(
         "background": format!("textures/gui/{}_gui.png", export.resource_name),
     });
     if has_overlay {
-        textures_json["overlay"] = serde_json::json!(format!(
-            "textures/gui/{}_overlay.png",
-            export.resource_name
-        ));
+        textures_json["overlay"] =
+            serde_json::json!(format!("textures/gui/{}_overlay.png", export.resource_name));
     }
 
     let elements_json: Vec<serde_json::Value> = project
@@ -247,8 +240,7 @@ fn plan_export(
         .map(|e| {
             let mut val = serde_json::to_value(e).unwrap();
             if e.layer == Layer::Animatable {
-                val["texture"] =
-                    serde_json::json!(format!("textures/gui/{}.png", e.id));
+                val["texture"] = serde_json::json!(format!("textures/gui/{}.png", e.id));
             }
             val
         })
