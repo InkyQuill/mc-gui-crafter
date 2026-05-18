@@ -2,7 +2,10 @@ import type {
   ActiveProjectPayload,
   Animation,
   Element,
+  FontAsset,
+  GlyphInfo,
   Group,
+  MinecraftSource,
   ModTarget,
   ProjectData,
   ProjectSessionSummary,
@@ -585,6 +588,14 @@ async function mockInvoke(cmd: string, args?: Record<string, unknown>): Promise<
       if (dataUrl === undefined) throw `Asset not found: ${String(args?.name ?? "")}`;
       return dataUrl;
     }
+    case "list_minecraft_sources":
+      return [];
+    case "font_list":
+      return [{ id: "minecraft:default", source: { type: "minecraft" } }];
+    case "font_glyph_map":
+      return {};
+    case "font_import":
+      throw "Mock: font import not supported in browser mode";
     case "project_export_preview":
       return mockExportPreview(args);
     case "project_export": {
@@ -824,6 +835,26 @@ export async function projectExportPreview(
     output_dir: outputDir,
     project_id: projectId,
   }) as Promise<ExportPreview>;
+}
+
+export async function listMinecraftSources(): Promise<MinecraftSource[]> {
+  const invoke = await getInvoke();
+  return invoke("list_minecraft_sources") as Promise<MinecraftSource[]>;
+}
+
+export async function fontImport(filePath: string, projectId?: string): Promise<FontAsset> {
+  const invoke = await getInvoke();
+  return invoke("font_import", { file_path: filePath, project_id: projectId }) as Promise<FontAsset>;
+}
+
+export async function fontList(projectId?: string): Promise<FontAsset[]> {
+  const invoke = await getInvoke();
+  return invoke("font_list", { project_id: projectId }) as Promise<FontAsset[]>;
+}
+
+export async function fontGlyphMap(fontId: string, projectId?: string): Promise<Record<string, GlyphInfo>> {
+  const invoke = await getInvoke();
+  return invoke("font_glyph_map", { font_id: fontId, project_id: projectId }) as Promise<Record<string, GlyphInfo>>;
 }
 
 export async function projectExport(

@@ -1,4 +1,4 @@
-import type { Element, ElementType, Group, Animation, Size, ModTarget, ActiveProjectPayload, ProjectSessionSummary } from "../types";
+import type { Element, ElementType, FontAsset, Group, Animation, Size, ModTarget, ActiveProjectPayload, ProjectSessionSummary } from "../types";
 import * as api from "../api";
 
 let nextId = 1;
@@ -19,6 +19,7 @@ export class ProjectStore {
   groups = $state<Group[]>([]);
   animations = $state<Animation[]>([]);
   assets = $state<string[]>([]);
+  fonts = $state<FontAsset[]>([]);
   revision = $state(0);
   renderVersion = $state(0);
 
@@ -359,6 +360,22 @@ export class ProjectStore {
     } catch { /* ignore errors during sync */ }
   }
 
+  async importFont(filePath: string) {
+    const font = await api.fontImport(filePath, this.activeProjectId ?? undefined);
+    const existing = this.fonts.findIndex(f => f.id === font.id);
+    if (existing >= 0) this.fonts[existing] = font;
+    else this.fonts = [...this.fonts, font];
+    this.isDirty = true;
+    await this.refreshSessions();
+    return font;
+  }
+
+  async refreshFonts() {
+    try {
+      this.fonts = await api.fontList(this.activeProjectId ?? undefined);
+    } catch { /* fonts may not be available */ }
+  }
+
   async hydrateActiveProject() {
     try {
       const payload = await api.projectGetActive();
@@ -379,6 +396,7 @@ export class ProjectStore {
     this.groups = project.groups;
     this.animations = project.animations;
     this.assets = project.assets;
+    this.fonts = project.fonts ?? [];
     this.projectPath = payload.summary.path ?? project.project_path ?? null;
     this.isDirty = payload.summary.is_dirty;
     this.revision = payload.summary.revision;
@@ -407,6 +425,7 @@ export class ProjectStore {
     this.groups = [];
     this.animations = [];
     this.assets = [];
+    this.fonts = [];
     this.projectPath = null;
     this.isDirty = false;
     this.revision = 0;

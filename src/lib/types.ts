@@ -1,3 +1,5 @@
+export type Layer = "background" | "overlay" | "animatable";
+
 export type ElementType = "texture" | "slot" | "progress" | "text" | "fluid_tank" | "energy_bar";
 
 export type FillDirection = "left_to_right" | "right_to_left" | "bottom_to_top" | "top_to_bottom";
@@ -33,6 +35,7 @@ export interface Element {
   animation?: string;
   visible?: boolean;
   uv?: UvRect | null;
+  layer?: Layer;
 }
 
 export interface Group {
@@ -67,6 +70,25 @@ export interface ProjectSummary {
   session: ProjectSessionSummary;
 }
 
+export interface GlyphInfo {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  ascent: number;
+}
+
+export interface FontAsset {
+  id: string;
+  source: { type: "minecraft" | "ttf"; font_size?: number; glyph_map?: Record<string, GlyphInfo> };
+}
+
+export interface MinecraftSource {
+  name: string;
+  path: string;
+  source_type: "prismlauncher" | "gradle_dev" | "vanilla";
+}
+
 export interface ProjectData {
   name: string;
   gui_size: Size;
@@ -77,6 +99,7 @@ export interface ProjectData {
   assets: string[];
   project_path?: string | null;
   is_dirty?: boolean;
+  fonts?: FontAsset[];
 }
 
 export interface ProjectSessionSummary {
