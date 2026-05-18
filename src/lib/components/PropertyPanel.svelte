@@ -4,6 +4,13 @@
 
   let selectedEl = $derived(editor.selectedElementId ? project.elementById(editor.selectedElementId) : null);
   let selectedGroup = $derived(editor.selectedElementId ? project.groupForElement(editor.selectedElementId) : null);
+  let fontOptions = $derived.by(() => {
+    const options = project.fonts.filter((font, index, fonts) => fonts.findIndex(candidate => candidate.id === font.id) === index);
+    if (!options.some(font => font.id === "minecraft:default")) {
+      options.unshift({ id: "minecraft:default", source: { type: "minecraft" } });
+    }
+    return options;
+  });
 
   function updateProp(key: string, value: unknown) {
     if (!editor.selectedElementId) return;
@@ -121,7 +128,7 @@
             onchange={(e) => updateProp("asset", e.currentTarget.value || undefined)}
           >
             <option value="">(none)</option>
-            {#each project.assets as a}
+            {#each project.assets as a (a)}
               <option value={a}>{a.replace("textures/", "").replace(".png", "")}</option>
             {/each}
           </select>
@@ -201,12 +208,9 @@
             value={selectedEl.font ?? "minecraft:default"}
             onchange={(e) => updateProp("font", e.currentTarget.value)}
           >
-            {#each project.fonts as font}
+            {#each fontOptions as font (font.id)}
               <option value={font.id}>{font.id}</option>
             {/each}
-            {#if project.fonts.length === 0}
-              <option value="minecraft:default">minecraft:default</option>
-            {/if}
           </select>
         </div>
         <div class="prop-row">

@@ -76,12 +76,41 @@ export interface GlyphInfo {
   width: number;
   height: number;
   ascent: number;
+  advance?: number;
+  bearing_x?: number;
+  bearing_y?: number;
 }
 
 export interface FontAsset {
   id: string;
   source: { type: "minecraft" | "ttf"; font_size?: number; glyph_map?: Record<string, GlyphInfo> };
 }
+
+export interface MinecraftFontProviderRenderData {
+  file: string;
+  ascent: number;
+  chars: string[];
+  image_width: number;
+  image_height: number;
+  image_data_url: string;
+}
+
+export interface MinecraftFontRenderData {
+  id: string;
+  source_type: "minecraft";
+  providers: MinecraftFontProviderRenderData[];
+  glyph_map: Record<string, GlyphInfo>;
+}
+
+export interface TtfFontRenderData {
+  id: string;
+  source_type: "ttf";
+  font_size: number;
+  atlas_data_url: string;
+  glyph_map: Record<string, GlyphInfo>;
+}
+
+export type FontRenderData = MinecraftFontRenderData | TtfFontRenderData;
 
 export interface MinecraftSource {
   name: string;

@@ -3,6 +3,7 @@ import type {
   Animation,
   Element,
   FontAsset,
+  FontRenderData,
   GlyphInfo,
   Group,
   MinecraftSource,
@@ -594,6 +595,28 @@ async function mockInvoke(cmd: string, args?: Record<string, unknown>): Promise<
       return [{ id: "minecraft:default", source: { type: "minecraft" } }];
     case "font_glyph_map":
       return {};
+    case "font_render_data": {
+      const mockChars = " ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+      const glyphMap = Object.fromEntries(Array.from(mockChars).map(ch => [
+        ch,
+        ch === " "
+          ? { x: 0, y: 0, width: 0, height: 0, ascent: 0, advance: 4 }
+          : { x: 0, y: 0, width: 1, height: 1, ascent: 1, advance: 5, bearing_x: 0, bearing_y: 0 },
+      ]));
+      return {
+        id: String(args?.font_id ?? "minecraft:default"),
+        source_type: "minecraft",
+        providers: [{
+          file: "minecraft:font/ascii.png",
+          ascent: 7,
+          chars: [mockChars],
+          image_width: 1,
+          image_height: 1,
+          image_data_url: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/lP9Y9QAAAABJRU5ErkJggg==",
+        }],
+        glyph_map: glyphMap,
+      };
+    }
     case "font_import":
       throw "Mock: font import not supported in browser mode";
     case "project_export_preview":
@@ -855,6 +878,11 @@ export async function fontList(projectId?: string): Promise<FontAsset[]> {
 export async function fontGlyphMap(fontId: string, projectId?: string): Promise<Record<string, GlyphInfo>> {
   const invoke = await getInvoke();
   return invoke("font_glyph_map", { font_id: fontId, project_id: projectId }) as Promise<Record<string, GlyphInfo>>;
+}
+
+export async function fontRenderData(fontId: string, projectId?: string): Promise<FontRenderData> {
+  const invoke = await getInvoke();
+  return invoke("font_render_data", { font_id: fontId, project_id: projectId }) as Promise<FontRenderData>;
 }
 
 export async function projectExport(

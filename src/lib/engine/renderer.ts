@@ -1,5 +1,5 @@
 import { Application, Container, Graphics, Rectangle, Text, TextStyle, Sprite, Texture } from "pixi.js";
-import type { Element, Layer } from "../types";
+import type { Element, FontRenderData, GlyphInfo, MinecraftFontProviderRenderData, Layer } from "../types";
 import { project, assetDataUrls } from "../stores/project.svelte";
 import { editor } from "../stores/editor.svelte";
 import { preferences } from "../stores/preferences.svelte";
@@ -510,6 +510,9 @@ export class GuiRenderer {
   }
 
   private drawText(el: Element): Container {
+    const glyphText = this.drawGlyphText(el);
+    if (glyphText) return glyphText;
+
     const container = new Container();
     const text = new Text({
       text: el.content ?? "{text}",
@@ -524,6 +527,108 @@ export class GuiRenderer {
     text.y = el.y;
     container.addChild(text);
     return container;
+  }
+
+  private drawGlyphText(el: Element): Container | null {
+    const fontId = el.font ?? "minecraft:default";
+    const renderData = project.fontRenderData.get(fontId);
+    if (!renderData || !renderData.glyph_map) return null;
+
+    const text = el.content ?? "{text}";
+    const glyphs = renderData.glyph_map;
+    const lineAscent = this.textLineAscent(renderData, text);
+    const container = new Container();
+
+    if (el.shadow) {
+      const shadow = this.buildGlyphLine(renderData, glyphs, text, el.x + 1, el.y + 1, 0x000000, 0.5, lineAscent);
+      if (!shadow) return null;
+      container.addChild(shadow);
+    }
+
+    const main = this.buildGlyphLine(renderData, glyphs, text, el.x, el.y, el.color ?? 0x404040, 1, lineAscent);
+    if (!main) return null;
+    container.addChild(main);
+    return container;
+  }
+
+  private buildGlyphLine(
+    renderData: FontRenderData,
+    glyphs: Record<string, GlyphInfo>,
+    text: string,
+    x: number,
+    y: number,
+    tint: number,
+    alpha: number,
+    lineAscent: number,
+  ): Container | null {
+    const container = new Container();
+    let cursorX = x;
+
+    for (const ch of Array.from(text)) {
+      const glyph = glyphs[ch];
+      if (!glyph) return null;
+
+      const advance = glyph.advance ?? glyph.width;
+      if (glyph.width <= 0 || glyph.height <= 0) {
+        cursorX += advance;
+        continue;
+      }
+
+      const texture = this.glyphTexture(renderData, ch, glyph);
+      if (!texture) return null;
+
+      const sprite = new Sprite(texture);
+      sprite.x = cursorX + (glyph.bearing_x ?? 0);
+      sprite.y = y + this.glyphYOffset(renderData, glyph, lineAscent);
+      sprite.tint = tint;
+      sprite.alpha = alpha;
+      container.addChild(sprite);
+      cursorX += advance;
+    }
+
+    return container;
+  }
+
+  private glyphTexture(renderData: FontRenderData, ch: string, glyph: GlyphInfo): Texture | null {
+    const dataUrl = renderData.source_type === "ttf"
+      ? renderData.atlas_data_url
+      : this.providerForGlyph(renderData.providers, ch)?.image_data_url;
+    if (!dataUrl) return null;
+
+    const baseTexture = Texture.from(dataUrl);
+    if (baseTexture.source.width <= 0 || baseTexture.source.height <= 0) return null;
+
+    if (glyph.x >= baseTexture.source.width || glyph.y >= baseTexture.source.height) return null;
+
+    const x = Math.max(0, glyph.x);
+    const y = Math.max(0, glyph.y);
+    const width = Math.max(1, Math.min(glyph.width, baseTexture.source.width - x));
+    const height = Math.max(1, Math.min(glyph.height, baseTexture.source.height - y));
+
+    return new Texture({
+      source: baseTexture.source,
+      frame: new Rectangle(x, y, width, height),
+    });
+  }
+
+  private providerForGlyph(providers: MinecraftFontProviderRenderData[], ch: string): MinecraftFontProviderRenderData | undefined {
+    return providers.find(provider => provider.chars.some(row => Array.from(row).includes(ch)));
+  }
+
+  private textLineAscent(renderData: FontRenderData, text: string): number {
+    if (renderData.source_type === "minecraft") return 0;
+
+    let ascent = renderData.font_size;
+    for (const ch of Array.from(text)) {
+      const glyph = renderData.glyph_map[ch];
+      if (glyph) ascent = Math.max(ascent, glyph.ascent);
+    }
+    return ascent;
+  }
+
+  private glyphYOffset(renderData: FontRenderData, glyph: GlyphInfo, lineAscent: number): number {
+    if (renderData.source_type === "minecraft") return glyph.bearing_y ?? 0;
+    return lineAscent + (glyph.bearing_y ?? -glyph.ascent);
   }
 
   private drawFluidTank(el: Element): Container {

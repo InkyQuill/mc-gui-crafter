@@ -1,5 +1,6 @@
-import type { Element, ElementType, FontAsset, Group, Animation, Size, ModTarget, ActiveProjectPayload, ProjectSessionSummary } from "../types";
+import type { Element, ElementType, FontAsset, FontRenderData, Group, Animation, Size, ModTarget, ActiveProjectPayload, ProjectSessionSummary } from "../types";
 import * as api from "../api";
+import { SvelteMap } from "svelte/reactivity";
 
 let nextId = 1;
 function uid(): string {
@@ -20,6 +21,7 @@ export class ProjectStore {
   animations = $state<Animation[]>([]);
   assets = $state<string[]>([]);
   fonts = $state<FontAsset[]>([]);
+  fontRenderData = new SvelteMap<string, FontRenderData>();
   revision = $state(0);
   renderVersion = $state(0);
 
@@ -363,16 +365,20 @@ export class ProjectStore {
   async importFont(filePath: string) {
     const font = await api.fontImport(filePath, this.activeProjectId ?? undefined);
     const existing = this.fonts.findIndex(f => f.id === font.id);
-    if (existing >= 0) this.fonts[existing] = font;
+    if (existing >= 0) this.fonts = this.fonts.map(existingFont => existingFont.id === font.id ? font : existingFont);
     else this.fonts = [...this.fonts, font];
+    await this.loadFontRenderData(font.id);
     this.isDirty = true;
     await this.refreshSessions();
+    this.bumpRenderVersion();
     return font;
   }
 
   async refreshFonts() {
     try {
-      this.fonts = await api.fontList(this.activeProjectId ?? undefined);
+      const fonts = await api.fontList(this.activeProjectId ?? undefined);
+      this.fonts = fonts;
+      await this.syncFontRenderData(fonts.map(font => font.id));
     } catch { /* fonts may not be available */ }
   }
 
@@ -381,6 +387,7 @@ export class ProjectStore {
       const payload = await api.projectGetActive();
       this.applyActivePayload(payload);
       await this.loadActiveAssets();
+      await this.refreshFonts();
     } catch {
       this.clearActiveProject();
     }
@@ -397,6 +404,7 @@ export class ProjectStore {
     this.animations = project.animations;
     this.assets = project.assets;
     this.fonts = project.fonts ?? [];
+    this.fontRenderData.clear();
     this.projectPath = payload.summary.path ?? project.project_path ?? null;
     this.isDirty = payload.summary.is_dirty;
     this.revision = payload.summary.revision;
@@ -416,6 +424,29 @@ export class ProjectStore {
     } catch { /* assets may not be available */ }
   }
 
+  private async syncFontRenderData(fontIds: string[]) {
+    const next = new SvelteMap<string, FontRenderData>();
+    await Promise.all(fontIds.map(async fontId => {
+      try {
+        next.set(fontId, await api.fontRenderData(fontId, this.activeProjectId ?? undefined));
+      } catch {
+        // Keep font list usable even if a single render payload is unavailable.
+      }
+    }));
+    this.fontRenderData.clear();
+    for (const [fontId, renderData] of next) {
+      this.fontRenderData.set(fontId, renderData);
+    }
+    this.bumpRenderVersion();
+  }
+
+  private async loadFontRenderData(fontId: string) {
+    try {
+      const renderData = await api.fontRenderData(fontId, this.activeProjectId ?? undefined);
+      this.fontRenderData.set(fontId, renderData);
+    } catch { /* font render data may not be available */ }
+  }
+
   private clearActiveProject() {
     this.activeProjectId = null;
     this.name = "Untitled GUI";
@@ -426,6 +457,7 @@ export class ProjectStore {
     this.animations = [];
     this.assets = [];
     this.fonts = [];
+    this.fontRenderData.clear();
     this.projectPath = null;
     this.isDirty = false;
     this.revision = 0;
