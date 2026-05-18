@@ -8,7 +8,7 @@ function uid(): string {
 }
 
 // Global map of asset name -> data URL for rendering
-export const assetDataUrls = new Map<string, string>();
+export const assetDataUrls = new SvelteMap<string, string>();
 
 export class ProjectStore {
   sessions = $state<ProjectSessionSummary[]>([]);
@@ -22,6 +22,7 @@ export class ProjectStore {
   assets = $state<string[]>([]);
   fonts = $state<FontAsset[]>([]);
   fontRenderData = new SvelteMap<string, FontRenderData>();
+  fontRenderDataVersion = $state(0);
   revision = $state(0);
   renderVersion = $state(0);
 
@@ -205,7 +206,8 @@ export class ProjectStore {
   }
 
   async createGroup(elementIds: Iterable<string>) {
-    const ids = [...new Set([...elementIds])].filter(id => this.elementById(id));
+    const elementIdList = [...elementIds];
+    const ids = elementIdList.filter((id, index) => elementIdList.indexOf(id) === index && this.elementById(id));
     if (ids.length < 2) return null;
 
     const group = await api.groupCreate(ids, undefined, this.activeProjectId ?? undefined);
@@ -224,10 +226,10 @@ export class ProjectStore {
   }
 
   async ungroupElements(elementIds: Iterable<string>) {
-    const groupIds = new Set<string>();
+    const groupIds: string[] = [];
     for (const id of elementIds) {
       const group = this.groupForElement(id);
-      if (group) groupIds.add(group.id);
+      if (group && !groupIds.includes(group.id)) groupIds.push(group.id);
     }
     for (const groupId of groupIds) {
       await this.ungroup(groupId);
@@ -347,6 +349,7 @@ export class ProjectStore {
 
   // -- Auto-save --
   private autoSaveTimer: ReturnType<typeof setInterval> | null = null;
+  private fontRenderDataRequest = 0;
 
   async syncFromBackend() {
     await this.refreshSessions();
@@ -363,11 +366,17 @@ export class ProjectStore {
   }
 
   async importFont(filePath: string) {
-    const font = await api.fontImport(filePath, this.activeProjectId ?? undefined);
+    const projectId = this.activeProjectId;
+    const requestId = this.nextFontRenderDataRequest();
+    const font = await api.fontImport(filePath, projectId ?? undefined);
+    if (!this.isCurrentFontRenderDataRequest(projectId, requestId)) return font;
+
     const existing = this.fonts.findIndex(f => f.id === font.id);
     if (existing >= 0) this.fonts = this.fonts.map(existingFont => existingFont.id === font.id ? font : existingFont);
     else this.fonts = [...this.fonts, font];
-    await this.loadFontRenderData(font.id);
+    await this.loadFontRenderData(font.id, projectId, requestId);
+    if (!this.isCurrentFontRenderDataRequest(projectId, requestId)) return font;
+
     this.isDirty = true;
     await this.refreshSessions();
     this.bumpRenderVersion();
@@ -375,10 +384,14 @@ export class ProjectStore {
   }
 
   async refreshFonts() {
+    const projectId = this.activeProjectId;
+    const requestId = this.nextFontRenderDataRequest();
     try {
-      const fonts = await api.fontList(this.activeProjectId ?? undefined);
+      const fonts = await api.fontList(projectId ?? undefined);
+      if (!this.isCurrentFontRenderDataRequest(projectId, requestId)) return;
+
       this.fonts = fonts;
-      await this.syncFontRenderData(fonts.map(font => font.id));
+      await this.syncFontRenderData(fonts.map(font => font.id), projectId, requestId);
     } catch { /* fonts may not be available */ }
   }
 
@@ -404,7 +417,7 @@ export class ProjectStore {
     this.animations = project.animations;
     this.assets = project.assets;
     this.fonts = project.fonts ?? [];
-    this.fontRenderData.clear();
+    this.invalidateFontRenderData();
     this.projectPath = payload.summary.path ?? project.project_path ?? null;
     this.isDirty = payload.summary.is_dirty;
     this.revision = payload.summary.revision;
@@ -424,27 +437,55 @@ export class ProjectStore {
     } catch { /* assets may not be available */ }
   }
 
-  private async syncFontRenderData(fontIds: string[]) {
-    const next = new SvelteMap<string, FontRenderData>();
+  private async syncFontRenderData(fontIds: string[], projectId: string | null, requestId: number) {
+    const next: [string, FontRenderData][] = [];
     await Promise.all(fontIds.map(async fontId => {
       try {
-        next.set(fontId, await api.fontRenderData(fontId, this.activeProjectId ?? undefined));
+        const renderData = await api.fontRenderData(fontId, projectId ?? undefined);
+        if (this.isCurrentFontRenderDataRequest(projectId, requestId)) {
+          next.push([fontId, renderData]);
+        }
       } catch {
         // Keep font list usable even if a single render payload is unavailable.
       }
     }));
+    if (!this.isCurrentFontRenderDataRequest(projectId, requestId)) return;
+
     this.fontRenderData.clear();
     for (const [fontId, renderData] of next) {
       this.fontRenderData.set(fontId, renderData);
     }
+    this.bumpFontRenderDataVersion();
     this.bumpRenderVersion();
   }
 
-  private async loadFontRenderData(fontId: string) {
+  private async loadFontRenderData(fontId: string, projectId: string | null, requestId: number) {
     try {
-      const renderData = await api.fontRenderData(fontId, this.activeProjectId ?? undefined);
+      const renderData = await api.fontRenderData(fontId, projectId ?? undefined);
+      if (!this.isCurrentFontRenderDataRequest(projectId, requestId)) return;
+
       this.fontRenderData.set(fontId, renderData);
+      this.bumpFontRenderDataVersion();
     } catch { /* font render data may not be available */ }
+  }
+
+  private nextFontRenderDataRequest(): number {
+    this.fontRenderDataRequest += 1;
+    return this.fontRenderDataRequest;
+  }
+
+  private isCurrentFontRenderDataRequest(projectId: string | null, requestId: number): boolean {
+    return this.fontRenderDataRequest === requestId && this.activeProjectId === projectId && this.isOpen;
+  }
+
+  private invalidateFontRenderData() {
+    this.nextFontRenderDataRequest();
+    this.fontRenderData.clear();
+    this.bumpFontRenderDataVersion();
+  }
+
+  private bumpFontRenderDataVersion() {
+    this.fontRenderDataVersion += 1;
   }
 
   private clearActiveProject() {
@@ -457,7 +498,7 @@ export class ProjectStore {
     this.animations = [];
     this.assets = [];
     this.fonts = [];
-    this.fontRenderData.clear();
+    this.invalidateFontRenderData();
     this.projectPath = null;
     this.isDirty = false;
     this.revision = 0;

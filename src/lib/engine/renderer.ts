@@ -24,6 +24,8 @@ export class GuiRenderer {
   private resizeObserver: ResizeObserver | null = null;
   private cleanupFns: (() => void)[] = [];
   private dragStartPositions = new Map<string, { x: number; y: number }>();
+  private glyphTextureCache = new Map<string, Texture>();
+  private glyphTextureCacheVersion = -1;
 
   constructor(containerEl: HTMLElement) {
     this.containerEl = containerEl;
@@ -318,6 +320,7 @@ export class GuiRenderer {
   }
 
   render() {
+    this.syncGlyphTextureCache();
     this.drawGrid();
     this.drawElements();
     this.drawSelection();
@@ -590,10 +593,22 @@ export class GuiRenderer {
   }
 
   private glyphTexture(renderData: FontRenderData, ch: string, glyph: GlyphInfo): Texture | null {
-    const dataUrl = renderData.source_type === "ttf"
-      ? renderData.atlas_data_url
-      : this.providerForGlyph(renderData.providers, ch)?.image_data_url;
+    const source = this.glyphSource(renderData, ch);
+    const dataUrl = source?.dataUrl;
     if (!dataUrl) return null;
+
+    const cacheKey = [
+      renderData.id,
+      renderData.source_type,
+      source.identity,
+      ch,
+      glyph.x,
+      glyph.y,
+      glyph.width,
+      glyph.height,
+    ].join("|");
+    const cached = this.glyphTextureCache.get(cacheKey);
+    if (cached) return cached;
 
     const baseTexture = Texture.from(dataUrl);
     if (baseTexture.source.width <= 0 || baseTexture.source.height <= 0) return null;
@@ -605,14 +620,35 @@ export class GuiRenderer {
     const width = Math.max(1, Math.min(glyph.width, baseTexture.source.width - x));
     const height = Math.max(1, Math.min(glyph.height, baseTexture.source.height - y));
 
-    return new Texture({
+    const texture = new Texture({
       source: baseTexture.source,
       frame: new Rectangle(x, y, width, height),
     });
+    this.glyphTextureCache.set(cacheKey, texture);
+    return texture;
   }
 
   private providerForGlyph(providers: MinecraftFontProviderRenderData[], ch: string): MinecraftFontProviderRenderData | undefined {
     return providers.find(provider => provider.chars.some(row => Array.from(row).includes(ch)));
+  }
+
+  private glyphSource(renderData: FontRenderData, ch: string): { dataUrl: string; identity: string } | null {
+    if (renderData.source_type === "ttf") {
+      return { dataUrl: renderData.atlas_data_url, identity: renderData.atlas_data_url };
+    }
+
+    const provider = this.providerForGlyph(renderData.providers, ch);
+    if (!provider) return null;
+    return {
+      dataUrl: provider.image_data_url,
+      identity: `${provider.file}:${provider.image_width}x${provider.image_height}:${provider.image_data_url}`,
+    };
+  }
+
+  private syncGlyphTextureCache() {
+    if (this.glyphTextureCacheVersion === project.fontRenderDataVersion) return;
+    this.glyphTextureCache.clear();
+    this.glyphTextureCacheVersion = project.fontRenderDataVersion;
   }
 
   private textLineAscent(renderData: FontRenderData, text: string): number {
