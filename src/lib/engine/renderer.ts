@@ -571,7 +571,7 @@ export class GuiRenderer {
       const glyph = glyphs[ch];
       if (!glyph) return null;
 
-      const advance = glyph.advance ?? glyph.width;
+      const advance = this.glyphAdvance(glyph);
       if (glyph.width <= 0 || glyph.height <= 0) {
         cursorX += advance;
         continue;
@@ -590,6 +590,13 @@ export class GuiRenderer {
     }
 
     return container;
+  }
+
+  private glyphAdvance(glyph: GlyphInfo): number {
+    if (glyph.width <= 0 || glyph.height <= 0) {
+      return glyph.advance && glyph.advance > 0 ? glyph.advance : 4;
+    }
+    return glyph.advance && glyph.advance > 0 ? glyph.advance : Math.max(glyph.width, 1);
   }
 
   private glyphTexture(renderData: FontRenderData, ch: string, glyph: GlyphInfo): Texture | null {
