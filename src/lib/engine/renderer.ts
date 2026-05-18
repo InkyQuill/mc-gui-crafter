@@ -1,10 +1,16 @@
 import { Application, Container, Graphics, Rectangle, Text, TextStyle, Sprite, Texture } from "pixi.js";
-import type { Element } from "../types";
+import type { Element, Layer } from "../types";
 import { project, assetDataUrls } from "../stores/project.svelte";
 import { editor } from "../stores/editor.svelte";
 import { preferences } from "../stores/preferences.svelte";
 
 const SELECTED_TINT = 0xffff00;
+
+const LAYER_ORDER: Record<Layer, number> = {
+  background: 0,
+  overlay: 1,
+  animatable: 2,
+};
 
 export class GuiRenderer {
   app: Application;
@@ -213,8 +219,13 @@ export class GuiRenderer {
         }
       }
 
-      // Find clicked element (reverse order = top-most first)
-      const clicked = [...project.elements].reverse().find(el => this.hitTest(el, gui.x, gui.y));
+      // Find clicked element — test in reverse layer order (top-most first: Animatable → Overlay → Background)
+      const sortedForHit = [...project.elements].sort((a, b) => {
+        const aLayer = LAYER_ORDER[a.layer ?? "background"] ?? 0;
+        const bLayer = LAYER_ORDER[b.layer ?? "background"] ?? 0;
+        return bLayer - aLayer; // reverse: Animatable first
+      });
+      const clicked = sortedForHit.find(el => this.hitTest(el, gui.x, gui.y));
 
       if (clicked && editor.tool === "select") {
         const keepMultiSelection = !shiftHeld && editor.selectedIds.size > 1 && editor.selectedIds.has(clicked.id);
@@ -363,7 +374,14 @@ export class GuiRenderer {
   private drawElements() {
     this.elementsContainer.removeChildren();
 
-    for (const el of project.elements) {
+    // Sort by layer priority: Background first, then Overlay, then Animatable
+    const sorted = [...project.elements].sort((a, b) => {
+      const aLayer = LAYER_ORDER[a.layer ?? "background"] ?? 0;
+      const bLayer = LAYER_ORDER[b.layer ?? "background"] ?? 0;
+      return aLayer - bLayer;
+    });
+
+    for (const el of sorted) {
       const g = this.drawElement(el);
       if (g) this.elementsContainer.addChild(g);
     }
