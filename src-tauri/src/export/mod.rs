@@ -1609,6 +1609,37 @@ mod tests {
         }
     }
 
+    fn layered_project(target: ModTarget) -> Project {
+        let mut project = sample_project(target);
+        project.elements.push(Element {
+            id: "title".to_string(),
+            element_type: ElementType::Text,
+            x: 8,
+            y: 6,
+            width: None,
+            height: None,
+            size: None,
+            asset: None,
+            direction: None,
+            content: Some("Layered".to_string()),
+            font: Some("minecraft:default".to_string()),
+            color: Some(0x404040),
+            shadow: Some(true),
+            animation: None,
+            visible: true,
+            uv: None,
+            layer: Layer::Overlay,
+        });
+        if let Some(progress) = project
+            .elements
+            .iter_mut()
+            .find(|e| e.id == "progress_arrow")
+        {
+            progress.layer = Layer::Animatable;
+        }
+        project
+    }
+
     fn png_bytes(color: [u8; 4]) -> Vec<u8> {
         let img = RgbaImage::from_pixel(2, 2, Rgba(color));
         let mut bytes = Vec::new();
@@ -1677,6 +1708,64 @@ mod tests {
         assert!(layout_json.contains("\"textures/widgets/panel.png\""));
 
         let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn fabric_layered_export_defines_overlay_method_and_loads_overlay_texture() {
+        let output_dir = temp_export_dir("fabric-layered");
+        let config = ExportConfig {
+            mod_id: "testmod".to_string(),
+            package: "com.example".to_string(),
+            class_name: "LayeredGui".to_string(),
+            output_dir: output_dir.to_string_lossy().to_string(),
+        };
+
+        let files = export_project(&layered_project(ModTarget::Fabric), &config, "fabric").unwrap();
+        let layout_path = output_dir.join("src/main/java/com/example/GuiLayout.java");
+        let screen_path = output_dir.join("src/main/java/com/example/LayeredGuiScreen.java");
+        let layout = read(&layout_path);
+        let screen = read(&screen_path);
+
+        assert!(files
+            .iter()
+            .any(|path| path.ends_with("layered_gui_overlay.png")));
+        assert!(layout.contains("private final Identifier overlay;"));
+        assert!(
+            layout.contains("public void renderOverlay(DrawContext context, int left, int top)")
+        );
+        assert!(layout.contains("data.textures.overlay"));
+        assert!(screen.contains("layout.renderOverlay(context, x, y);"));
+
+        let _ = fs::remove_dir_all(output_dir);
+    }
+
+    #[test]
+    fn animatable_layer_export_uses_generated_sprite_textures_in_runtime() {
+        let output_dir = temp_export_dir("animatable-runtime");
+        let config = ExportConfig {
+            mod_id: "testmod".to_string(),
+            package: "com.example".to_string(),
+            class_name: "LayeredGui".to_string(),
+            output_dir: output_dir.to_string_lossy().to_string(),
+        };
+
+        let preview = preview_export(&layered_project(ModTarget::Forge), &config, "forge").unwrap();
+        assert!(preview
+            .files
+            .iter()
+            .any(|path| path.ends_with("textures/gui/progress_arrow.png")));
+
+        export_project(&layered_project(ModTarget::Forge), &config, "forge").unwrap();
+        let layout = read(&output_dir.join("src/main/java/com/example/GuiLayout.java"));
+
+        assert!(layout
+            .contains("ResourceLocation spriteTexture = resource(namespace, element.texture);"));
+        assert!(layout.contains("graphics.blit(spriteTexture"));
+        assert!(!layout.contains(
+            "graphics.fill(x, y, x + Math.round(width * ratio), y + height, 0xFFE9A23B);"
+        ));
+
+        let _ = fs::remove_dir_all(output_dir);
     }
 
     #[test]
