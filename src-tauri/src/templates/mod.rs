@@ -2156,6 +2156,7 @@ pub fn apply_template(project: &mut Project, template_name: &str) -> Result<(), 
 mod tests {
     use super::*;
     use crate::project::{ElementType, ModTarget, Project, SemanticGroupKind, SlotRole};
+    use std::collections::HashSet;
 
     fn slot_right(element: &crate::project::Element) -> i32 {
         element.x + element.size.unwrap_or(18) as i32
@@ -2189,6 +2190,20 @@ mod tests {
         };
 
         left_x1 < right_x2 && right_x1 < left_x2 && left_y1 < right_y2 && right_y1 < left_y2
+    }
+
+    fn assert_unique_ids<'a>(
+        ids: impl Iterator<Item = &'a str>,
+        template_name: &str,
+        collection_name: &str,
+    ) {
+        let mut seen = HashSet::new();
+        for id in ids {
+            assert!(
+                seen.insert(id),
+                "{template_name} contains duplicate {collection_name} id {id}"
+            );
+        }
     }
 
     #[test]
@@ -2376,6 +2391,80 @@ mod tests {
             assert_eq!(hotbar_project_group.x, 8);
             assert_eq!(hotbar_project_group.y, 142);
             assert_eq!(hotbar_project_group.elements.len(), 9);
+        }
+    }
+
+    #[test]
+    fn appending_player_inventory_to_machine_templates_is_idempotent() {
+        for mut template in [advanced_machine(), scrollable_inventory_machine()] {
+            append_player_inventory(&mut template);
+            let expected_element_count = template.elements.len();
+            let expected_group_count = template.groups.len();
+            let expected_semantic_group_count = template.semantic_groups.len();
+
+            append_player_inventory(&mut template);
+
+            assert_eq!(
+                template.elements.len(),
+                expected_element_count,
+                "{} should not gain duplicate elements",
+                template.name
+            );
+            assert_eq!(
+                template.groups.len(),
+                expected_group_count,
+                "{} should not gain duplicate groups",
+                template.name
+            );
+            assert_eq!(
+                template.semantic_groups.len(),
+                expected_semantic_group_count,
+                "{} should not gain duplicate semantic groups",
+                template.name
+            );
+            assert_unique_ids(
+                template.elements.iter().map(|element| element.id.as_str()),
+                template.name,
+                "element",
+            );
+            assert_unique_ids(
+                template.groups.iter().map(|group| group.id.as_str()),
+                template.name,
+                "group",
+            );
+            assert_unique_ids(
+                template
+                    .semantic_groups
+                    .iter()
+                    .map(|group| group.id.as_str()),
+                template.name,
+                "semantic group",
+            );
+
+            let player_inventory_slots = template
+                .elements
+                .iter()
+                .filter(|element| {
+                    element.element_type == ElementType::Slot
+                        && element.slot_role == Some(SlotRole::PlayerInventory)
+                        && element.inventory_group.as_deref() == Some(PLAYER_INVENTORY_ID)
+                })
+                .count();
+            let hotbar_slots = template
+                .elements
+                .iter()
+                .filter(|element| {
+                    element.element_type == ElementType::Slot
+                        && element.slot_role == Some(SlotRole::Hotbar)
+                        && element.inventory_group.as_deref() == Some(HOTBAR_ID)
+                })
+                .count();
+            assert_eq!(
+                player_inventory_slots, 27,
+                "{} player inventory slots",
+                template.name
+            );
+            assert_eq!(hotbar_slots, 9, "{} hotbar slots", template.name);
         }
     }
 
