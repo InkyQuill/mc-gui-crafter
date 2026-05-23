@@ -23,26 +23,7 @@ pub fn composite_atlas_for_layer(project: &Project, layer: Layer) -> Result<Vec<
             continue;
         }
 
-        match el.element_type {
-            ElementType::Texture => {
-                if let Some(asset_name) = &el.asset {
-                    overlay_asset(&mut img, project, el, asset_name)?;
-                }
-            }
-            ElementType::Slot | ElementType::VirtualSlotCell => {
-                overlay_slot(&mut img, project, el)?;
-            }
-            ElementType::Button | ElementType::ToggleButton => {
-                overlay_button(&mut img, project, el)?;
-            }
-            ElementType::Scrollbar => {
-                let w = el.width.or(el.size).unwrap_or(12);
-                let h = el.height.or(el.size).unwrap_or(54);
-                let data = generated_scrollbar(w, h)?;
-                overlay_texture_data(&mut img, el, &data, "generated scrollbar")?;
-            }
-            _ => {}
-        }
+        overlay_baked_element(&mut img, project, el)?;
     }
 
     let mut buf = Vec::new();
@@ -54,24 +35,25 @@ pub fn composite_atlas_for_layer(project: &Project, layer: Layer) -> Result<Vec<
 
 pub fn composite_project_preview(project: &Project) -> Result<Vec<u8>, String> {
     let mut preview = RgbaImage::new(project.gui_size.width, project.gui_size.height);
-    let mut visible_project = project.clone();
-    visible_project.elements.retain(|element| element.visible);
 
     for layer in [Layer::Background, Layer::Overlay, Layer::Animatable] {
-        let atlas = composite_atlas_for_layer(&visible_project, layer.clone())?;
-        overlay_png(&mut preview, &atlas, 0, 0, "layer atlas")?;
-
-        for element in project.elements.iter().filter(|element| {
-            element.visible && element.layer == layer && !is_baked_atlas_element(element)
-        }) {
-            let element_png = composite_single_element(element, project)?;
-            overlay_png(
-                &mut preview,
-                &element_png,
-                element.x as i64,
-                element.y as i64,
-                &element.id,
-            )?;
+        for element in project
+            .elements
+            .iter()
+            .filter(|element| element.visible && element.layer == layer)
+        {
+            if is_baked_atlas_element(element) {
+                overlay_baked_element(&mut preview, project, element)?;
+            } else {
+                let element_png = composite_single_element(element, project)?;
+                overlay_png(
+                    &mut preview,
+                    &element_png,
+                    element.x as i64,
+                    element.y as i64,
+                    &element.id,
+                )?;
+            }
         }
     }
 
@@ -88,6 +70,35 @@ fn is_baked_atlas_element(element: &Element) -> bool {
             | ElementType::ToggleButton
             | ElementType::Scrollbar
     )
+}
+
+fn overlay_baked_element(
+    img: &mut RgbaImage,
+    project: &Project,
+    element: &Element,
+) -> Result<(), String> {
+    match element.element_type {
+        ElementType::Texture => {
+            if let Some(asset_name) = &element.asset {
+                overlay_asset(img, project, element, asset_name)?;
+            }
+        }
+        ElementType::Slot | ElementType::VirtualSlotCell => {
+            overlay_slot(img, project, element)?;
+        }
+        ElementType::Button | ElementType::ToggleButton => {
+            overlay_button(img, project, element)?;
+        }
+        ElementType::Scrollbar => {
+            let w = element.width.or(element.size).unwrap_or(12);
+            let h = element.height.or(element.size).unwrap_or(54);
+            let data = generated_scrollbar(w, h)?;
+            overlay_texture_data(img, element, &data, "generated scrollbar")?;
+        }
+        _ => {}
+    }
+
+    Ok(())
 }
 
 fn overlay_slot(img: &mut RgbaImage, project: &Project, element: &Element) -> Result<(), String> {
@@ -916,5 +927,32 @@ mod tests {
         assert_eq!(image.get_pixel(0, 0).0, [0x11, 0x22, 0x33, 0xff]);
         assert_eq!(image.get_pixel(1, 1).0, [0x44, 0xaa, 0x66, 0xff]);
         assert_eq!(image.get_pixel(2, 2).0, [0xe9, 0xa2, 0x3b, 0xff]);
+    }
+
+    #[test]
+    fn project_preview_preserves_element_order_when_baked_follows_non_baked() {
+        let mut project = Project::new("Preview Order", 2, 2, ModTarget::Forge);
+        project.texture_data.insert(
+            "textures/later.png".into(),
+            test_png(1, 1, Rgba([0x10, 0x80, 0xf0, 0xff])),
+        );
+
+        let mut progress = button_element("progress", 0, 0);
+        progress.element_type = ElementType::Progress;
+        progress.width = Some(1);
+        progress.height = Some(1);
+        project.elements.push(progress);
+
+        let mut later_texture = button_element("later_texture", 0, 0);
+        later_texture.element_type = ElementType::Texture;
+        later_texture.width = Some(1);
+        later_texture.height = Some(1);
+        later_texture.asset = Some("textures/later.png".into());
+        project.elements.push(later_texture);
+
+        let png = composite_project_preview(&project).unwrap();
+        let image = image::load_from_memory(&png).unwrap().to_rgba8();
+
+        assert_eq!(image.get_pixel(0, 0).0, [0x10, 0x80, 0xf0, 0xff]);
     }
 }
