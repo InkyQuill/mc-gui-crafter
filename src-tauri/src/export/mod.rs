@@ -1,5 +1,8 @@
 use crate::animation::Animation;
-use crate::project::{CodegenMode, ElementType, Layer, Project, ProjectExportSettings};
+use crate::project::{
+    CodegenMode, ElementType, Layer, Project, ProjectExportSettings, SemanticGroup,
+    SemanticGroupKind, SlotRole,
+};
 use std::borrow::Cow;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -37,6 +40,7 @@ struct SanitizedExport {
     package: String,
     package_path: String,
     class_name: String,
+    screen_class_name: String,
     resource_name: String,
     output_dir: PathBuf,
 }
@@ -86,6 +90,7 @@ impl SanitizedExport {
     fn new(config: &ExportConfig) -> Result<Self, String> {
         let mod_id = sanitize_mod_id(&config.mod_id);
         let class_name = sanitize_class_name(&config.class_name);
+        let screen_class_name = screen_class_name(&class_name);
         let package = sanitize_package(&config.package, &mod_id);
         let package_path = package.replace('.', "/");
         let resource_name = sanitize_resource_name(&config.class_name);
@@ -100,6 +105,7 @@ impl SanitizedExport {
             package,
             package_path,
             class_name,
+            screen_class_name,
             resource_name,
             output_dir,
         })
@@ -266,7 +272,7 @@ fn plan_export(
 
     let screen_path = export
         .java_dir()
-        .join(format!("{}Screen.java", export.class_name));
+        .join(format!("{}.java", export.screen_class_name));
     let screen_code = match target {
         ExportTarget::Forge => generate_forge_screen(&export, project),
         ExportTarget::Fabric => generate_fabric_screen(&export, project),
@@ -422,7 +428,111 @@ fn semantic_warnings(project: &Project, settings: &ProjectExportSettings) -> Vec
         }
     }
 
+    warnings.extend(semantic_integrity_warnings(project));
     warnings
+}
+
+fn semantic_integrity_warnings(project: &Project) -> Vec<String> {
+    let mut warnings = Vec::new();
+
+    for group in &project.semantic_groups {
+        if let Some(slot_count) = slot_count_requirement(group) {
+            let matching = count_matching_group_elements(project, group);
+            if matching < slot_count {
+                warnings.push(format!(
+                    "Semantic group '{}' declares {} slots but only {} matching elements were found.",
+                    group.id, slot_count, matching
+                ));
+            }
+        }
+
+        if scroll_binding_expected(group) && group.scroll_binding.is_none() {
+            warnings.push(format!(
+                "Semantic group '{}' is scrollable or dynamic but has no scroll binding.",
+                group.id
+            ));
+        }
+
+        if let Some(binding) = group.scroll_binding.as_deref() {
+            if !has_matching_scrollbar(project, group, binding) {
+                warnings.push(format!(
+                    "Semantic group '{}' declares scroll binding '{}' but no matching scrollbar element was found.",
+                    group.id, binding
+                ));
+            }
+        }
+    }
+
+    warnings
+}
+
+fn slot_count_requirement(group: &SemanticGroup) -> Option<u32> {
+    if matches!(
+        group.kind,
+        SemanticGroupKind::FixedSlots
+            | SemanticGroupKind::PlayerInventory
+            | SemanticGroupKind::Hotbar
+            | SemanticGroupKind::UpgradeSlots
+    ) {
+        group.slot_count
+    } else {
+        None
+    }
+}
+
+fn count_matching_group_elements(project: &Project, group: &SemanticGroup) -> u32 {
+    project
+        .elements
+        .iter()
+        .filter(|element| element.element_type == ElementType::Slot)
+        .filter(|element| element.inventory_group.as_deref() == Some(group.id.as_str()))
+        .filter(|element| slot_role_matches_group(element.slot_role.as_ref(), &group.kind))
+        .count() as u32
+}
+
+fn slot_role_matches_group(slot_role: Option<&SlotRole>, kind: &SemanticGroupKind) -> bool {
+    match kind {
+        SemanticGroupKind::FixedSlots => true,
+        SemanticGroupKind::PlayerInventory => matches!(slot_role, Some(SlotRole::PlayerInventory)),
+        SemanticGroupKind::Hotbar => matches!(slot_role, Some(SlotRole::Hotbar)),
+        SemanticGroupKind::UpgradeSlots => matches!(
+            slot_role,
+            Some(SlotRole::Upgrade | SlotRole::UpgradeSettings)
+        ),
+        _ => false,
+    }
+}
+
+fn scroll_binding_expected(group: &SemanticGroup) -> bool {
+    group.kind == SemanticGroupKind::VirtualSlotGrid
+        && (group.dynamic_height
+            || group
+                .total_rows
+                .zip(group.visible_rows)
+                .is_some_and(|(total, visible)| total > visible))
+}
+
+fn has_matching_scrollbar(project: &Project, group: &SemanticGroup, binding: &str) -> bool {
+    project.elements.iter().any(|element| {
+        element.element_type == ElementType::Scrollbar
+            && element_binds_scrollbar(element, group, binding)
+    })
+}
+
+fn element_binds_scrollbar(
+    element: &crate::project::Element,
+    group: &SemanticGroup,
+    binding: &str,
+) -> bool {
+    let binding_matches = element.id == binding
+        || element.scroll_binding.as_deref() == Some(binding)
+        || element.binding.as_deref() == Some(binding);
+    let group_matches = element
+        .target_group
+        .as_deref()
+        .is_none_or(|target_group| target_group == group.id);
+
+    binding_matches && group_matches
 }
 
 fn referenced_texture_assets(project: &Project) -> Vec<Cow<'_, str>> {
@@ -510,6 +620,14 @@ fn sanitize_class_name(value: &str) -> String {
         out.push_str("Gui");
     }
     out
+}
+
+fn screen_class_name(class_name: &str) -> String {
+    if class_name.ends_with("Screen") {
+        class_name.to_string()
+    } else {
+        format!("{class_name}Screen")
+    }
 }
 
 fn sanitize_package(value: &str, mod_id: &str) -> String {
@@ -1272,10 +1390,10 @@ import net.minecraft.network.chat.Component;
 import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.inventory.AbstractContainerMenu;
 
-public class {class_name}Screen extends AbstractContainerScreen<AbstractContainerMenu> {{
+public class {screen_class_name} extends AbstractContainerScreen<AbstractContainerMenu> {{
     private GuiLayout layout;
 
-    public {class_name}Screen(AbstractContainerMenu menu, Inventory inventory, Component title) {{
+    public {screen_class_name}(AbstractContainerMenu menu, Inventory inventory, Component title) {{
         super(menu, inventory, title);
         this.imageWidth = {width};
         this.imageHeight = {height};
@@ -1304,7 +1422,7 @@ public class {class_name}Screen extends AbstractContainerScreen<AbstractContaine
 }}
 "#,
         package = export.package,
-        class_name = export.class_name,
+        screen_class_name = export.screen_class_name,
         width = project.gui_size.width,
         height = project.gui_size.height,
         mod_id = export.mod_id,
@@ -1324,10 +1442,10 @@ import net.minecraft.network.chat.Component;
 import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.inventory.AbstractContainerMenu;
 
-public class {class_name}Screen extends AbstractContainerScreen<AbstractContainerMenu> {{
+public class {screen_class_name} extends AbstractContainerScreen<AbstractContainerMenu> {{
     private GuiLayout layout;
 
-    public {class_name}Screen(AbstractContainerMenu menu, Inventory inventory, Component title) {{
+    public {screen_class_name}(AbstractContainerMenu menu, Inventory inventory, Component title) {{
         super(menu, inventory, title);
         this.imageWidth = {width};
         this.imageHeight = {height};
@@ -1356,7 +1474,7 @@ public class {class_name}Screen extends AbstractContainerScreen<AbstractContaine
 }}
 "#,
         package = export.package,
-        class_name = export.class_name,
+        screen_class_name = export.screen_class_name,
         width = project.gui_size.width,
         height = project.gui_size.height,
         mod_id = export.mod_id,
@@ -1376,10 +1494,10 @@ import net.minecraft.entity.player.PlayerInventory;
 import net.minecraft.screen.ScreenHandler;
 import net.minecraft.text.Text;
 
-public class {class_name}Screen extends HandledScreen<ScreenHandler> {{
+public class {screen_class_name} extends HandledScreen<ScreenHandler> {{
     private GuiLayout layout;
 
-    public {class_name}Screen(ScreenHandler handler, PlayerInventory inventory, Text title) {{
+    public {screen_class_name}(ScreenHandler handler, PlayerInventory inventory, Text title) {{
         super(handler, inventory, title);
         this.backgroundWidth = {width};
         this.backgroundHeight = {height};
@@ -1408,7 +1526,7 @@ public class {class_name}Screen extends HandledScreen<ScreenHandler> {{
 }}
 "#,
         package = export.package,
-        class_name = export.class_name,
+        screen_class_name = export.screen_class_name,
         width = project.gui_size.width,
         height = project.gui_size.height,
         mod_id = export.mod_id,
@@ -1453,12 +1571,13 @@ import net.fabricmc.api.ClientModInitializer;
 public final class {class_name}Client implements ClientModInitializer {{
     @Override
     public void onInitializeClient() {{
-        // Register {class_name}Screen with your ScreenHandlerType here.
+        // Register {screen_class_name} with your ScreenHandlerType here.
     }}
 }}
 "#,
             package = export.package,
-            class_name = export.class_name
+            class_name = export.class_name,
+            screen_class_name = export.screen_class_name
         ),
         ExportTarget::Forge => format!(
             r#"package {package};
@@ -1471,11 +1590,12 @@ public final class {class_name}Client {{
     private {class_name}Client() {{
     }}
 
-    // Register {class_name}Screen with MenuScreens.register(...) from your client setup event.
+    // Register {screen_class_name} with MenuScreens.register(...) from your client setup event.
 }}
 "#,
             package = export.package,
             class_name = export.class_name,
+            screen_class_name = export.screen_class_name,
             mod_id = export.mod_id
         ),
         ExportTarget::NeoForge => format!(
@@ -1489,11 +1609,12 @@ public final class {class_name}Client {{
     private {class_name}Client() {{
     }}
 
-    // Register {class_name}Screen with MenuScreens.register(...) from your client setup event.
+    // Register {screen_class_name} with MenuScreens.register(...) from your client setup event.
 }}
 "#,
             package = export.package,
             class_name = export.class_name,
+            screen_class_name = export.screen_class_name,
             mod_id = export.mod_id
         ),
     }
@@ -1592,19 +1713,20 @@ This export is a minimal Minecraft mod project scaffold:
   build.gradle
   gradle.properties
   src/main/java/{package_path}/GuiLayout.java
-  src/main/java/{package_path}/{class_name}Screen.java
+  src/main/java/{package_path}/{screen_class_name}.java
   src/main/java/{package_path}/{class_name}Client.java
   src/main/resources/assets/{mod_id}/textures/gui/{resource_name}_gui.png
   src/main/resources/assets/{mod_id}/gui/{resource_name}_layout.json
 
 Texture elements are composited into the GUI PNG. Referenced source PNG assets are also copied under assets/{mod_id}/textures/... so they are available for later hand edits.
 
-The generated screen and runtime are designed to compile against the listed loader metadata and Gradle dependencies. Menu or ScreenHandler registration remains app-specific, so wire {class_name}Screen into your own menu type and replace generated animation default values with menu data where needed.
+The generated screen and runtime are designed to compile against the listed loader metadata and Gradle dependencies. Menu or ScreenHandler registration remains app-specific, so wire {screen_class_name} into your own menu type and replace generated animation default values with menu data where needed.
 
 Animation hooks:
 {animation_summary}
 "#,
         class_name = export.class_name,
+        screen_class_name = export.screen_class_name,
         loader = target.loader_name(),
         mod_id = export.mod_id,
         package = export.package,
@@ -1639,7 +1761,10 @@ fn escape_java_string(value: &str) -> String {
 mod tests {
     use super::*;
     use crate::animation::{Animation, AnimationType};
-    use crate::project::{Element, ElementType, FillDirection, Layer, ModTarget, Size};
+    use crate::project::{
+        Element, ElementType, FillDirection, Layer, ModTarget, SemanticGroup, SemanticGroupKind,
+        Size, SlotRole,
+    };
     use image::{Rgba, RgbaImage};
     use std::collections::HashMap;
 
@@ -1933,6 +2058,83 @@ mod tests {
         }
     }
 
+    fn semantic_slot_element(
+        id: &str,
+        slot_role: SlotRole,
+        inventory_group: &str,
+        slot_index: u32,
+    ) -> Element {
+        Element {
+            id: id.to_string(),
+            element_type: ElementType::Slot,
+            x: 8 + (slot_index as i32 * 18),
+            y: 18,
+            width: None,
+            height: None,
+            size: Some(18),
+            asset: None,
+            direction: None,
+            content: None,
+            font: None,
+            color: None,
+            shadow: None,
+            animation: None,
+            visible: true,
+            uv: None,
+            layer: Layer::Background,
+            slot_role: Some(slot_role),
+            slot_index: Some(slot_index),
+            inventory_group: Some(inventory_group.to_string()),
+            scroll_binding: None,
+            scroll_min: None,
+            scroll_max: None,
+            visible_rows: None,
+            total_rows: None,
+            columns: None,
+            target_group: None,
+            binding: None,
+            dock: None,
+            open_width: None,
+            open_height: None,
+        }
+    }
+
+    fn scrollbar_element(id: &str, target_group: &str, binding: &str) -> Element {
+        Element {
+            id: id.to_string(),
+            element_type: ElementType::Scrollbar,
+            x: 100,
+            y: 18,
+            width: Some(12),
+            height: Some(54),
+            size: None,
+            asset: None,
+            direction: None,
+            content: None,
+            font: None,
+            color: None,
+            shadow: None,
+            animation: None,
+            visible: true,
+            uv: None,
+            layer: Layer::Background,
+            slot_role: None,
+            slot_index: None,
+            inventory_group: None,
+            scroll_binding: Some(binding.to_string()),
+            scroll_min: Some(0),
+            scroll_max: Some(3),
+            visible_rows: Some(3),
+            total_rows: Some(6),
+            columns: Some(5),
+            target_group: Some(target_group.to_string()),
+            binding: None,
+            dock: None,
+            open_width: None,
+            open_height: None,
+        }
+    }
+
     #[test]
     fn layout_json_contains_semantic_groups_and_export_settings() {
         let mut project = Project::new("Scrollable", 176, 166, ModTarget::Forge);
@@ -1987,6 +2189,105 @@ mod tests {
     }
 
     #[test]
+    fn modular_semantic_warnings_report_slot_count_mismatch() {
+        let mut project = sample_project(ModTarget::Forge);
+        project.export_settings.codegen_mode = CodegenMode::Modular;
+        project.elements.clear();
+        project.semantic_groups.push(SemanticGroup {
+            id: "player_inventory".to_string(),
+            kind: SemanticGroupKind::PlayerInventory,
+            columns: Some(9),
+            visible_rows: Some(3),
+            total_rows: Some(3),
+            slot_count: Some(27),
+            data_source: Some("player_inventory".to_string()),
+            scroll_binding: None,
+            dynamic_height: false,
+        });
+        for index in 0..6 {
+            project.elements.push(semantic_slot_element(
+                &format!("player_slot_{index}"),
+                SlotRole::PlayerInventory,
+                "player_inventory",
+                index,
+            ));
+        }
+        let settings = project.export_settings.clone().normalized();
+
+        let warnings = semantic_warnings(&project, &settings);
+
+        assert!(warnings.iter().any(|warning| {
+            warning.contains("player_inventory")
+                && warning.contains("declares 27 slots")
+                && warning.contains("6 matching")
+        }));
+
+        let output_dir = TempExportDir::new("preview-semantic-slot-count");
+        let config = ExportConfig {
+            mod_id: "testmod".to_string(),
+            package: "com.example".to_string(),
+            class_name: "SemanticGui".to_string(),
+            output_dir: output_dir.path().to_string_lossy().to_string(),
+            settings_override: None,
+        };
+        let preview = preview_export(&project, &config, "forge").unwrap();
+
+        assert!(preview.warnings.iter().any(|warning| {
+            warning.contains("player_inventory")
+                && warning.contains("declares 27 slots")
+                && warning.contains("6 matching")
+        }));
+    }
+
+    #[test]
+    fn modular_semantic_warnings_report_scroll_binding_mismatches() {
+        let mut project = sample_project(ModTarget::Forge);
+        project.export_settings.codegen_mode = CodegenMode::Modular;
+        project.elements.clear();
+        project.semantic_groups.extend([
+            SemanticGroup {
+                id: "missing_scrollbar".to_string(),
+                kind: SemanticGroupKind::VirtualSlotGrid,
+                columns: Some(5),
+                visible_rows: Some(3),
+                total_rows: Some(6),
+                slot_count: Some(30),
+                data_source: Some("missing_scrollbar".to_string()),
+                scroll_binding: Some("missing_scroll".to_string()),
+                dynamic_height: false,
+            },
+            SemanticGroup {
+                id: "missing_binding".to_string(),
+                kind: SemanticGroupKind::VirtualSlotGrid,
+                columns: Some(5),
+                visible_rows: Some(3),
+                total_rows: Some(6),
+                slot_count: Some(30),
+                data_source: Some("missing_binding".to_string()),
+                scroll_binding: None,
+                dynamic_height: true,
+            },
+        ]);
+        project.elements.push(scrollbar_element(
+            "unrelated_scroll",
+            "other_group",
+            "other_scroll",
+        ));
+        let settings = project.export_settings.clone().normalized();
+
+        let warnings = semantic_warnings(&project, &settings);
+
+        assert!(warnings.iter().any(|warning| {
+            warning.contains("missing_scrollbar")
+                && warning.contains("missing_scroll")
+                && warning.contains("no matching scrollbar")
+        }));
+        assert!(warnings.iter().any(|warning| {
+            warning.contains("missing_binding") && warning.contains("has no scroll binding")
+        }));
+    }
+
+    #[test]
     fn modular_export_plans_semantic_registry() {
         let output_dir = TempExportDir::new("modular-semantic-registry");
         let mut project = Project::new("Scrollable", 176, 166, ModTarget::Forge);
@@ -2007,6 +2308,49 @@ mod tests {
             .files
             .iter()
             .any(|path| path.ends_with("GuiSemanticRegistry.java")));
+    }
+
+    #[test]
+    fn screen_class_name_appends_screen_only_when_missing_across_targets() {
+        for (target, project_target) in [
+            ("forge", ModTarget::Forge),
+            ("fabric", ModTarget::Fabric),
+            ("neoforge", ModTarget::NeoForge),
+        ] {
+            for (class_name, expected_screen_class) in [
+                ("AutoCutterGenerated", "AutoCutterGeneratedScreen"),
+                ("AutoCutterGeneratedScreen", "AutoCutterGeneratedScreen"),
+            ] {
+                let output_dir = TempExportDir::new(&format!("{target}-{class_name}"));
+                let config = ExportConfig {
+                    mod_id: "testmod".to_string(),
+                    package: "com.example".to_string(),
+                    class_name: class_name.to_string(),
+                    output_dir: output_dir.path().to_string_lossy().to_string(),
+                    settings_override: None,
+                };
+
+                let plan =
+                    plan_export(&sample_project(project_target.clone()), &config, target).unwrap();
+                let planned_output = plan
+                    .files
+                    .iter()
+                    .map(|file| {
+                        format!(
+                            "{}\n{}",
+                            file.path.to_string_lossy(),
+                            String::from_utf8_lossy(&file.data)
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+
+                assert!(planned_output.contains(&format!("{expected_screen_class}.java")));
+                assert!(planned_output.contains(&format!("class {expected_screen_class}")));
+                assert!(planned_output.contains(&format!("Register {expected_screen_class}")));
+                assert!(!planned_output.contains("ScreenScreen"));
+            }
+        }
     }
 
     #[test]
