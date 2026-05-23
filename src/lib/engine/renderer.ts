@@ -94,6 +94,11 @@ export class GuiRenderer {
   private panOrigX = 0;
   private panOrigY = 0;
   private renderFrame: number | null = null;
+  private initPromise: Promise<void> | null = null;
+  private pixiInitialized = false;
+  private ready = false;
+  private disposed = false;
+  private appDestroyed = false;
 
   constructor(containerEl: HTMLElement) {
     this.containerEl = containerEl;
@@ -110,6 +115,15 @@ export class GuiRenderer {
   }
 
   async init() {
+    if (this.disposed) return;
+    if (this.ready) return;
+    if (this.initPromise) return this.initPromise;
+
+    this.initPromise = this.initApplication();
+    return this.initPromise;
+  }
+
+  private async initApplication() {
     const rect = this.containerEl.getBoundingClientRect();
     editor.canvasWidth = rect.width;
     editor.canvasHeight = rect.height;
@@ -122,6 +136,13 @@ export class GuiRenderer {
       resolution: window.devicePixelRatio || 1,
       autoDensity: true,
     });
+
+    this.pixiInitialized = true;
+
+    if (this.disposed) {
+      this.destroyPixiApp();
+      return;
+    }
 
     this.containerEl.appendChild(this.app.canvas as HTMLCanvasElement);
 
@@ -138,12 +159,14 @@ export class GuiRenderer {
 
     this.setupEvents();
     this.setupResizeObserver();
+    this.ready = true;
     this.updateTransform();
     this.render();
   }
 
   private setupResizeObserver() {
     this.resizeObserver = new ResizeObserver(() => {
+      if (!this.ready || this.disposed) return;
       const rect = this.containerEl.getBoundingClientRect();
       if (rect.width > 0 && rect.height > 0) {
         this.app.renderer.resize(rect.width, rect.height);
@@ -496,6 +519,7 @@ export class GuiRenderer {
   }
 
   render() {
+    if (!this.ready || this.disposed) return;
     this.app.renderer.background.color = canvasPalette().background;
     this.updateTransform();
     this.syncGlyphTextureCache();
@@ -1051,7 +1075,7 @@ export class GuiRenderer {
       this.loadingFontSources.add(identity);
       Assets.load<Texture>(dataUrl)
         .then(loaded => {
-          if (!this.loadingFontSources.has(identity)) return;
+          if (this.disposed || !this.ready || !this.loadingFontSources.has(identity)) return;
           if (loaded.source.width <= 0 || loaded.source.height <= 0) return;
 
           this.fontSourceTextureCache.set(identity, loaded);
@@ -1210,6 +1234,7 @@ export class GuiRenderer {
   }
 
   updateTransform() {
+    if (!this.ready || this.disposed) return;
     const scale = editor.zoom;
     this.elementsContainer.scale.set(scale);
     this.gridContainer.scale.set(scale);
@@ -1222,22 +1247,40 @@ export class GuiRenderer {
   }
 
   private requestFrame() {
+    if (!this.ready || this.disposed) return;
     if (this.renderFrame !== null) return;
     this.renderFrame = requestAnimationFrame(() => {
       this.renderFrame = null;
+      if (!this.ready || this.disposed) return;
       this.app.render();
     });
   }
 
   destroy() {
+    if (this.disposed) return;
+    this.disposed = true;
+    this.ready = false;
+
     if (this.renderFrame !== null) {
       cancelAnimationFrame(this.renderFrame);
       this.renderFrame = null;
     }
+    this.loadingFontSources.clear();
     this.textTextureCache.forEach(texture => texture.destroy(true));
     this.textTextureCache.clear();
     this.cleanupFns.forEach(fn => fn());
+    this.cleanupFns = [];
     this.resizeObserver?.disconnect();
+    this.resizeObserver = null;
+
+    if (this.pixiInitialized) {
+      this.destroyPixiApp();
+    }
+  }
+
+  private destroyPixiApp() {
+    if (this.appDestroyed || !this.pixiInitialized) return;
+    this.appDestroyed = true;
     this.app.destroy(true, { children: true });
   }
 }

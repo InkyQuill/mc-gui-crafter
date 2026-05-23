@@ -9,19 +9,30 @@
   let initialized = $state(false);
 
   $effect(() => {
-    if (!containerEl || initialized) return;
+    if (!containerEl) return;
     initialized = true;
 
     const r = new GuiRenderer(containerEl);
-    r.init().then(() => {
-      renderer = r;
-      editor.resetView(project.guiSize);
-      r.render();
-    });
+    let disposed = false;
+    r.init()
+      .then(() => {
+        if (disposed) return;
+        renderer = r;
+        editor.resetView(project.guiSize);
+        r.render();
+      })
+      .catch(error => {
+        if (disposed) return;
+        console.error("Failed to initialize GUI renderer", error);
+        initialized = false;
+      });
 
     return () => {
+      disposed = true;
       r.destroy();
-      renderer = null;
+      if (renderer === r) {
+        renderer = null;
+      }
       initialized = false;
     };
   });
