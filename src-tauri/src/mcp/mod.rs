@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::io::{Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
 use std::sync::mpsc;
@@ -15,6 +16,8 @@ use crate::{templates, AppState};
 const MCP_PATH: &str = "/mcp";
 const SERVER_NAME: &str = "mc-gui-crafter";
 const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
+const SLOT_ROLE_DESCRIPTION: &str = "Accepted values: machine, player_inventory, hotbar, scrollable_inventory, virtual_storage, upgrade, upgrade_settings, filter, ghost, offhand.";
+const SEMANTIC_GROUP_KIND_DESCRIPTION: &str = "Accepted values: fixed_slots, virtual_slot_grid, player_inventory, hotbar, upgrade_slots, upgrade_panel, search_field, control_buttons.";
 
 pub struct McpServerHandle {
     address: SocketAddr,
@@ -540,7 +543,7 @@ fn get_tool_definitions() -> Vec<serde_json::Value> {
         td(
             "project_semantic_groups_update",
             "Replace project semantic group definitions",
-            project_props(&[("semantic_groups", "array", "Semantic group array", true)]),
+            semantic_groups_props(),
         ),
         td(
             "project_list_sessions",
@@ -571,6 +574,16 @@ fn get_tool_definitions() -> Vec<serde_json::Value> {
                 "Element object; flat element fields are also accepted",
                 false,
             )]),
+        ),
+        td(
+            "element_add_many",
+            "Add multiple elements atomically",
+            element_add_many_props(),
+        ),
+        td(
+            "slot_grid_add",
+            "Create a grouped grid of slot elements with semantic metadata",
+            slot_grid_props(),
         ),
         td(
             "element_move",
@@ -736,6 +749,119 @@ fn export_props() -> serde_json::Value {
     ])
 }
 
+fn semantic_groups_props() -> serde_json::Value {
+    project_schema(vec![(
+        "semantic_groups",
+        serde_json::json!({
+            "type": "array",
+            "description": "Semantic group array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string", "description": "Semantic group ID" },
+                    "kind": { "type": "string", "description": SEMANTIC_GROUP_KIND_DESCRIPTION },
+                    "columns": { "type": "integer", "description": "Grid column count" },
+                    "visible_rows": { "type": "integer", "description": "Visible row count" },
+                    "total_rows": { "type": "integer", "description": "Total row count" },
+                    "slot_count": { "type": "integer", "description": "Total slot count" },
+                    "data_source": { "type": "string", "description": "Semantic data source key" },
+                    "scroll_binding": { "type": "string", "description": "Scroll binding ID" },
+                    "dynamic_height": { "type": "boolean", "description": "Whether this group can change height dynamically" }
+                },
+                "required": ["id", "kind"]
+            }
+        }),
+        true,
+    )])
+}
+
+fn element_add_many_props() -> serde_json::Value {
+    project_schema(vec![(
+        "elements",
+        serde_json::json!({
+            "type": "array",
+            "description": "Element objects to add atomically",
+            "items": { "type": "object" }
+        }),
+        true,
+    )])
+}
+
+fn slot_grid_props() -> serde_json::Value {
+    project_schema(vec![
+        (
+            "id_prefix",
+            serde_json::json!({ "type": "string", "description": "Prefix for generated element IDs" }),
+            true,
+        ),
+        (
+            "x",
+            serde_json::json!({ "type": "integer", "description": "Grid origin X" }),
+            true,
+        ),
+        (
+            "y",
+            serde_json::json!({ "type": "integer", "description": "Grid origin Y" }),
+            true,
+        ),
+        (
+            "columns",
+            serde_json::json!({ "type": "integer", "description": "Grid column count" }),
+            true,
+        ),
+        (
+            "rows",
+            serde_json::json!({ "type": "integer", "description": "Grid row count" }),
+            true,
+        ),
+        (
+            "slot_size",
+            serde_json::json!({ "type": "integer", "description": "Slot size; defaults to 18" }),
+            false,
+        ),
+        (
+            "spacing",
+            serde_json::json!({ "type": "integer", "description": "Distance between slot origins; defaults to 18" }),
+            false,
+        ),
+        (
+            "slot_role",
+            serde_json::json!({ "type": "string", "description": SLOT_ROLE_DESCRIPTION }),
+            false,
+        ),
+        (
+            "inventory_group",
+            serde_json::json!({ "type": "string", "description": "Inventory group ID for generated slots" }),
+            false,
+        ),
+        (
+            "slot_index_start",
+            serde_json::json!({ "type": "integer", "description": "First slot index; defaults to 0" }),
+            false,
+        ),
+        (
+            "group_id",
+            serde_json::json!({ "type": "string", "description": "Optional project group ID" }),
+            false,
+        ),
+        (
+            "semantic_group_kind",
+            serde_json::json!({ "type": "string", "description": SEMANTIC_GROUP_KIND_DESCRIPTION }),
+            false,
+        ),
+        (
+            "slot_count",
+            serde_json::json!({ "type": "integer", "description": "Semantic total slot count" }),
+            false,
+        ),
+        (
+            "scroll_binding",
+            serde_json::json!({ "type": "string", "description": "Scroll binding ID for generated slots and semantic metadata" }),
+            false,
+        ),
+    ])
+}
+
 fn props(items: &[(&str, &str, &str, bool)]) -> serde_json::Value {
     let mut required = Vec::new();
     let mut properties = serde_json::Map::new();
@@ -746,6 +872,25 @@ fn props(items: &[(&str, &str, &str, bool)]) -> serde_json::Value {
         );
         if *is_required {
             required.push((*name).to_string());
+        }
+    }
+    serde_json::json!({ "type": "object", "properties": properties, "required": required })
+}
+
+fn project_schema(items: Vec<(&str, serde_json::Value, bool)>) -> serde_json::Value {
+    let mut required = Vec::new();
+    let mut properties = serde_json::Map::new();
+    properties.insert(
+        "project_id".to_string(),
+        serde_json::json!({
+            "type": "string",
+            "description": "Optional project session ID; active session is used when omitted"
+        }),
+    );
+    for (name, schema, is_required) in items {
+        properties.insert(name.to_string(), schema);
+        if is_required {
+            required.push(name.to_string());
         }
     }
     serde_json::json!({ "type": "object", "properties": properties, "required": required })
@@ -779,6 +924,8 @@ fn execute_tool(
         "project_undo" => Ok(serde_json::to_value(sessions.undo(project_id)?).unwrap()),
         "project_redo" => Ok(serde_json::to_value(sessions.redo(project_id)?).unwrap()),
         "element_add" => element_add(&mut sessions, project_id, args),
+        "element_add_many" => element_add_many(&mut sessions, project_id, args),
+        "slot_grid_add" => slot_grid_add(&mut sessions, project_id, args),
         "element_move" => element_move(&mut sessions, project_id, args),
         "element_update" => element_update(&mut sessions, project_id, args),
         "element_resize" => element_resize(&mut sessions, project_id, args),
@@ -1059,14 +1206,244 @@ fn element_add(
     project_id: Option<&str>,
     args: &serde_json::Value,
 ) -> Result<serde_json::Value, String> {
-    let payload = args.get("element").unwrap_or(args).clone();
-    let element: Element = serde_json::from_value(payload)
-        .map_err(|error| format!("Invalid element payload: {error}"))?;
+    let element = parse_element_arg(args)?;
     sessions.record_history(project_id)?;
     let session = sessions.resolve_mut(project_id)?;
     session.project.add_element(element.clone());
     sessions.mark_changed(project_id)?;
     Ok(serde_json::to_value(element).unwrap())
+}
+
+fn element_add_many(
+    sessions: &mut ProjectSessionManager,
+    project_id: Option<&str>,
+    args: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let values = args
+        .get("elements")
+        .and_then(|value| value.as_array())
+        .ok_or("Missing elements")?;
+    let elements = values
+        .iter()
+        .map(parse_element_arg)
+        .collect::<Result<Vec<_>, _>>()?;
+    validate_new_element_ids(sessions, project_id, &elements)?;
+
+    sessions.record_history(project_id)?;
+    let session = sessions.resolve_mut(project_id)?;
+    session.project.elements.extend(elements.clone());
+    sessions.mark_changed(project_id)?;
+    Ok(serde_json::json!({
+        "created_count": elements.len(),
+        "elements": elements,
+    }))
+}
+
+fn slot_grid_add(
+    sessions: &mut ProjectSessionManager,
+    project_id: Option<&str>,
+    args: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let id_prefix = required_str(args, "id_prefix")?;
+    let x = required_i32(args, "x")?;
+    let y = required_i32(args, "y")?;
+    let columns = required_u32(args, "columns")?;
+    let rows = required_u32(args, "rows")?;
+    if columns == 0 || rows == 0 {
+        return Err("columns and rows must be greater than 0".to_string());
+    }
+    let slot_size = optional_u32(args, "slot_size")?.unwrap_or(18);
+    let spacing = optional_u32(args, "spacing")?.unwrap_or(18);
+    let slot_index_start = optional_u32(args, "slot_index_start")?.unwrap_or(0);
+    let slot_role = optional_slot_role(args, "slot_role")?;
+    let inventory_group = optional_string(args, "inventory_group");
+    let scroll_binding = optional_string(args, "scroll_binding");
+    let group_id = optional_string(args, "group_id");
+    let semantic_group_kind = optional_semantic_group_kind(args, "semantic_group_kind")?;
+    let semantic_slot_count = optional_u32(args, "slot_count")?;
+
+    let options = SlotGridOptions {
+        id_prefix: id_prefix.to_string(),
+        x,
+        y,
+        columns,
+        rows,
+        slot_size,
+        spacing,
+        slot_role,
+        inventory_group: inventory_group.clone(),
+        slot_index_start,
+        scroll_binding: scroll_binding.clone(),
+    };
+    let elements = slot_grid_elements(&options)?;
+    validate_new_element_ids(sessions, project_id, &elements)?;
+    if let Some(group_id) = &group_id {
+        if sessions
+            .resolve(project_id)?
+            .project
+            .groups
+            .iter()
+            .any(|group| group.id == *group_id)
+        {
+            return Err("Group already exists".to_string());
+        }
+    }
+
+    let element_ids = elements
+        .iter()
+        .map(|element| element.id.clone())
+        .collect::<Vec<_>>();
+    let group = group_id.map(|id| crate::project::Group {
+        id,
+        x,
+        y,
+        elements: element_ids,
+    });
+    let semantic_group = semantic_group_kind.map(|kind| {
+        let id = inventory_group
+            .clone()
+            .or_else(|| group.as_ref().map(|group| group.id.clone()))
+            .unwrap_or_else(|| id_prefix.to_string());
+        SemanticGroup {
+            id: id.clone(),
+            kind,
+            columns: Some(columns),
+            visible_rows: Some(rows),
+            total_rows: Some(rows),
+            slot_count: Some(semantic_slot_count.unwrap_or(elements.len() as u32)),
+            data_source: Some(inventory_group.clone().unwrap_or(id)),
+            scroll_binding: scroll_binding.clone(),
+            dynamic_height: false,
+        }
+    });
+
+    sessions.record_history(project_id)?;
+    let session = sessions.resolve_mut(project_id)?;
+    session.project.elements.extend(elements.clone());
+    if let Some(group) = &group {
+        session.project.groups.push(group.clone());
+    }
+    if let Some(semantic_group) = &semantic_group {
+        session
+            .project
+            .semantic_groups
+            .retain(|group| group.id != semantic_group.id);
+        session.project.semantic_groups.push(semantic_group.clone());
+    }
+    sessions.mark_changed(project_id)?;
+    Ok(serde_json::json!({
+        "created_count": elements.len(),
+        "elements": elements,
+        "group": group,
+        "semantic_group": semantic_group,
+    }))
+}
+
+struct SlotGridOptions {
+    id_prefix: String,
+    x: i32,
+    y: i32,
+    columns: u32,
+    rows: u32,
+    slot_size: u32,
+    spacing: u32,
+    slot_role: Option<crate::project::SlotRole>,
+    inventory_group: Option<String>,
+    slot_index_start: u32,
+    scroll_binding: Option<String>,
+}
+
+fn slot_grid_elements(options: &SlotGridOptions) -> Result<Vec<Element>, String> {
+    let count = options
+        .columns
+        .checked_mul(options.rows)
+        .ok_or("slot grid dimensions are too large")?;
+    let mut elements = Vec::with_capacity(count as usize);
+    for local_index in 0..count {
+        let column = local_index % options.columns;
+        let row = local_index / options.columns;
+        let x = options.x + (column * options.spacing) as i32;
+        let y = options.y + (row * options.spacing) as i32;
+        let slot_index = options
+            .slot_index_start
+            .checked_add(local_index)
+            .ok_or("slot_index_start is too large")?;
+        elements.push(base_slot_element(
+            format!("{}_{local_index}", options.id_prefix),
+            x,
+            y,
+            slot_index,
+            options,
+        ));
+    }
+    Ok(elements)
+}
+
+fn base_slot_element(
+    id: String,
+    x: i32,
+    y: i32,
+    slot_index: u32,
+    options: &SlotGridOptions,
+) -> Element {
+    Element {
+        id,
+        element_type: crate::project::ElementType::Slot,
+        x,
+        y,
+        width: None,
+        height: None,
+        size: Some(options.slot_size),
+        asset: None,
+        direction: None,
+        content: None,
+        font: None,
+        color: None,
+        shadow: None,
+        animation: None,
+        visible: true,
+        uv: None,
+        layer: crate::project::Layer::Background,
+        slot_role: options.slot_role.clone(),
+        slot_index: Some(slot_index),
+        inventory_group: options.inventory_group.clone(),
+        scroll_binding: options.scroll_binding.clone(),
+        scroll_min: None,
+        scroll_max: None,
+        visible_rows: None,
+        total_rows: None,
+        columns: None,
+        target_group: None,
+        binding: None,
+        dock: None,
+        open_width: None,
+        open_height: None,
+    }
+}
+
+fn parse_element_arg(value: &serde_json::Value) -> Result<Element, String> {
+    let payload = value.get("element").unwrap_or(value).clone();
+    serde_json::from_value(payload).map_err(|error| format!("Invalid element payload: {error}"))
+}
+
+fn validate_new_element_ids(
+    sessions: &ProjectSessionManager,
+    project_id: Option<&str>,
+    elements: &[Element],
+) -> Result<(), String> {
+    let mut ids = HashSet::new();
+    for element in elements {
+        if !ids.insert(element.id.as_str()) {
+            return Err(format!("Duplicate element id: {}", element.id));
+        }
+    }
+    let project = &sessions.resolve(project_id)?.project;
+    for element in elements {
+        if project.find_element(&element.id).is_some() {
+            return Err(format!("Element already exists: {}", element.id));
+        }
+    }
+    Ok(())
 }
 
 fn element_move(
@@ -1693,6 +2070,42 @@ fn required_u32(value: &serde_json::Value, key: &str) -> Result<u32, String> {
         .ok_or(format!("Missing {key}"))
 }
 
+fn optional_u32(value: &serde_json::Value, key: &str) -> Result<Option<u32>, String> {
+    value
+        .get(key)
+        .map(|value| {
+            value
+                .as_u64()
+                .map(|value| value as u32)
+                .ok_or(format!("{key} must be an integer"))
+        })
+        .transpose()
+}
+
+fn optional_slot_role(
+    value: &serde_json::Value,
+    key: &str,
+) -> Result<Option<crate::project::SlotRole>, String> {
+    value
+        .get(key)
+        .map(|value| {
+            serde_json::from_value(value.clone()).map_err(|error| format!("Invalid {key}: {error}"))
+        })
+        .transpose()
+}
+
+fn optional_semantic_group_kind(
+    value: &serde_json::Value,
+    key: &str,
+) -> Result<Option<crate::project::SemanticGroupKind>, String> {
+    value
+        .get(key)
+        .map(|value| {
+            serde_json::from_value(value.clone()).map_err(|error| format!("Invalid {key}: {error}"))
+        })
+        .transpose()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1784,6 +2197,42 @@ mod tests {
         assert!(tools
             .iter()
             .any(|tool| tool["name"] == "project_export_settings_update"));
+    }
+
+    #[test]
+    fn tools_list_exposes_alpha_ergonomics_tools() {
+        let tools = get_tool_definitions();
+        let names = tools
+            .iter()
+            .filter_map(|tool| tool["name"].as_str())
+            .collect::<Vec<_>>();
+
+        assert!(names.contains(&"project_save_as"));
+        assert!(names.contains(&"project_export_preview"));
+        assert!(names.contains(&"project_export"));
+        assert!(names.contains(&"project_export_settings_update"));
+        assert!(names.contains(&"project_semantic_groups_update"));
+        assert!(names.contains(&"element_add_many"));
+        assert!(names.contains(&"slot_grid_add"));
+    }
+
+    #[test]
+    fn semantic_groups_schema_describes_object_array_and_enums() {
+        let tools = get_tool_definitions();
+        let tool = tools
+            .iter()
+            .find(|tool| tool["name"] == "project_semantic_groups_update")
+            .expect("project_semantic_groups_update tool should exist");
+        let semantic_groups = &tool["inputSchema"]["properties"]["semantic_groups"];
+        let description = semantic_groups["items"]["properties"]["kind"]["description"]
+            .as_str()
+            .unwrap();
+
+        assert_eq!(semantic_groups["type"], "array");
+        assert_eq!(semantic_groups["items"]["type"], "object");
+        assert!(description.contains("fixed_slots"));
+        assert!(description.contains("virtual_slot_grid"));
+        assert!(description.contains("player_inventory"));
     }
 
     #[test]
@@ -1927,6 +2376,119 @@ mod tests {
         assert_eq!(active.project.elements[0].id, "slot_1");
         assert_eq!(active.revision, 1);
         assert!(active.project.is_dirty);
+    }
+
+    #[test]
+    fn element_add_many_is_atomic_for_duplicate_ids() {
+        let state = test_state();
+        {
+            let mut sessions = state.sessions.lock().unwrap();
+            sessions.create_session(Project::new("Bulk Add", 176, 166, ModTarget::Forge));
+        }
+
+        let response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "element-add-many",
+                "method": "tools/call",
+                "params": {
+                    "name": "element_add_many",
+                    "arguments": {
+                        "elements": [
+                            {
+                                "id": "slot_a",
+                                "type": "slot",
+                                "x": 8,
+                                "y": 18,
+                                "size": 18
+                            },
+                            {
+                                "id": "slot_a",
+                                "type": "slot",
+                                "x": 26,
+                                "y": 18,
+                                "size": 18
+                            }
+                        ]
+                    }
+                }
+            }),
+            &state,
+        );
+
+        assert!(response["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("Duplicate element id"));
+        let sessions = state.sessions.lock().unwrap();
+        let active = sessions.active_session().unwrap();
+        assert!(active.project.elements.is_empty());
+        assert_eq!(active.revision, 0);
+    }
+
+    #[test]
+    fn slot_grid_add_creates_grouped_player_inventory_grid() {
+        let state = test_state();
+        {
+            let mut sessions = state.sessions.lock().unwrap();
+            sessions.create_session(Project::new("Slot Grid", 176, 166, ModTarget::Forge));
+        }
+
+        let response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "slot-grid-add",
+                "method": "tools/call",
+                "params": {
+                    "name": "slot_grid_add",
+                    "arguments": {
+                        "id_prefix": "player_inv",
+                        "x": 8,
+                        "y": 84,
+                        "columns": 9,
+                        "rows": 3,
+                        "slot_role": "player_inventory",
+                        "inventory_group": "player_inventory",
+                        "slot_index_start": 9,
+                        "group_id": "player_inventory_grid",
+                        "semantic_group_kind": "player_inventory",
+                        "slot_count": 27
+                    }
+                }
+            }),
+            &state,
+        );
+
+        assert!(response["error"].is_null());
+        let content = response["result"]["content"][0]["text"].as_str().unwrap();
+        let value: serde_json::Value = serde_json::from_str(content).unwrap();
+        assert_eq!(value["created_count"], 27);
+        assert_eq!(value["elements"].as_array().unwrap().len(), 27);
+        assert_eq!(value["group"]["id"], "player_inventory_grid");
+        assert_eq!(value["semantic_group"]["id"], "player_inventory");
+
+        let sessions = state.sessions.lock().unwrap();
+        let active = sessions.active_session().unwrap();
+        assert_eq!(active.project.elements.len(), 27);
+        assert_eq!(active.project.elements[0].id, "player_inv_0");
+        assert_eq!(active.project.elements[0].x, 8);
+        assert_eq!(active.project.elements[0].y, 84);
+        assert_eq!(active.project.elements[0].slot_index, Some(9));
+        assert_eq!(active.project.elements[1].x, 26);
+        assert_eq!(active.project.elements[9].x, 8);
+        assert_eq!(active.project.elements[9].y, 102);
+        assert_eq!(active.project.elements[26].slot_index, Some(35));
+        assert_eq!(active.project.groups.len(), 1);
+        assert_eq!(active.project.groups[0].id, "player_inventory_grid");
+        assert_eq!(active.project.groups[0].elements.len(), 27);
+        assert_eq!(active.project.groups[0].elements[0], "player_inv_0");
+        assert_eq!(active.project.semantic_groups.len(), 1);
+        assert_eq!(active.project.semantic_groups[0].id, "player_inventory");
+        assert_eq!(
+            active.project.semantic_groups[0].kind,
+            crate::project::SemanticGroupKind::PlayerInventory
+        );
+        assert_eq!(active.project.semantic_groups[0].slot_count, Some(27));
     }
 
     #[test]
