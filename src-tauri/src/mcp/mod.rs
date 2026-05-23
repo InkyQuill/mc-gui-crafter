@@ -1223,6 +1223,9 @@ fn element_add_many(
         .get("elements")
         .and_then(|value| value.as_array())
         .ok_or("Missing elements")?;
+    if values.is_empty() {
+        return Err("elements array cannot be empty".to_string());
+    }
     let elements = values
         .iter()
         .map(parse_element_arg)
@@ -1358,12 +1361,16 @@ fn slot_grid_elements(options: &SlotGridOptions) -> Result<Vec<Element>, String>
         .columns
         .checked_mul(options.rows)
         .ok_or("slot grid dimensions are too large")?;
-    let mut elements = Vec::with_capacity(count as usize);
+    let capacity = usize::try_from(count).map_err(|_| "slot grid dimensions are too large")?;
+    let mut elements = Vec::new();
+    elements
+        .try_reserve_exact(capacity)
+        .map_err(|_| "slot grid dimensions are too large")?;
     for local_index in 0..count {
         let column = local_index % options.columns;
         let row = local_index / options.columns;
-        let x = options.x + (column * options.spacing) as i32;
-        let y = options.y + (row * options.spacing) as i32;
+        let x = slot_grid_coordinate(options.x, column, options.spacing, "x")?;
+        let y = slot_grid_coordinate(options.y, row, options.spacing, "y")?;
         let slot_index = options
             .slot_index_start
             .checked_add(local_index)
@@ -1377,6 +1384,19 @@ fn slot_grid_elements(options: &SlotGridOptions) -> Result<Vec<Element>, String>
         ));
     }
     Ok(elements)
+}
+
+fn slot_grid_coordinate(origin: i32, index: u32, spacing: u32, axis: &str) -> Result<i32, String> {
+    let overflow_error = || format!("slot grid {axis} coordinate overflow");
+    let offset = u64::from(index)
+        .checked_mul(u64::from(spacing))
+        .ok_or_else(|| overflow_error())?;
+    let max_offset = (i64::from(i32::MAX) - i64::from(origin)) as u64;
+    if offset > max_offset {
+        return Err(overflow_error());
+    }
+    let coordinate = i64::from(origin) + i64::try_from(offset).map_err(|_| overflow_error())?;
+    i32::try_from(coordinate).map_err(|_| overflow_error())
 }
 
 fn base_slot_element(
@@ -2055,31 +2075,36 @@ fn required_str<'a>(value: &'a serde_json::Value, key: &str) -> Result<&'a str, 
 }
 
 fn required_i32(value: &serde_json::Value, key: &str) -> Result<i32, String> {
-    value
-        .get(key)
-        .and_then(|value| value.as_i64())
-        .map(|value| value as i32)
-        .ok_or(format!("Missing {key}"))
+    let value = value.get(key).ok_or(format!("Missing {key}"))?;
+    if let Some(value) = value.as_i64() {
+        return i32::try_from(value).map_err(|_| format!("{key} is out of range"));
+    }
+    if let Some(value) = value.as_u64() {
+        return i32::try_from(value).map_err(|_| format!("{key} is out of range"));
+    }
+    Err(format!("{key} must be an integer"))
 }
 
 fn required_u32(value: &serde_json::Value, key: &str) -> Result<u32, String> {
-    value
-        .get(key)
-        .and_then(|value| value.as_u64())
-        .map(|value| value as u32)
-        .ok_or(format!("Missing {key}"))
+    let value = value.get(key).ok_or(format!("Missing {key}"))?;
+    json_number_to_u32(value, key)
 }
 
 fn optional_u32(value: &serde_json::Value, key: &str) -> Result<Option<u32>, String> {
     value
         .get(key)
-        .map(|value| {
-            value
-                .as_u64()
-                .map(|value| value as u32)
-                .ok_or(format!("{key} must be an integer"))
-        })
+        .map(|value| json_number_to_u32(value, key))
         .transpose()
+}
+
+fn json_number_to_u32(value: &serde_json::Value, key: &str) -> Result<u32, String> {
+    if let Some(value) = value.as_i64() {
+        return u32::try_from(value).map_err(|_| format!("{key} is out of range"));
+    }
+    if let Some(value) = value.as_u64() {
+        return u32::try_from(value).map_err(|_| format!("{key} is out of range"));
+    }
+    Err(format!("{key} must be an integer"))
 }
 
 fn optional_slot_role(
@@ -2427,6 +2452,95 @@ mod tests {
     }
 
     #[test]
+    fn element_add_many_rejects_existing_ids_before_mutating() {
+        let state = test_state();
+        let existing = parse_element_arg(&serde_json::json!({
+            "id": "slot_existing",
+            "type": "slot",
+            "x": 8,
+            "y": 18,
+            "size": 18
+        }))
+        .unwrap();
+        let original_elements = vec![existing.clone()];
+        {
+            let mut sessions = state.sessions.lock().unwrap();
+            let project_id =
+                sessions.create_session(Project::new("Bulk Existing", 176, 166, ModTarget::Forge));
+            sessions
+                .resolve_mut(Some(&project_id))
+                .unwrap()
+                .project
+                .elements = original_elements.clone();
+        }
+
+        let response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "element-add-many-existing",
+                "method": "tools/call",
+                "params": {
+                    "name": "element_add_many",
+                    "arguments": {
+                        "elements": [
+                            {
+                                "id": "slot_existing",
+                                "type": "slot",
+                                "x": 26,
+                                "y": 18,
+                                "size": 18
+                            }
+                        ]
+                    }
+                }
+            }),
+            &state,
+        );
+
+        assert!(response["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("Element already exists: slot_existing"));
+        let sessions = state.sessions.lock().unwrap();
+        let active = sessions.active_session().unwrap();
+        assert_eq!(active.project.elements, original_elements);
+        assert_eq!(active.revision, 0);
+    }
+
+    #[test]
+    fn element_add_many_rejects_empty_array_without_history() {
+        let state = test_state();
+        {
+            let mut sessions = state.sessions.lock().unwrap();
+            sessions.create_session(Project::new("Bulk Empty", 176, 166, ModTarget::Forge));
+        }
+
+        let response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "element-add-many-empty",
+                "method": "tools/call",
+                "params": {
+                    "name": "element_add_many",
+                    "arguments": {
+                        "elements": []
+                    }
+                }
+            }),
+            &state,
+        );
+
+        assert_eq!(
+            response["error"]["message"],
+            "elements array cannot be empty"
+        );
+        let sessions = state.sessions.lock().unwrap();
+        let active = sessions.active_session().unwrap();
+        assert!(active.project.elements.is_empty());
+        assert_eq!(active.revision, 0);
+    }
+
+    #[test]
     fn slot_grid_add_creates_grouped_player_inventory_grid() {
         let state = test_state();
         {
@@ -2489,6 +2603,358 @@ mod tests {
             crate::project::SemanticGroupKind::PlayerInventory
         );
         assert_eq!(active.project.semantic_groups[0].slot_count, Some(27));
+    }
+
+    #[test]
+    fn slot_grid_add_uses_default_slot_geometry_and_indices() {
+        let state = test_state();
+        {
+            let mut sessions = state.sessions.lock().unwrap();
+            sessions.create_session(Project::new(
+                "Slot Grid Defaults",
+                176,
+                166,
+                ModTarget::Forge,
+            ));
+        }
+
+        let response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "slot-grid-defaults",
+                "method": "tools/call",
+                "params": {
+                    "name": "slot_grid_add",
+                    "arguments": {
+                        "id_prefix": "default_slot",
+                        "x": 4,
+                        "y": 5,
+                        "columns": 2,
+                        "rows": 2
+                    }
+                }
+            }),
+            &state,
+        );
+
+        assert!(response["error"].is_null());
+        let sessions = state.sessions.lock().unwrap();
+        let active = sessions.active_session().unwrap();
+        assert_eq!(active.project.elements.len(), 4);
+        assert_eq!(active.project.elements[0].size, Some(18));
+        assert_eq!(active.project.elements[0].slot_index, Some(0));
+        assert_eq!(active.project.elements[1].x, 22);
+        assert_eq!(active.project.elements[1].y, 5);
+        assert_eq!(active.project.elements[2].x, 4);
+        assert_eq!(active.project.elements[2].y, 23);
+        assert_eq!(active.project.elements[3].slot_index, Some(3));
+        assert_eq!(active.revision, 1);
+    }
+
+    #[test]
+    fn slot_grid_add_rejects_element_id_conflicts_before_mutating() {
+        let state = test_state();
+        let existing = parse_element_arg(&serde_json::json!({
+            "id": "grid_0",
+            "type": "slot",
+            "x": 8,
+            "y": 18,
+            "size": 18
+        }))
+        .unwrap();
+        let original_elements = vec![existing.clone()];
+        {
+            let mut sessions = state.sessions.lock().unwrap();
+            let project_id = sessions.create_session(Project::new(
+                "Slot Grid Element Conflict",
+                176,
+                166,
+                ModTarget::Forge,
+            ));
+            sessions
+                .resolve_mut(Some(&project_id))
+                .unwrap()
+                .project
+                .elements = original_elements.clone();
+        }
+
+        let response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "slot-grid-element-conflict",
+                "method": "tools/call",
+                "params": {
+                    "name": "slot_grid_add",
+                    "arguments": {
+                        "id_prefix": "grid",
+                        "x": 8,
+                        "y": 18,
+                        "columns": 1,
+                        "rows": 1
+                    }
+                }
+            }),
+            &state,
+        );
+
+        assert!(response["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("Element already exists: grid_0"));
+        let sessions = state.sessions.lock().unwrap();
+        let active = sessions.active_session().unwrap();
+        assert_eq!(active.project.elements, original_elements);
+        assert!(active.project.groups.is_empty());
+        assert!(active.project.semantic_groups.is_empty());
+        assert_eq!(active.revision, 0);
+    }
+
+    #[test]
+    fn slot_grid_add_rejects_group_id_conflicts_before_mutating() {
+        let state = test_state();
+        let original_groups = vec![crate::project::Group {
+            id: "existing_group".to_string(),
+            x: 1,
+            y: 2,
+            elements: vec!["other_a".to_string(), "other_b".to_string()],
+        }];
+        {
+            let mut sessions = state.sessions.lock().unwrap();
+            let project_id = sessions.create_session(Project::new(
+                "Slot Grid Group Conflict",
+                176,
+                166,
+                ModTarget::Forge,
+            ));
+            sessions
+                .resolve_mut(Some(&project_id))
+                .unwrap()
+                .project
+                .groups = original_groups.clone();
+        }
+
+        let response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "slot-grid-group-conflict",
+                "method": "tools/call",
+                "params": {
+                    "name": "slot_grid_add",
+                    "arguments": {
+                        "id_prefix": "grid",
+                        "x": 8,
+                        "y": 18,
+                        "columns": 2,
+                        "rows": 1,
+                        "group_id": "existing_group"
+                    }
+                }
+            }),
+            &state,
+        );
+
+        assert_eq!(response["error"]["message"], "Group already exists");
+        let sessions = state.sessions.lock().unwrap();
+        let active = sessions.active_session().unwrap();
+        assert!(active.project.elements.is_empty());
+        assert_eq!(active.project.groups, original_groups);
+        assert!(active.project.semantic_groups.is_empty());
+        assert_eq!(active.revision, 0);
+    }
+
+    #[test]
+    fn slot_grid_add_replaces_existing_semantic_group_with_same_id() {
+        let state = test_state();
+        let original_group = SemanticGroup {
+            id: "player_inventory".to_string(),
+            kind: crate::project::SemanticGroupKind::Hotbar,
+            columns: Some(9),
+            visible_rows: Some(1),
+            total_rows: Some(1),
+            slot_count: Some(9),
+            data_source: Some("old".to_string()),
+            scroll_binding: None,
+            dynamic_height: false,
+        };
+        {
+            let mut sessions = state.sessions.lock().unwrap();
+            let project_id = sessions.create_session(Project::new(
+                "Slot Grid Semantic Replacement",
+                176,
+                166,
+                ModTarget::Forge,
+            ));
+            sessions
+                .resolve_mut(Some(&project_id))
+                .unwrap()
+                .project
+                .semantic_groups = vec![original_group];
+        }
+
+        let response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "slot-grid-semantic-replace",
+                "method": "tools/call",
+                "params": {
+                    "name": "slot_grid_add",
+                    "arguments": {
+                        "id_prefix": "player_inv",
+                        "x": 8,
+                        "y": 84,
+                        "columns": 2,
+                        "rows": 1,
+                        "inventory_group": "player_inventory",
+                        "semantic_group_kind": "player_inventory",
+                        "slot_count": 2
+                    }
+                }
+            }),
+            &state,
+        );
+
+        assert!(response["error"].is_null());
+        let sessions = state.sessions.lock().unwrap();
+        let active = sessions.active_session().unwrap();
+        assert_eq!(active.project.semantic_groups.len(), 1);
+        assert_eq!(active.project.semantic_groups[0].id, "player_inventory");
+        assert_eq!(
+            active.project.semantic_groups[0].kind,
+            crate::project::SemanticGroupKind::PlayerInventory
+        );
+        assert_eq!(active.project.semantic_groups[0].columns, Some(2));
+        assert_eq!(active.project.semantic_groups[0].slot_count, Some(2));
+        assert_eq!(active.revision, 1);
+    }
+
+    #[test]
+    fn slot_grid_add_rejects_out_of_range_integer_inputs_before_mutating() {
+        let state = test_state();
+        {
+            let mut sessions = state.sessions.lock().unwrap();
+            sessions.create_session(Project::new(
+                "Slot Grid Integer Ranges",
+                176,
+                166,
+                ModTarget::Forge,
+            ));
+        }
+
+        let x_response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "slot-grid-x-range",
+                "method": "tools/call",
+                "params": {
+                    "name": "slot_grid_add",
+                    "arguments": {
+                        "id_prefix": "grid",
+                        "x": 2147483648i64,
+                        "y": 18,
+                        "columns": 1,
+                        "rows": 1
+                    }
+                }
+            }),
+            &state,
+        );
+        let columns_response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "slot-grid-columns-range",
+                "method": "tools/call",
+                "params": {
+                    "name": "slot_grid_add",
+                    "arguments": {
+                        "id_prefix": "grid",
+                        "x": 8,
+                        "y": 18,
+                        "columns": 4294967297u64,
+                        "rows": 1
+                    }
+                }
+            }),
+            &state,
+        );
+        let slot_size_response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "slot-grid-slot-size-range",
+                "method": "tools/call",
+                "params": {
+                    "name": "slot_grid_add",
+                    "arguments": {
+                        "id_prefix": "grid",
+                        "x": 8,
+                        "y": 18,
+                        "columns": 1,
+                        "rows": 1,
+                        "slot_size": 4294967297u64
+                    }
+                }
+            }),
+            &state,
+        );
+
+        assert_eq!(x_response["error"]["message"], "x is out of range");
+        assert_eq!(
+            columns_response["error"]["message"],
+            "columns is out of range"
+        );
+        assert_eq!(
+            slot_size_response["error"]["message"],
+            "slot_size is out of range"
+        );
+        let sessions = state.sessions.lock().unwrap();
+        let active = sessions.active_session().unwrap();
+        assert!(active.project.elements.is_empty());
+        assert!(active.project.groups.is_empty());
+        assert_eq!(active.revision, 0);
+    }
+
+    #[test]
+    fn slot_grid_add_rejects_coordinate_overflow_before_mutating() {
+        let state = test_state();
+        {
+            let mut sessions = state.sessions.lock().unwrap();
+            sessions.create_session(Project::new(
+                "Slot Grid Coordinate Overflow",
+                176,
+                166,
+                ModTarget::Forge,
+            ));
+        }
+
+        let response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "slot-grid-coordinate-overflow",
+                "method": "tools/call",
+                "params": {
+                    "name": "slot_grid_add",
+                    "arguments": {
+                        "id_prefix": "grid",
+                        "x": i32::MAX,
+                        "y": 18,
+                        "columns": 2,
+                        "rows": 1,
+                        "spacing": 18
+                    }
+                }
+            }),
+            &state,
+        );
+
+        assert_eq!(
+            response["error"]["message"],
+            "slot grid x coordinate overflow"
+        );
+        let sessions = state.sessions.lock().unwrap();
+        let active = sessions.active_session().unwrap();
+        assert!(active.project.elements.is_empty());
+        assert!(active.project.groups.is_empty());
+        assert!(active.project.semantic_groups.is_empty());
+        assert_eq!(active.revision, 0);
     }
 
     #[test]
