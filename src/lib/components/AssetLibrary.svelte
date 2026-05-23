@@ -197,19 +197,19 @@
     font-size: 11px;
     text-transform: uppercase;
     letter-spacing: 1px;
-    color: #606080;
+    color: var(--muted-text);
     margin-bottom: 8px;
   }
 
   .muted {
-    color: #505060;
+    color: var(--muted-text);
     font-size: 12px;
   }
 
   .import-btn {
-    background: #0f3460;
-    border: 1px solid #1a5aa0;
-    color: #a0b0d0;
+    background: var(--surface-raised);
+    border: 1px solid var(--accent-2);
+    color: var(--muted-text);
     padding: 4px 8px;
     font-size: 11px;
     cursor: pointer;
@@ -220,8 +220,8 @@
   }
 
   .import-btn:hover {
-    background: #1a5aa0;
-    color: #e0e0e0;
+    background: var(--accent-2);
+    color: var(--text);
   }
 
   .asset-grid {
@@ -237,8 +237,8 @@
   }
 
   .asset-thumb {
-    background: #12121f;
-    border: 1px solid #0f3460;
+    background: var(--app-bg);
+    border: 1px solid var(--border);
     border-radius: 4px;
     padding: 4px;
     cursor: pointer;
@@ -250,7 +250,7 @@
   }
 
   .asset-thumb:hover {
-    border-color: #e94560;
+    border-color: var(--accent);
   }
 
   .asset-thumb img {
@@ -266,13 +266,13 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    color: #505060;
+    color: var(--muted-text);
     font-size: 18px;
   }
 
   .asset-label {
     font-size: 10px;
-    color: #808090;
+    color: var(--muted-text);
     font-family: monospace;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -283,7 +283,7 @@
   .remove-btn {
     background: transparent;
     border: none;
-    color: #505060;
+    color: var(--muted-text);
     font-size: 12px;
     cursor: pointer;
     padding: 1px;
@@ -292,7 +292,7 @@
   }
 
   .remove-btn:hover {
-    color: #e94560;
+    color: var(--danger);
   }
 
   .font-list {
@@ -307,15 +307,16 @@
     align-items: center;
     padding: 3px 6px;
     font-size: 11px;
-    color: #a0b0d0;
-    background: #0a0a18;
+    color: var(--text);
+    background: var(--surface-raised);
+    border: 1px solid var(--border);
     border-radius: 3px;
     margin-bottom: 2px;
   }
 
   .font-type {
     font-size: 9px;
-    color: #505060;
+    color: var(--muted-text);
     text-transform: uppercase;
   }
 </style>

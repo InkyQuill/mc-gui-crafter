@@ -10,6 +10,10 @@ struct LayoutData {
     elements: Vec<crate::project::Element>,
     #[serde(default)]
     groups: Vec<crate::project::Group>,
+    #[serde(default)]
+    semantic_groups: Vec<crate::project::SemanticGroup>,
+    #[serde(default)]
+    export_settings: crate::project::ProjectExportSettings,
 }
 
 #[derive(Deserialize)]
@@ -46,6 +50,8 @@ pub fn load_from_mcgui(path: &str) -> Result<Project, String> {
     let mut project = Project::new(&name, gui_width, gui_height, mod_target);
     project.elements = layout.elements;
     project.groups = layout.groups;
+    project.semantic_groups = layout.semantic_groups;
+    project.export_settings = layout.export_settings;
 
     // Read animations
     if let Ok(anim_json) = read_json_entry(&mut archive, "animations.json") {
@@ -117,6 +123,8 @@ pub fn save_to_mcgui(project: &Project) -> Result<(), String> {
     let layout = serde_json::json!({
         "elements": project.elements,
         "groups": project.groups,
+        "semantic_groups": project.semantic_groups,
+        "export_settings": project.export_settings,
     });
     zip_writer
         .start_file("layout.json", options)
@@ -187,8 +195,9 @@ mod tests {
     use super::*;
     use crate::animation::{Animation, AnimationType};
     use crate::project::{
-        Element, ElementType, FillDirection, FontAsset, FontSource, GlyphInfo, GlyphMap, Group,
-        Layer, ModTarget, Project, UvRect,
+        CodegenMode, Element, ElementType, FillDirection, FontAsset, FontSource, GlyphInfo,
+        GlyphMap, Group, Layer, ModTarget, Project, ProjectExportSettings, SemanticGroup,
+        SemanticGroupKind, UvRect,
     };
 
     fn temp_project_path() -> String {
@@ -229,6 +238,20 @@ mod tests {
                 height: 10,
             }),
             layer: Layer::Background,
+            slot_role: None,
+            slot_index: None,
+            inventory_group: None,
+            scroll_binding: None,
+            scroll_min: None,
+            scroll_max: None,
+            visible_rows: None,
+            total_rows: None,
+            columns: None,
+            target_group: None,
+            binding: None,
+            dock: None,
+            open_width: None,
+            open_height: None,
         });
         project.groups.push(Group {
             id: "group_1".to_string(),
@@ -317,5 +340,35 @@ mod tests {
             }
             FontSource::Minecraft { .. } => panic!("expected TTF font"),
         }
+    }
+
+    #[test]
+    fn mcgui_round_trip_preserves_semantic_groups_and_export_settings() {
+        let path = temp_project_path();
+        let mut project = Project::new("Semantic", 176, 166, ModTarget::Forge);
+        project.project_path = Some(path.clone());
+        project.semantic_groups.push(SemanticGroup {
+            id: "buffer".to_string(),
+            kind: SemanticGroupKind::VirtualSlotGrid,
+            columns: Some(9),
+            visible_rows: Some(3),
+            total_rows: Some(6),
+            slot_count: Some(54),
+            data_source: Some("machine_buffer".to_string()),
+            scroll_binding: Some("buffer_scroll".to_string()),
+            dynamic_height: true,
+        });
+        project.export_settings = ProjectExportSettings {
+            codegen_mode: CodegenMode::Modular,
+            generate_runtime_helpers: false,
+            generate_semantic_registry: true,
+        };
+
+        save_to_mcgui(&project).unwrap();
+        let loaded = load_from_mcgui(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+
+        assert_eq!(loaded.semantic_groups, project.semantic_groups);
+        assert_eq!(loaded.export_settings, project.export_settings);
     }
 }

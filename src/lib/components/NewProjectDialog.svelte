@@ -83,7 +83,7 @@
   async function handleCreate() {
     const template = selectedTemplate === "empty" ? undefined : selectedTemplate;
     await project.newProject("Untitled GUI", width, height, modTarget, template);
-    editor.resetView();
+    editor.resetView(project.guiSize);
     onclose();
   }
 
@@ -246,8 +246,8 @@
     width: min(560px, calc(100vw - 32px));
     max-height: calc(100vh - 32px);
     overflow: auto;
-    background: #1a1a2e;
-    border: 1px solid #0f3460;
+    background: var(--surface);
+    border: 1px solid var(--border);
     border-radius: 8px;
     padding: 16px;
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
@@ -255,7 +255,7 @@
 
   h2 {
     font-size: 15px;
-    color: #e0e0e0;
+    color: var(--text);
     margin: 0 0 12px;
   }
 
@@ -267,38 +267,38 @@
   }
 
   .template-card {
-    background: #12121f;
-    border: 1px solid #0f3460;
+    background: var(--app-bg);
+    border: 1px solid var(--border);
     border-radius: 6px;
     padding: 10px;
     cursor: pointer;
     text-align: left;
     font-family: inherit;
-    color: #a0a0b0;
+    color: var(--muted-text);
     transition: border-color 0.15s;
   }
 
   .template-card:hover {
-    border-color: #e94560;
+    border-color: var(--accent);
   }
 
   .template-card.selected {
-    border-color: #e94560;
-    background: #1a0f1f;
+    border-color: var(--accent);
+    background: var(--surface);
   }
 
   .template-name {
     display: block;
     font-size: 13px;
     font-weight: 600;
-    color: #e0e0e0;
+    color: var(--text);
     text-transform: capitalize;
   }
 
   .template-size {
     display: block;
     font-size: 11px;
-    color: #e94560;
+    color: var(--accent);
     font-family: monospace;
     margin-top: 2px;
   }
@@ -306,14 +306,14 @@
   .template-desc {
     display: block;
     font-size: 11px;
-    color: #606080;
+    color: var(--muted-text);
     margin-top: 4px;
   }
 
   .template-elements {
     display: block;
     font-size: 10px;
-    color: #505060;
+    color: var(--muted-text);
     margin-top: 2px;
   }
 
@@ -327,15 +327,15 @@
 
   .form-row label {
     font-size: 11px;
-    color: #606080;
+    color: var(--muted-text);
     min-width: 45px;
   }
 
   input[type="number"],
   select {
-    background: #12121f;
-    border: 1px solid #0f3460;
-    color: #e0e0e0;
+    background: var(--app-bg);
+    border: 1px solid var(--border);
+    color: var(--text);
     padding: 4px 8px;
     font-size: 12px;
     font-family: monospace;
@@ -350,13 +350,13 @@
 
   input:focus,
   select:focus {
-    outline: 2px solid #e94560;
+    outline: 2px solid var(--accent);
     outline-offset: 2px;
   }
 
   .custom-grid-options {
-    background: #12121f;
-    border: 1px solid #0f3460;
+    background: var(--app-bg);
+    border: 1px solid var(--border);
     border-radius: 6px;
     padding: 10px;
     margin-bottom: 12px;
@@ -370,13 +370,13 @@
   }
 
   .custom-grid-header > span:first-child {
-    color: #e0e0e0;
+    color: var(--text);
     font-size: 12px;
     font-weight: 600;
   }
 
   .custom-grid-note {
-    color: #808090;
+    color: var(--muted-text);
     font-size: 11px;
     line-height: 1.35;
     overflow-wrap: anywhere;
@@ -398,7 +398,7 @@
     grid-template-columns: minmax(0, 1fr) 56px;
     align-items: center;
     gap: 6px;
-    color: #606080;
+    color: var(--muted-text);
     font-size: 11px;
   }
 
@@ -410,7 +410,7 @@
     display: flex;
     align-items: center;
     gap: 6px;
-    color: #a0a0b0;
+    color: var(--muted-text);
     font-size: 11px;
     min-height: 26px;
   }
@@ -442,29 +442,29 @@
 
   .cancel-btn {
     background: transparent;
-    border: 1px solid #0f3460;
-    color: #808090;
+    border: 1px solid var(--border);
+    color: var(--muted-text);
   }
 
   .cancel-btn:hover {
-    background: #0f3460;
+    background: var(--surface-raised);
   }
 
   .create-btn {
-    background: #e94560;
-    border: 1px solid #e94560;
-    color: #12121f;
+    background: var(--accent);
+    border: 1px solid var(--accent);
+    color: var(--app-bg);
     font-weight: 600;
   }
 
   .create-btn:hover {
-    background: #ff5a7a;
+    background: var(--accent);
   }
 
   .cancel-btn:focus-visible,
   .create-btn:focus-visible,
   .template-card:focus-visible {
-    outline: 2px solid #e94560;
+    outline: 2px solid var(--accent);
     outline-offset: 2px;
   }
 

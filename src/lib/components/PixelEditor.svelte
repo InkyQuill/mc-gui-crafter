@@ -256,8 +256,8 @@
   }
 
   .pixel-editor {
-    background: #1a1a2e;
-    border: 1px solid #0f3460;
+    background: var(--surface);
+    border: 1px solid var(--border);
     border-radius: 8px;
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
     min-width: 400px;
@@ -272,13 +272,13 @@
     align-items: center;
     gap: 8px;
     padding: 8px 12px;
-    border-bottom: 1px solid #0f3460;
+    border-bottom: 1px solid var(--border);
     flex-wrap: wrap;
   }
 
   .pe-title {
     font-size: 13px;
-    color: #e0e0e0;
+    color: var(--text);
     font-family: monospace;
     min-width: 0;
     overflow: hidden;
@@ -288,7 +288,7 @@
 
   .pe-size {
     font-size: 11px;
-    color: #606080;
+    color: var(--muted-text);
     font-family: monospace;
     flex: 0 0 auto;
   }
@@ -297,7 +297,7 @@
     display: inline-flex;
     flex: 0 0 auto;
     overflow: hidden;
-    border: 1px solid #0f3460;
+    border: 1px solid var(--border);
     border-radius: 4px;
   }
 
@@ -305,10 +305,10 @@
     min-width: 32px;
     height: 24px;
     padding: 0 7px;
-    background: #12121f;
+    background: var(--app-bg);
     border: 0;
-    border-right: 1px solid #0f3460;
-    color: #808090;
+    border-right: 1px solid var(--border);
+    color: var(--muted-text);
     font-size: 10px;
     font-family: inherit;
     cursor: pointer;
@@ -320,15 +320,15 @@
 
   .pe-zoom button:hover,
   .pe-zoom button.active {
-    background: #1a0f1f;
-    color: #e94560;
+    background: var(--surface);
+    color: var(--accent);
   }
 
   .pe-close {
     margin-left: auto;
     background: transparent;
     border: 1px solid transparent;
-    color: #a0a0b0;
+    color: var(--muted-text);
     width: 28px;
     height: 28px;
     padding: 0;
@@ -341,7 +341,7 @@
     justify-content: center;
   }
 
-  .pe-close:hover { background: #0f3460; color: #e0e0e0; }
+  .pe-close:hover { background: var(--surface-raised); color: var(--text); }
 
   .pe-body {
     display: flex;
@@ -360,8 +360,8 @@
 
   .pe-tools button {
     background: transparent;
-    border: 1px solid #0f3460;
-    color: #808090;
+    border: 1px solid var(--border);
+    color: var(--muted-text);
     width: 32px;
     height: 32px;
     font-size: 14px;
@@ -373,27 +373,27 @@
   }
 
   .pe-tools button:hover, .pe-tools button.active {
-    border-color: #e94560;
-    color: #e94560;
-    background: #1a0f1f;
+    border-color: var(--accent);
+    color: var(--accent);
+    background: var(--surface);
   }
 
   .sep {
-    border-top: 1px solid #0f3460;
+    border-top: 1px solid var(--border);
     width: 100%;
     margin: 4px 0;
   }
 
   .pe-size-label {
     font-size: 9px;
-    color: #505060;
+    color: var(--muted-text);
   }
 
   .pe-size-input {
     width: 40px;
-    background: #12121f;
-    border: 1px solid #0f3460;
-    color: #e0e0e0;
+    background: var(--app-bg);
+    border: 1px solid var(--border);
+    color: var(--text);
     font-size: 11px;
     text-align: center;
     border-radius: 2px;
@@ -414,7 +414,7 @@
       linear-gradient(-45deg, transparent 75%, #222 75%);
     background-size: 16px 16px;
     background-position: 0 0, 0 8px, 8px -8px, -8px 0px;
-    border: 1px solid #0f3460;
+    border: 1px solid var(--border);
     border-radius: 4px;
     min-height: 200px;
     max-width: calc(100vw - 144px);
@@ -451,7 +451,7 @@
   .pe-color-picker {
     width: 40px;
     height: 40px;
-    border: 1px solid #0f3460;
+    border: 1px solid var(--border);
     border-radius: 4px;
     cursor: pointer;
     padding: 0;
@@ -459,7 +459,7 @@
 
   .pe-hex {
     font-size: 10px;
-    color: #808090;
+    color: var(--muted-text);
     font-family: monospace;
   }
 
@@ -472,7 +472,7 @@
   .pe-swatch {
     width: 20px;
     height: 20px;
-    border: 1px solid #0f3460;
+    border: 1px solid var(--border);
     border-radius: 2px;
     cursor: pointer;
     padding: 0;
@@ -489,13 +489,13 @@
     justify-content: flex-end;
     gap: 8px;
     padding: 8px 12px;
-    border-top: 1px solid #0f3460;
+    border-top: 1px solid var(--border);
     flex-wrap: wrap;
   }
 
   .pe-error {
     margin-right: auto;
-    color: #ff7a90;
+    color: var(--danger);
     font-size: 11px;
   }
 
@@ -509,14 +509,14 @@
 
   .pe-cancel {
     background: transparent;
-    border: 1px solid #0f3460;
-    color: #808090;
+    border: 1px solid var(--border);
+    color: var(--muted-text);
   }
 
   .pe-save {
-    background: #e94560;
-    border: 1px solid #e94560;
-    color: #12121f;
+    background: var(--accent);
+    border: 1px solid var(--accent);
+    color: var(--app-bg);
     font-weight: 600;
   }
 
@@ -527,7 +527,7 @@
 
   button:focus-visible,
   input:focus-visible {
-    outline: 2px solid #e94560;
+    outline: 2px solid var(--accent);
     outline-offset: 2px;
   }
 

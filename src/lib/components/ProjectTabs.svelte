@@ -46,7 +46,7 @@
     flex: 1 1 120px;
     min-width: 90px;
     overflow: hidden;
-    border-left: 1px solid #0f3460;
+    border-left: 1px solid var(--border);
   }
 
   .tab {
@@ -55,13 +55,13 @@
     min-width: 72px;
     max-width: 180px;
     flex: 1 1 132px;
-    border-right: 1px solid #0f3460;
-    background: #121a32;
+    border-right: 1px solid var(--border);
+    background: var(--surface);
   }
 
   .tab.active {
-    background: #1a1a2e;
-    box-shadow: inset 0 -2px 0 #e94560;
+    background: var(--surface);
+    box-shadow: inset 0 -2px 0 var(--accent);
   }
 
   .tab-main,
@@ -69,7 +69,7 @@
     height: 28px;
     border: 0;
     background: transparent;
-    color: #a0a0b0;
+    color: var(--muted-text);
     font-family: inherit;
     cursor: pointer;
     border-radius: 3px;
@@ -99,20 +99,20 @@
 
   .tab-main:hover,
   .tab-close:hover {
-    color: #e0e0e0;
-    background: #0f3460;
+    color: var(--text);
+    background: var(--surface-raised);
   }
 
   .tab-main:focus-visible,
   .tab-close:focus-visible {
-    outline: 2px solid #e94560;
+    outline: 2px solid var(--accent);
     outline-offset: -2px;
   }
 
   .dirty {
     width: 8px;
     flex: 0 0 8px;
-    color: #e9a23b;
+    color: var(--warning);
     font-size: 9px;
   }
 

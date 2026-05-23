@@ -1,9 +1,14 @@
 <script lang="ts">
   import { project } from "../stores/project.svelte";
   import { editor } from "../stores/editor.svelte";
+  import type { CodegenMode, Element, SlotRole } from "../types";
 
-  let selectedEl = $derived(editor.selectedElementId ? project.elementById(editor.selectedElementId) : null);
-  let selectedGroup = $derived(editor.selectedElementId ? project.groupForElement(editor.selectedElementId) : null);
+  let selectedElementId = $derived.by(() => {
+    void editor.selectionRevision;
+    return editor.selectedElementId;
+  });
+  let selectedEl = $derived(selectedElementId ? project.elementById(selectedElementId) : null);
+  let selectedGroup = $derived(selectedElementId ? project.groupForElement(selectedElementId) : null);
   let fontOptions = $derived.by(() => {
     const options = project.fonts.filter((font, index, fonts) => fonts.findIndex(candidate => candidate.id === font.id) === index);
     if (!options.some(font => font.id === "minecraft:default")) {
@@ -11,10 +16,27 @@
     }
     return options;
   });
+  const slotRoleOptions: SlotRole[] = [
+    "machine",
+    "player_inventory",
+    "hotbar",
+    "scrollable_inventory",
+    "virtual_storage",
+    "upgrade",
+    "upgrade_settings",
+    "filter",
+    "ghost",
+    "offhand",
+  ];
 
   function updateProp(key: string, value: unknown) {
     if (!editor.selectedElementId) return;
     project.updateElement(editor.selectedElementId, { [key]: value });
+  }
+
+  function updateSelectedElement(changes: Partial<Element>) {
+    if (!selectedEl) return;
+    project.updateElement(selectedEl.id, changes);
   }
 
   function numberValue(value: string, fallback = 0): number {
@@ -33,10 +55,55 @@
     };
     updateProp("uv", next);
   }
+
+  function optionalText(value: string): string | null {
+    return value.trim() || null;
+  }
+
+  function optionalU32(value: string): number | null | undefined {
+    if (value === "") return null;
+    if (!/^\d+$/.test(value)) return undefined;
+    const parsed = Number(value);
+    return Number.isSafeInteger(parsed) ? parsed : undefined;
+  }
+
+  function updateOptionalU32(key: "slot_index" | "columns" | "visible_rows" | "total_rows", value: string) {
+    const parsed = optionalU32(value);
+    if (parsed !== undefined) {
+      updateSelectedElement({ [key]: parsed });
+    }
+  }
 </script>
 
 <aside class="properties">
   <h3>Properties</h3>
+
+  {#if project.isOpen}
+    <div class="props-form project-form">
+      <div class="prop-row">
+        <label for="project-codegen-mode">Code Gen</label>
+        <select
+          id="project-codegen-mode"
+          value={project.exportSettings.codegen_mode}
+          onchange={(event) => project.updateExportSettings({ codegen_mode: event.currentTarget.value as CodegenMode })}
+        >
+          <option value="simple">Simple</option>
+          <option value="modular">Modular</option>
+        </select>
+      </div>
+      <div class="prop-row">
+        <label for="project-runtime-helpers">Runtime</label>
+        <input
+          id="project-runtime-helpers"
+          type="checkbox"
+          checked={project.exportSettings.generate_runtime_helpers}
+          onchange={(event) => project.updateExportSettings({ generate_runtime_helpers: event.currentTarget.checked })}
+        />
+      </div>
+    </div>
+
+    <hr class="divider" />
+  {/if}
 
   {#if selectedEl}
     <div class="props-form">
@@ -116,6 +183,102 @@
             value={selectedEl.height ?? ""}
             oninput={(e) => updateProp("height", parseInt(e.currentTarget.value) || undefined)}
           />
+        </div>
+      {/if}
+
+      {#if selectedEl.type === "slot" || selectedEl.type === "virtual_slot_cell"}
+        <div class="prop-section">
+          <div class="section-title">Slot</div>
+          <div class="prop-row">
+            <label for="prop-slot-role">Role</label>
+            <select
+              id="prop-slot-role"
+              value={selectedEl.slot_role ?? ""}
+              onchange={(e) => updateSelectedElement({ slot_role: (e.currentTarget.value || null) as SlotRole | null })}
+            >
+              <option value="">(none)</option>
+              {#each slotRoleOptions as role (role)}
+                <option value={role}>{role}</option>
+              {/each}
+            </select>
+          </div>
+          <div class="prop-row">
+            <label for="prop-inventory-group">Group</label>
+            <input
+              id="prop-inventory-group"
+              type="text"
+              value={selectedEl.inventory_group ?? ""}
+              oninput={(e) => updateSelectedElement({ inventory_group: optionalText(e.currentTarget.value) })}
+            />
+          </div>
+          <div class="prop-row">
+            <label for="prop-slot-index">Index</label>
+            <input
+              id="prop-slot-index"
+              type="number"
+              min="0"
+              step="1"
+              value={selectedEl.slot_index ?? ""}
+              oninput={(e) => updateOptionalU32("slot_index", e.currentTarget.value)}
+            />
+          </div>
+          <div class="prop-row">
+            <label for="prop-scroll-binding">Scroll</label>
+            <input
+              id="prop-scroll-binding"
+              type="text"
+              value={selectedEl.scroll_binding ?? ""}
+              oninput={(e) => updateSelectedElement({ scroll_binding: optionalText(e.currentTarget.value) })}
+            />
+          </div>
+        </div>
+      {/if}
+
+      {#if selectedEl.type === "scrollbar"}
+        <div class="prop-section">
+          <div class="section-title">Scrollbar</div>
+          <div class="prop-row">
+            <label for="prop-scroll-columns">Columns</label>
+            <input
+              id="prop-scroll-columns"
+              type="number"
+              min="0"
+              step="1"
+              value={selectedEl.columns ?? ""}
+              oninput={(e) => updateOptionalU32("columns", e.currentTarget.value)}
+            />
+          </div>
+          <div class="prop-row">
+            <label for="prop-visible-rows">Visible</label>
+            <input
+              id="prop-visible-rows"
+              type="number"
+              min="0"
+              step="1"
+              value={selectedEl.visible_rows ?? ""}
+              oninput={(e) => updateOptionalU32("visible_rows", e.currentTarget.value)}
+            />
+          </div>
+          <div class="prop-row">
+            <label for="prop-total-rows">Total</label>
+            <input
+              id="prop-total-rows"
+              type="number"
+              min="0"
+              step="1"
+              value={selectedEl.total_rows ?? ""}
+              oninput={(e) => updateOptionalU32("total_rows", e.currentTarget.value)}
+            />
+          </div>
+          <div class="prop-row">
+            <label for="prop-target-group">Target</label>
+            <input
+              id="prop-target-group"
+              type="text"
+              value={selectedEl.target_group ?? ""}
+              oninput={(e) => updateSelectedElement({ target_group: optionalText(e.currentTarget.value) })}
+            />
+          </div>
         </div>
       {/if}
 
@@ -281,12 +444,12 @@
     font-size: 11px;
     text-transform: uppercase;
     letter-spacing: 1px;
-    color: #606080;
+    color: var(--muted-text);
     margin-bottom: 8px;
   }
 
   .muted {
-    color: #505060;
+    color: var(--muted-text);
     font-size: 12px;
   }
 
@@ -294,6 +457,10 @@
     display: flex;
     flex-direction: column;
     gap: 6px;
+  }
+
+  .project-form {
+    margin-bottom: 8px;
   }
 
   .prop-row {
@@ -305,14 +472,14 @@
   .prop-label,
   .prop-row label {
     font-size: 11px;
-    color: #606080;
+    color: var(--muted-text);
     width: 55px;
     flex-shrink: 0;
   }
 
   .prop-value {
     font-size: 12px;
-    color: #a0a0b0;
+    color: var(--muted-text);
   }
 
   .prop-value.mono {
@@ -324,13 +491,13 @@
     display: flex;
     flex-direction: column;
     gap: 6px;
-    border-top: 1px solid #0f3460;
+    border-top: 1px solid var(--border);
     padding-top: 8px;
     margin-top: 2px;
   }
 
   .section-title {
-    color: #606080;
+    color: var(--muted-text);
     font-size: 11px;
     text-transform: uppercase;
     letter-spacing: 0.5px;
@@ -351,9 +518,9 @@
   input[type="text"],
   select {
     flex: 1;
-    background: #12121f;
-    border: 1px solid #0f3460;
-    color: #e0e0e0;
+    background: var(--app-bg);
+    border: 1px solid var(--border);
+    color: var(--text);
     padding: 3px 6px;
     font-size: 11px;
     font-family: monospace;
@@ -365,11 +532,11 @@
   input[type="text"]:focus,
   select:focus {
     outline: none;
-    border-color: #e94560;
+    border-color: var(--accent);
   }
 
   input[type="checkbox"] {
-    accent-color: #e94560;
+    accent-color: var(--accent);
   }
 
   select {
@@ -378,14 +545,14 @@
 
   .divider {
     border: none;
-    border-top: 1px solid #0f3460;
+    border-top: 1px solid var(--border);
     margin: 8px 0;
   }
 
   .delete-btn {
     background: transparent;
-    border: 1px solid #e94560;
-    color: #e94560;
+    border: 1px solid var(--danger);
+    color: var(--danger);
     padding: 4px 8px;
     font-size: 11px;
     cursor: pointer;
@@ -396,8 +563,8 @@
 
   .secondary-btn {
     background: transparent;
-    border: 1px solid #0f3460;
-    color: #a0a0b0;
+    border: 1px solid var(--border);
+    color: var(--muted-text);
     padding: 4px 8px;
     font-size: 11px;
     cursor: pointer;
@@ -407,12 +574,12 @@
   }
 
   .secondary-btn:hover {
-    background: #0f3460;
-    color: #e0e0e0;
+    background: var(--surface-raised);
+    color: var(--text);
   }
 
   .delete-btn:hover {
-    background: #e94560;
-    color: #12121f;
+    background: var(--danger);
+    color: var(--app-bg);
   }
 </style>

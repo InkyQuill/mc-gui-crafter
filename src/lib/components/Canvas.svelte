@@ -13,8 +13,9 @@
     initialized = true;
 
     const r = new GuiRenderer(containerEl);
-    renderer = r;
     r.init().then(() => {
+      renderer = r;
+      editor.resetView(project.guiSize);
       r.render();
     });
 
@@ -35,17 +36,23 @@
     void project.assets.length;
     void project.animations.length;
     void project.groups.length;
+    void project.fontRenderDataVersion;
     for (const group of project.groups) {
       void group.id;
       void group.elements.length;
     }
     for (const element of project.elements) {
+      void element.type;
       void element.x;
       void element.y;
       void element.width;
       void element.height;
       void element.size;
       void element.asset;
+      void element.content;
+      void element.font;
+      void element.color;
+      void element.shadow;
       void element.visible;
       void element.animation;
       void element.uv?.x;
@@ -75,6 +82,7 @@
 
   // Re-render when selection changes
   $effect(() => {
+    void editor.selectionRevision;
     void editor.selectedElementId;
     if (renderer) {
       renderer.render();

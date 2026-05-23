@@ -5,7 +5,7 @@
   "identifier": "net.inkyquill.mc-gui-crafter",
   "build": {
     "frontendDist": "../dist",
-    "devUrl": "http://localhost:1420",
+    "devUrl": "http://127.0.0.1:49320",
     "beforeDevCommand": "npm run dev",
     "beforeBuildCommand": "npm run build"
   },
@@ -22,15 +22,6 @@
     ],
     "security": {
       "csp": null
-    }
-  },
-  "plugins": {
-    "dialog": {},
-    "fs": {
-      "scope": {
-        "allow": ["**"],
-        "deny": []
-      }
     }
   }
 }

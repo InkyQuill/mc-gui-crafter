@@ -11,7 +11,9 @@ struct BitmapProviderJson {
     provider_type: String,
     file: Option<String>,
     ascent: Option<i32>,
+    height: Option<u32>,
     chars: Option<Vec<String>>,
+    advances: Option<std::collections::HashMap<char, u32>>,
 }
 
 /// Parse a Minecraft font JSON file into a list of BitmapProviders and a GlyphMap.
@@ -38,6 +40,7 @@ pub fn parse_font_json(
             "bitmap" => {
                 let file = provider.file.clone().unwrap_or_default();
                 let ascent = provider.ascent.unwrap_or(8);
+                let height = provider.height.unwrap_or(8);
                 let chars = provider.chars.clone().unwrap_or_default();
 
                 let bp = crate::project::BitmapProvider {
@@ -51,16 +54,18 @@ pub fn parse_font_json(
 
                 // Build glyph map from character grid
                 for (row, line) in chars.iter().enumerate() {
+                    let column_count = line.chars().count().max(1) as u32;
+                    let glyph_width = 128 / column_count;
                     for (col, ch) in line.chars().enumerate() {
                         glyph_map.insert(
                             ch,
                             crate::project::GlyphInfo {
-                                x: col as u32 * 8, // default glyph width
-                                y: row as u32 * 8, // default glyph height
-                                width: 8,
-                                height: 8,
+                                x: col as u32 * glyph_width,
+                                y: row as u32 * height,
+                                width: glyph_width,
+                                height,
                                 ascent,
-                                advance: 8,
+                                advance: glyph_width,
                                 bearing_x: 0,
                                 bearing_y: 0,
                             },
@@ -75,17 +80,30 @@ pub fn parse_font_json(
             }
             "space" => {
                 // Space providers add whitespace mappings
-                for ch in [
-                    ' ', '\u{2003}', '\u{2002}', '\u{2004}', '\u{2005}', '\u{2006}', '\u{2007}',
-                    '\u{2008}', '\u{2009}', '\u{200a}',
-                ] {
+                let default_advances = [
+                    (' ', 4),
+                    ('\u{2003}', 8),
+                    ('\u{2002}', 4),
+                    ('\u{2004}', 2),
+                    ('\u{2005}', 2),
+                    ('\u{2006}', 1),
+                    ('\u{2007}', 4),
+                    ('\u{2008}', 2),
+                    ('\u{2009}', 1),
+                    ('\u{200a}', 1),
+                ];
+                for (ch, advance) in provider.advances.unwrap_or_else(|| {
+                    default_advances
+                        .into_iter()
+                        .collect::<std::collections::HashMap<_, _>>()
+                }) {
                     glyph_map.entry(ch).or_insert(crate::project::GlyphInfo {
                         x: 0,
                         y: 0,
                         width: 4,
                         height: 0,
                         ascent: 0,
-                        advance: 4,
+                        advance,
                         bearing_x: 0,
                         bearing_y: 0,
                     });

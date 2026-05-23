@@ -1,15 +1,72 @@
-import { Application, Container, Graphics, Rectangle, Text, TextStyle, Sprite, Texture } from "pixi.js";
+import { Application, Assets, Container, Graphics, Rectangle, Text, TextStyle, Sprite, Texture } from "pixi.js";
 import type { Element, FontRenderData, GlyphInfo, MinecraftFontProviderRenderData, Layer } from "../types";
 import { project, assetDataUrls } from "../stores/project.svelte";
 import { editor } from "../stores/editor.svelte";
 import { preferences } from "../stores/preferences.svelte";
 
 const SELECTED_TINT = 0xffff00;
+const LEGACY_BACKGROUND_TEXTURE = "textures/background.png";
+
+const GENERATED_TEXTURES = new Set([
+  LEGACY_BACKGROUND_TEXTURE,
+  "textures/generated/gui_panel.png",
+  "textures/generated/slot.png",
+  "textures/generated/progress_arrow.png",
+  "textures/generated/fluid_tank.png",
+  "textures/generated/energy_bar.png",
+  "textures/generated/scrollbar.png",
+]);
+
+function isGeneratedTexturePath(path: string | undefined): boolean {
+  return path !== undefined && GENERATED_TEXTURES.has(path);
+}
+
+function canvasPalette() {
+  switch (preferences.values.theme) {
+    case "light":
+      return {
+        background: 0x9f9f9f,
+        guiFill: 0xd8d8d8,
+        line: 0x4a4a4a,
+        border: 0x4a4a4a,
+        guiAlpha: 0.42,
+        minorAlpha: editor.zoom >= 2 ? 0.12 : 0,
+        majorAlpha: 0.22,
+        borderAlpha: 0.55,
+      };
+    case "high_contrast":
+      return {
+        background: 0x000000,
+        guiFill: 0x000000,
+        line: 0xffffff,
+        border: 0xffffff,
+        guiAlpha: 0.9,
+        minorAlpha: editor.zoom >= 2 ? 0.2 : 0,
+        majorAlpha: 0.5,
+        borderAlpha: 1,
+      };
+    default:
+      return {
+        background: 0x101214,
+        guiFill: 0xb8b8b8,
+        line: 0xffffff,
+        border: 0xffffff,
+        guiAlpha: 0.3,
+        minorAlpha: editor.zoom >= 2 ? 0.1 : 0,
+        majorAlpha: 0.25,
+        borderAlpha: 0.5,
+      };
+  }
+}
 
 const LAYER_ORDER: Record<Layer, number> = {
   background: 0,
   overlay: 1,
   animatable: 2,
+};
+
+type CanvasPointerEvent = PointerEvent & {
+  global?: { x: number; y: number };
 };
 
 export class GuiRenderer {
@@ -25,7 +82,17 @@ export class GuiRenderer {
   private cleanupFns: (() => void)[] = [];
   private dragStartPositions = new Map<string, { x: number; y: number }>();
   private glyphTextureCache = new Map<string, Texture>();
+  private fontSourceTextureCache = new Map<string, Texture>();
+  private textTextureCache = new Map<string, Texture>();
+  private loadingFontSources = new Set<string>();
   private glyphTextureCacheVersion = -1;
+  private spacePanning = false;
+  private isPanning = false;
+  private panStartX = 0;
+  private panStartY = 0;
+  private panOrigX = 0;
+  private panOrigY = 0;
+  private renderFrame: number | null = null;
 
   constructor(containerEl: HTMLElement) {
     this.containerEl = containerEl;
@@ -49,7 +116,7 @@ export class GuiRenderer {
     await this.app.init({
       width: rect.width,
       height: rect.height,
-      backgroundColor: 0x12121f,
+      backgroundColor: canvasPalette().background,
       antialias: true,
       resolution: window.devicePixelRatio || 1,
       autoDensity: true,
@@ -70,6 +137,7 @@ export class GuiRenderer {
 
     this.setupEvents();
     this.setupResizeObserver();
+    this.updateTransform();
     this.render();
   }
 
@@ -88,16 +156,22 @@ export class GuiRenderer {
 
   private setupEvents() {
     const stage = this.app.stage;
+    const isPanMode = () => editor.tool === "pan" || this.spacePanning;
 
-    const onPointerMove = (e: PointerEvent) => {
-      const gui = this.screenToGui(e.offsetX, e.offsetY);
+    const onPointerMove = (e: CanvasPointerEvent) => {
+      const pointer = this.pointerCanvasPosition(e);
+      const gui = this.screenToGui(pointer.x, pointer.y);
       editor.mouseGuiX = gui.x;
       editor.mouseGuiY = gui.y;
       this.updateCursorLabel(gui.x, gui.y);
 
       // Update cursor for resize handles
       let cursor = "crosshair";
-      if (editor.isResizing) {
+      if (this.isPanning) {
+        cursor = "grabbing";
+      } else if (isPanMode()) {
+        cursor = "grab";
+      } else if (editor.isResizing) {
         cursor = "nwse-resize";
       } else if (editor.tool === "select" && editor.selectedElementId) {
         const selEl = project.elementById(editor.selectedElementId);
@@ -109,9 +183,16 @@ export class GuiRenderer {
         this.app.canvas.style.cursor = cursor;
       }
 
+      if (this.isPanning) {
+        editor.panX = this.panOrigX + pointer.x - this.panStartX;
+        editor.panY = this.panOrigY + pointer.y - this.panStartY;
+        this.updateTransform();
+        return;
+      }
+
       if (editor.isResizing && editor.resizeElementId && editor.resizeCorner) {
-        const dx = (e.offsetX - editor.resizeStartScreenX) / editor.zoom;
-        const dy = (e.offsetY - editor.resizeStartScreenY) / editor.zoom;
+        const dx = (pointer.x - editor.resizeStartScreenX) / editor.zoom;
+        const dy = (pointer.y - editor.resizeStartScreenY) / editor.zoom;
         const ox = editor.resizeOrigX;
         const oy = editor.resizeOrigY;
         const ow = editor.resizeOrigW;
@@ -156,8 +237,8 @@ export class GuiRenderer {
       }
 
       if (editor.isDragging && editor.dragElementId) {
-        const dx = (e.offsetX - editor.dragStartX) / editor.zoom;
-        const dy = (e.offsetY - editor.dragStartY) / editor.zoom;
+        const dx = (pointer.x - editor.dragStartX) / editor.zoom;
+        const dy = (pointer.y - editor.dragStartY) / editor.zoom;
 
         if (editor.selectedIds.size > 1) {
           // Multi-drag: move all selected elements by the delta
@@ -178,6 +259,7 @@ export class GuiRenderer {
     };
 
     const onPointerUp = () => {
+      this.isPanning = false;
       if (editor.isResizing && editor.resizeElementId) {
         const el = project.elementById(editor.resizeElementId);
         if (el) {
@@ -204,8 +286,18 @@ export class GuiRenderer {
       editor.resizeCorner = null;
     };
 
-    const onPointerDown = (e: PointerEvent) => {
-      const gui = this.screenToGui(e.offsetX, e.offsetY);
+    const onPointerDown = (e: CanvasPointerEvent) => {
+      const pointer = this.pointerCanvasPosition(e);
+      if (isPanMode()) {
+        this.isPanning = true;
+        this.panStartX = pointer.x;
+        this.panStartY = pointer.y;
+        this.panOrigX = editor.panX;
+        this.panOrigY = editor.panY;
+        return;
+      }
+
+      const gui = this.screenToGui(pointer.x, pointer.y);
       const shiftHeld = e.shiftKey;
 
       // Check resize handles on selected element first
@@ -215,19 +307,22 @@ export class GuiRenderer {
           const corner = this.hitTestHandle(selEl, gui.x, gui.y);
           if (corner) {
             const bounds = project.getElementBounds(editor.selectedElementId)!;
-            editor.startResize(editor.selectedElementId, corner, e.offsetX, e.offsetY, bounds.x, bounds.y, bounds.w, bounds.h);
+            editor.startResize(editor.selectedElementId, corner, pointer.x, pointer.y, bounds.x, bounds.y, bounds.w, bounds.h);
             return;
           }
         }
       }
 
-      // Find clicked element — test in reverse layer order (top-most first: Animatable → Overlay → Background)
-      const sortedForHit = [...project.elements].sort((a, b) => {
-        const aLayer = LAYER_ORDER[a.layer ?? "background"] ?? 0;
-        const bLayer = LAYER_ORDER[b.layer ?? "background"] ?? 0;
-        return bLayer - aLayer; // reverse: Animatable first
-      });
-      const clicked = sortedForHit.find(el => this.hitTest(el, gui.x, gui.y));
+      // Find clicked element: higher layers first, then later elements within the same layer.
+      const sortedForHit = project.elements
+        .map((el, index) => ({ el, index }))
+        .sort((a, b) => {
+          const aLayer = LAYER_ORDER[a.el.layer ?? "background"] ?? 0;
+          const bLayer = LAYER_ORDER[b.el.layer ?? "background"] ?? 0;
+          const layerDiff = bLayer - aLayer;
+          return layerDiff !== 0 ? layerDiff : b.index - a.index;
+        });
+      const clicked = sortedForHit.find(({ el }) => this.hitTest(el, gui.x, gui.y))?.el;
 
       if (clicked && editor.tool === "select") {
         const keepMultiSelection = !shiftHeld && editor.selectedIds.size > 1 && editor.selectedIds.has(clicked.id);
@@ -240,13 +335,12 @@ export class GuiRenderer {
             return [id, { x: el?.x ?? 0, y: el?.y ?? 0 }];
           }),
         );
-        editor.startDragElement(clicked.id, e.offsetX, e.offsetY, this.containerEl);
+        editor.startDragElementAt(clicked.id, pointer.x, pointer.y, clicked.x, clicked.y);
       } else if (editor.tool === "select" && !clicked && !shiftHeld) {
         editor.clearSelection();
       } else if (editor.tool === "slot" || editor.tool === "texture" || editor.tool === "text") {
         // Place new element
         project.addElement(editor.tool, gui.x, gui.y);
-        editor.tool = "select";
       }
     };
 
@@ -269,6 +363,35 @@ export class GuiRenderer {
         editor.panX -= e.deltaX;
         editor.panY -= e.deltaY;
       }
+      this.updateTransform();
+    };
+
+    const isEditableTarget = (target: EventTarget | null): boolean => {
+      if (!(target instanceof HTMLElement)) return false;
+      return target instanceof HTMLInputElement
+        || target instanceof HTMLSelectElement
+        || target instanceof HTMLTextAreaElement
+        || target.isContentEditable
+        || target.closest("[contenteditable='true']") !== null
+        || target.closest('[role="dialog"]') !== null;
+    };
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.code !== "Space" || isEditableTarget(e.target)) return;
+      this.spacePanning = true;
+      e.preventDefault();
+      if (this.app.canvas instanceof HTMLCanvasElement && !this.isPanning) {
+        this.app.canvas.style.cursor = "grab";
+      }
+    };
+
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (e.code !== "Space") return;
+      this.spacePanning = false;
+      e.preventDefault();
+      if (this.app.canvas instanceof HTMLCanvasElement && !this.isPanning) {
+        this.app.canvas.style.cursor = "crosshair";
+      }
     };
 
     stage.addEventListener("pointermove", onPointerMove as never);
@@ -276,6 +399,8 @@ export class GuiRenderer {
     stage.addEventListener("pointerupoutside", onPointerUp as never);
     stage.addEventListener("pointerdown", onPointerDown as never);
     this.app.canvas.addEventListener("wheel", onWheel, { passive: false });
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keyup", onKeyUp);
 
     this.cleanupFns.push(() => {
       stage.removeEventListener("pointermove", onPointerMove as never);
@@ -283,25 +408,27 @@ export class GuiRenderer {
       stage.removeEventListener("pointerupoutside", onPointerUp as never);
       stage.removeEventListener("pointerdown", onPointerDown as never);
       this.app.canvas.removeEventListener("wheel", onWheel);
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
     });
   }
 
   private hitTest(el: Element, gx: number, gy: number): boolean {
-    const w = el.width ?? el.size ?? 18;
-    const h = el.height ?? el.size ?? 18;
-    return gx >= el.x && gx <= el.x + w && gy >= el.y && gy <= el.y + h;
+    const bounds = this.elementBounds(el);
+    return gx >= bounds.x && gx <= bounds.x + bounds.w && gy >= bounds.y && gy <= bounds.y + bounds.h;
   }
 
   private hitTestHandle(el: Element, gx: number, gy: number): "tl" | "tr" | "bl" | "br" | null {
-    const w = el.width ?? el.size ?? 18;
-    const h = el.height ?? el.size ?? 18;
+    const bounds = this.elementBounds(el);
+    const w = bounds.w;
+    const h = bounds.h;
     const HS = 5; // handle size in gui pixels (scaled by zoom)
 
     const handles: [number, number, "tl" | "tr" | "bl" | "br"][] = [
-      [el.x - 1, el.y - 1, "tl"],
-      [el.x + w - HS + 1, el.y - 1, "tr"],
-      [el.x - 1, el.y + h - HS + 1, "bl"],
-      [el.x + w - HS + 1, el.y + h - HS + 1, "br"],
+      [bounds.x - 1, bounds.y - 1, "tl"],
+      [bounds.x + w - HS + 1, bounds.y - 1, "tr"],
+      [bounds.x - 1, bounds.y + h - HS + 1, "bl"],
+      [bounds.x + w - HS + 1, bounds.y + h - HS + 1, "br"],
     ];
 
     for (const [hx, hy, corner] of handles) {
@@ -312,6 +439,40 @@ export class GuiRenderer {
     return null;
   }
 
+  private elementBounds(el: Element): { x: number; y: number; w: number; h: number } {
+    if (el.type === "text") {
+      return {
+        x: el.x,
+        y: el.y,
+        ...this.textBounds(el),
+      };
+    }
+
+    return {
+      x: el.x,
+      y: el.y,
+      w: el.width ?? el.size ?? 18,
+      h: el.height ?? el.size ?? 18,
+    };
+  }
+
+  private textBounds(el: Element): { w: number; h: number } {
+    const content = el.content ?? "Text";
+    if (typeof document === "undefined") {
+      return { w: Math.max(1, content.length * 5 + 2), h: 10 };
+    }
+
+    const canvas = document.createElement("canvas");
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return { w: Math.max(1, content.length * 5 + 2), h: 10 };
+
+    ctx.font = "8px monospace";
+    return {
+      w: Math.max(1, Math.ceil(ctx.measureText(content).width) + 2),
+      h: 10,
+    };
+  }
+
   private screenToGui(sx: number, sy: number): { x: number; y: number } {
     return {
       x: Math.floor((sx - editor.panX) / editor.zoom),
@@ -319,11 +480,30 @@ export class GuiRenderer {
     };
   }
 
+  private pointerCanvasPosition(e: CanvasPointerEvent): { x: number; y: number } {
+    if (e.global && Number.isFinite(e.global.x) && Number.isFinite(e.global.y)) {
+      return { x: e.global.x, y: e.global.y };
+    }
+
+    if (Number.isFinite(e.offsetX) && Number.isFinite(e.offsetY)) {
+      return { x: e.offsetX, y: e.offsetY };
+    }
+
+    const rect = this.app.canvas.getBoundingClientRect();
+    return {
+      x: e.clientX - rect.left,
+      y: e.clientY - rect.top,
+    };
+  }
+
   render() {
+    this.app.renderer.background.color = canvasPalette().background;
+    this.updateTransform();
     this.syncGlyphTextureCache();
     this.drawGrid();
     this.drawElements();
     this.drawSelection();
+    this.requestFrame();
   }
 
   private drawGrid() {
@@ -334,41 +514,42 @@ export class GuiRenderer {
     const { width: gw, height: gh } = project.guiSize;
     const majorGridSize = Math.max(1, preferences.values.majorGridSize);
     const minorGridSize = Math.max(1, preferences.values.minorGridSize);
+    const palette = canvasPalette();
 
     // Background fill for GUI area
     g.rect(0, 0, gw, gh);
-    g.fill({ color: 0xc6c6c6, alpha: 0.3 });
+    g.fill({ color: palette.guiFill, alpha: palette.guiAlpha });
 
     // Draw GUI border
     g.rect(-1, -1, gw + 2, gh + 2);
-    g.stroke({ width: 1, color: 0xffffff, alpha: 0.5 });
+    g.stroke({ width: 1, color: palette.border, alpha: palette.borderAlpha });
 
     // Minor grid
-    const minorAlpha = editor.zoom >= 2 ? 0.1 : 0;
+    const minorAlpha = palette.minorAlpha;
     if (minorAlpha > 0) {
       for (let x = 0; x <= gw; x += minorGridSize) {
         g.moveTo(x, 0);
         g.lineTo(x, gh);
-        g.stroke({ width: 1, color: 0xffffff, alpha: minorAlpha });
+        g.stroke({ width: 1, color: palette.line, alpha: minorAlpha });
       }
       for (let y = 0; y <= gh; y += minorGridSize) {
         g.moveTo(0, y);
         g.lineTo(gw, y);
-        g.stroke({ width: 1, color: 0xffffff, alpha: minorAlpha });
+        g.stroke({ width: 1, color: palette.line, alpha: minorAlpha });
       }
     }
 
     // Major grid (always visible at zoom >= 1)
-    const majorAlpha = 0.25;
+    const majorAlpha = palette.majorAlpha;
     for (let x = 0; x <= gw; x += majorGridSize) {
       g.moveTo(x, 0);
       g.lineTo(x, gh);
-      g.stroke({ width: 1, color: 0xffffff, alpha: majorAlpha });
+      g.stroke({ width: 1, color: palette.line, alpha: majorAlpha });
     }
     for (let y = 0; y <= gh; y += majorGridSize) {
       g.moveTo(0, y);
       g.lineTo(gw, y);
-      g.stroke({ width: 1, color: 0xffffff, alpha: majorAlpha });
+      g.stroke({ width: 1, color: palette.line, alpha: majorAlpha });
     }
 
     this.gridContainer.addChild(g);
@@ -385,7 +566,12 @@ export class GuiRenderer {
     });
 
     for (const el of sorted) {
-      const g = this.drawElement(el);
+      let g: Container | null = null;
+      try {
+        g = this.drawElement(el);
+      } catch (error) {
+        console.error("Failed to draw element", el, error);
+      }
       if (g) this.elementsContainer.addChild(g);
     }
   }
@@ -393,6 +579,7 @@ export class GuiRenderer {
   private drawElement(el: Element): Container | null {
     switch (el.type) {
       case "slot":
+      case "virtual_slot_cell":
         return this.drawSlot(el);
       case "texture":
         return this.drawTexture(el);
@@ -404,6 +591,8 @@ export class GuiRenderer {
         return this.drawFluidTank(el);
       case "energy_bar":
         return this.drawEnergyBar(el);
+      case "scrollbar":
+        return this.drawScrollbar(el);
       default:
         return null;
     }
@@ -424,6 +613,10 @@ export class GuiRenderer {
   }
 
   private drawTexture(el: Element): Container | null {
+    if (isGeneratedTexturePath(el.asset)) {
+      return this.drawGeneratedTextureFallback(el);
+    }
+
     // Try to render as actual texture
     if (el.asset) {
       const dataUrl = assetDataUrls.get(el.asset);
@@ -431,6 +624,7 @@ export class GuiRenderer {
         const container = new Container();
         const baseTexture = Texture.from(dataUrl);
         const texture = this.textureWithUv(baseTexture, el);
+        if (!texture) return null;
         const sprite = new Sprite(texture);
         sprite.x = el.x;
         sprite.y = el.y;
@@ -460,7 +654,48 @@ export class GuiRenderer {
     return container;
   }
 
-  private textureWithUv(baseTexture: Texture, el: Element): Texture {
+  private drawGeneratedTextureFallback(el: Element): Container {
+    const container = new Container();
+    const g = new Graphics();
+    const w = el.width ?? 16;
+    const h = el.height ?? 16;
+
+    if (el.asset === "textures/generated/gui_panel.png" || el.asset === LEGACY_BACKGROUND_TEXTURE) {
+      g.rect(el.x, el.y, w, h);
+      g.fill({ color: 0xb8b8b8 });
+      g.rect(el.x, el.y, w, 1);
+      g.fill({ color: 0xffffff });
+      g.rect(el.x, el.y, 1, h);
+      g.fill({ color: 0xffffff });
+      g.rect(el.x, el.y + h - 1, w, 1);
+      g.fill({ color: 0x555555 });
+      g.rect(el.x + w - 1, el.y, 1, h);
+      g.fill({ color: 0x555555 });
+    } else if (el.asset === "textures/generated/slot.png") {
+      g.rect(el.x, el.y, w, h);
+      g.fill({ color: 0x8b8b8b });
+      g.rect(el.x, el.y, w, 1);
+      g.fill({ color: 0x373737 });
+      g.rect(el.x, el.y, 1, h);
+      g.fill({ color: 0x373737 });
+      g.rect(el.x, el.y + h - 1, w, 1);
+      g.fill({ color: 0xffffff, alpha: 0.8 });
+      g.rect(el.x + w - 1, el.y, 1, h);
+      g.fill({ color: 0xffffff, alpha: 0.8 });
+    } else if (el.asset === "textures/generated/scrollbar.png") {
+      this.drawScrollbarGraphics(g, el.x, el.y, w, h);
+    } else {
+      g.rect(el.x, el.y, w, h);
+      g.fill({ color: 0x6f6f6f });
+      g.rect(el.x, el.y, w, h);
+      g.stroke({ width: 1, color: 0x373737 });
+    }
+
+    container.addChild(g);
+    return container;
+  }
+
+  private textureWithUv(baseTexture: Texture, el: Element): Texture | null {
     if (!el.uv || el.uv.width <= 0 || el.uv.height <= 0) {
       return baseTexture;
     }
@@ -472,8 +707,11 @@ export class GuiRenderer {
     }
     const x = Math.max(0, Math.min(el.uv.x, sourceWidth));
     const y = Math.max(0, Math.min(el.uv.y, sourceHeight));
-    const width = Math.max(1, Math.min(el.uv.width, sourceWidth - x));
-    const height = Math.max(1, Math.min(el.uv.height, sourceHeight - y));
+    const width = Math.min(el.uv.width, sourceWidth - x);
+    const height = Math.min(el.uv.height, sourceHeight - y);
+    if (width <= 0 || height <= 0) {
+      return null;
+    }
 
     return new Texture({
       source: baseTexture.source,
@@ -514,22 +752,50 @@ export class GuiRenderer {
 
   private drawText(el: Element): Container {
     const glyphText = this.drawGlyphText(el);
-    if (glyphText) return glyphText;
+    return glyphText ?? this.drawCanvasText(el);
+  }
 
+  private drawCanvasText(el: Element): Container {
     const container = new Container();
-    const text = new Text({
-      text: el.content ?? "{text}",
-      style: new TextStyle({
-        fontSize: 8,
-        fill: el.color ?? 0x404040,
-        fontFamily: "monospace",
-        dropShadow: el.shadow ? { alpha: 0.5, blur: 0, distance: 1, color: 0x000000 } : undefined,
-      }),
-    });
-    text.x = el.x;
-    text.y = el.y;
-    container.addChild(text);
+    const texture = this.textTexture(el);
+    if (!texture) return container;
+
+    const sprite = new Sprite(texture);
+    sprite.x = el.x;
+    sprite.y = el.y;
+    container.addChild(sprite);
     return container;
+  }
+
+  private textTexture(el: Element): Texture | null {
+    const content = el.content ?? "Text";
+    const color = el.color ?? 0x404040;
+    const shadow = el.shadow ?? false;
+    const cacheKey = `${content}|${color}|${shadow}`;
+    const cached = this.textTextureCache.get(cacheKey);
+    if (cached) return cached;
+
+    const canvas = document.createElement("canvas");
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return null;
+
+    const { w, h } = this.textBounds(el);
+    canvas.width = w;
+    canvas.height = h;
+
+    ctx.imageSmoothingEnabled = false;
+    ctx.font = "8px monospace";
+    ctx.textBaseline = "top";
+    if (shadow) {
+      ctx.fillStyle = "rgba(0, 0, 0, 0.5)";
+      ctx.fillText(content, 1, 1);
+    }
+    ctx.fillStyle = `#${color.toString(16).padStart(6, "0")}`;
+    ctx.fillText(content, 0, 0);
+
+    const texture = Texture.from(canvas);
+    this.textTextureCache.set(cacheKey, texture);
+    return texture;
   }
 
   private drawGlyphText(el: Element): Container | null {
@@ -617,7 +883,9 @@ export class GuiRenderer {
     const cached = this.glyphTextureCache.get(cacheKey);
     if (cached) return cached;
 
-    const baseTexture = Texture.from(dataUrl);
+    const baseTexture = this.fontSourceTexture(source.identity, dataUrl);
+    if (!baseTexture) return null;
+
     if (baseTexture.source.width <= 0 || baseTexture.source.height <= 0) return null;
 
     if (glyph.x >= baseTexture.source.width || glyph.y >= baseTexture.source.height) return null;
@@ -633,6 +901,32 @@ export class GuiRenderer {
     });
     this.glyphTextureCache.set(cacheKey, texture);
     return texture;
+  }
+
+  private fontSourceTexture(identity: string, dataUrl: string): Texture | null {
+    const cached = this.fontSourceTextureCache.get(identity);
+    if (cached) return cached;
+
+    const texture = Texture.from(dataUrl);
+    if (texture.source.width > 0 && texture.source.height > 0) {
+      this.fontSourceTextureCache.set(identity, texture);
+      return texture;
+    }
+
+    if (!this.loadingFontSources.has(identity)) {
+      this.loadingFontSources.add(identity);
+      Assets.load<Texture>(dataUrl)
+        .then(loaded => {
+          this.fontSourceTextureCache.set(identity, loaded);
+          this.glyphTextureCache.clear();
+          this.render();
+        })
+        .catch(() => {
+          this.loadingFontSources.delete(identity);
+        });
+    }
+
+    return null;
   }
 
   private providerForGlyph(providers: MinecraftFontProviderRenderData[], ch: string): MinecraftFontProviderRenderData | undefined {
@@ -655,6 +949,8 @@ export class GuiRenderer {
   private syncGlyphTextureCache() {
     if (this.glyphTextureCacheVersion === project.fontRenderDataVersion) return;
     this.glyphTextureCache.clear();
+    this.fontSourceTextureCache.clear();
+    this.loadingFontSources.clear();
     this.glyphTextureCacheVersion = project.fontRenderDataVersion;
   }
 
@@ -704,6 +1000,30 @@ export class GuiRenderer {
     return container;
   }
 
+  private drawScrollbar(el: Element): Container {
+    const container = new Container();
+    const g = new Graphics();
+    this.drawScrollbarGraphics(g, el.x, el.y, el.width ?? 12, el.height ?? 54);
+    container.addChild(g);
+    return container;
+  }
+
+  private drawScrollbarGraphics(g: Graphics, x: number, y: number, width: number, height: number) {
+    const w = Math.max(5, width);
+    const h = Math.max(9, height);
+    g.rect(x, y, w, h);
+    g.fill({ color: 0x6f6f6f });
+    g.rect(x, y, w, h);
+    g.stroke({ width: 1, color: 0x2f2f2f });
+
+    const thumbW = Math.max(1, w - 4);
+    const thumbH = Math.min(Math.max(5, Math.floor((h - 4) / 3)), Math.max(1, h - 4));
+    g.rect(x + 2, y + 2, thumbW, thumbH);
+    g.fill({ color: 0xb8b8b8 });
+    g.rect(x + 2, y + 2, thumbW, thumbH);
+    g.stroke({ width: 1, color: 0xffffff, alpha: 0.35 });
+  }
+
   private drawSelection() {
     this.selectionGraphics.clear();
 
@@ -711,24 +1031,25 @@ export class GuiRenderer {
       const el = project.elementById(selId);
       if (!el) continue;
 
-      const w = el.width ?? el.size ?? 18;
-      const h = el.height ?? el.size ?? 18;
+      const bounds = this.elementBounds(el);
+      const w = bounds.w;
+      const h = bounds.h;
       const g = this.selectionGraphics;
 
       const isPrimary = selId === editor.selectedElementId;
       const tint = isPrimary ? SELECTED_TINT : 0x888800;
 
-      g.rect(el.x - 1, el.y - 1, w + 2, h + 2);
+      g.rect(bounds.x - 1, bounds.y - 1, w + 2, h + 2);
       g.stroke({ width: 1, color: tint });
 
       // Corner handles only on primary selection
       if (isPrimary) {
         const hs = Math.max(3, Math.round(8 / editor.zoom));
         const corners: [number, number][] = [
-          [el.x - 1, el.y - 1],
-          [el.x + w - hs + 1, el.y - 1],
-          [el.x - 1, el.y + h - hs + 1],
-          [el.x + w - hs + 1, el.y + h - hs + 1],
+          [bounds.x - 1, bounds.y - 1],
+          [bounds.x + w - hs + 1, bounds.y - 1],
+          [bounds.x - 1, bounds.y + h - hs + 1],
+          [bounds.x + w - hs + 1, bounds.y + h - hs + 1],
         ];
         for (const [cx, cy] of corners) {
           g.rect(cx, cy, hs, hs);
@@ -757,9 +1078,24 @@ export class GuiRenderer {
     this.elementsContainer.position.set(editor.panX, editor.panY);
     this.gridContainer.position.set(editor.panX, editor.panY);
     this.overlayContainer.position.set(editor.panX, editor.panY);
+    this.requestFrame();
+  }
+
+  private requestFrame() {
+    if (this.renderFrame !== null) return;
+    this.renderFrame = requestAnimationFrame(() => {
+      this.renderFrame = null;
+      this.app.render();
+    });
   }
 
   destroy() {
+    if (this.renderFrame !== null) {
+      cancelAnimationFrame(this.renderFrame);
+      this.renderFrame = null;
+    }
+    this.textTextureCache.forEach(texture => texture.destroy(true));
+    this.textTextureCache.clear();
     this.cleanupFns.forEach(fn => fn());
     this.resizeObserver?.disconnect();
     this.app.destroy(true, { children: true });

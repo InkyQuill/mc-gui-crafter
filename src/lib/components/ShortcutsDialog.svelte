@@ -161,8 +161,8 @@
     width: min(420px, calc(100vw - 32px));
     max-height: calc(100vh - 32px);
     overflow: auto;
-    background: #1a1a2e;
-    border: 1px solid #0f3460;
+    background: var(--surface);
+    border: 1px solid var(--border);
     border-radius: 8px;
     padding: 16px;
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
@@ -178,13 +178,13 @@
   }
 
   h2 {
-    color: #e0e0e0;
+    color: var(--text);
     font-size: 15px;
     margin: 0;
   }
 
   h3 {
-    color: #8080a0;
+    color: var(--muted-text);
     font-size: 11px;
     font-weight: 700;
     letter-spacing: 0;
@@ -193,11 +193,11 @@
   }
 
   .shortcut-sections {
-    border-top: 1px solid #0f3460;
+    border-top: 1px solid var(--border);
   }
 
   .section {
-    border-bottom: 1px solid #0f3460;
+    border-bottom: 1px solid var(--border);
     padding: 12px 0;
   }
 
@@ -227,18 +227,18 @@
   }
 
   dd {
-    color: #d8d8e0;
+    color: var(--muted-text);
     font-size: 12px;
   }
 
   kbd {
     min-width: 24px;
     padding: 3px 6px;
-    border: 1px solid #304a7a;
-    border-bottom-color: #1f3152;
+    border: 1px solid var(--border);
+    border-bottom-color: var(--surface-raised);
     border-radius: 4px;
-    background: #12121f;
-    color: #f0f0f5;
+    background: var(--app-bg);
+    color: var(--text);
     font-family: monospace;
     font-size: 11px;
     line-height: 1.2;
@@ -264,30 +264,30 @@
     height: 28px;
     background: transparent;
     border: 1px solid transparent;
-    color: #a0a0b0;
+    color: var(--muted-text);
     font-size: 18px;
     line-height: 1;
   }
 
   .close-btn:hover {
-    background: #0f3460;
-    color: #e0e0e0;
+    background: var(--surface-raised);
+    color: var(--text);
   }
 
   .done-btn {
-    background: #e94560;
-    border: 1px solid #e94560;
-    color: #12121f;
+    background: var(--accent);
+    border: 1px solid var(--accent);
+    color: var(--app-bg);
     font-weight: 700;
     padding: 6px 12px;
   }
 
   .done-btn:hover {
-    background: #ff5a7a;
+    background: var(--accent);
   }
 
   button:focus-visible {
-    outline: 2px solid #e94560;
+    outline: 2px solid var(--accent);
     outline-offset: 2px;
   }
 

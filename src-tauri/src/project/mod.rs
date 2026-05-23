@@ -41,6 +41,116 @@ pub enum ElementType {
     FluidTank,
     #[serde(alias = "EnergyBar")]
     EnergyBar,
+    #[serde(alias = "Scrollbar")]
+    Scrollbar,
+    #[serde(alias = "Button")]
+    Button,
+    #[serde(alias = "ToggleButton")]
+    ToggleButton,
+    #[serde(alias = "TextInput")]
+    TextInput,
+    #[serde(alias = "Tab")]
+    Tab,
+    #[serde(alias = "Panel")]
+    Panel,
+    #[serde(alias = "VirtualSlotCell")]
+    VirtualSlotCell,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum SlotRole {
+    #[serde(alias = "Machine")]
+    Machine,
+    #[serde(alias = "PlayerInventory")]
+    PlayerInventory,
+    #[serde(alias = "Hotbar")]
+    Hotbar,
+    #[serde(alias = "ScrollableInventory")]
+    ScrollableInventory,
+    #[serde(alias = "VirtualStorage")]
+    VirtualStorage,
+    #[serde(alias = "Upgrade")]
+    Upgrade,
+    #[serde(alias = "UpgradeSettings")]
+    UpgradeSettings,
+    #[serde(alias = "Filter")]
+    Filter,
+    #[serde(alias = "Ghost")]
+    Ghost,
+    #[serde(alias = "Offhand")]
+    Offhand,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum SemanticGroupKind {
+    FixedSlots,
+    VirtualSlotGrid,
+    PlayerInventory,
+    Hotbar,
+    UpgradeSlots,
+    UpgradePanel,
+    SearchField,
+    ControlButtons,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SemanticGroup {
+    pub id: String,
+    pub kind: SemanticGroupKind,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub columns: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub visible_rows: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total_rows: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub slot_count: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub data_source: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scroll_binding: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub dynamic_height: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum CodegenMode {
+    #[default]
+    Simple,
+    Modular,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProjectExportSettings {
+    #[serde(default)]
+    pub codegen_mode: CodegenMode,
+    #[serde(default = "default_true")]
+    pub generate_runtime_helpers: bool,
+    #[serde(default)]
+    pub generate_semantic_registry: bool,
+}
+
+impl Default for ProjectExportSettings {
+    fn default() -> Self {
+        Self {
+            codegen_mode: CodegenMode::Simple,
+            generate_runtime_helpers: true,
+            generate_semantic_registry: false,
+        }
+    }
+}
+
+impl ProjectExportSettings {
+    pub fn normalized(mut self) -> Self {
+        match self.codegen_mode {
+            CodegenMode::Simple => self.generate_semantic_registry = false,
+            CodegenMode::Modular => self.generate_semantic_registry = true,
+        }
+        self
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -163,6 +273,34 @@ pub struct Element {
     pub uv: Option<UvRect>,
     #[serde(default, skip_serializing_if = "is_default_layer")]
     pub layer: Layer,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub slot_role: Option<SlotRole>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub slot_index: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub inventory_group: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scroll_binding: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scroll_min: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scroll_max: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub visible_rows: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total_rows: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub columns: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_group: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub binding: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dock: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub open_width: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub open_height: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -182,6 +320,10 @@ pub struct Project {
     pub groups: Vec<Group>,
     pub animations: Vec<crate::animation::Animation>,
     pub assets: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub semantic_groups: Vec<SemanticGroup>,
+    #[serde(default)]
+    pub export_settings: ProjectExportSettings,
     #[serde(skip)]
     pub project_path: Option<String>,
     #[serde(skip)]
@@ -383,6 +525,8 @@ impl Project {
             groups: Vec::new(),
             animations: Vec::new(),
             assets: Vec::new(),
+            semantic_groups: Vec::new(),
+            export_settings: ProjectExportSettings::default(),
             project_path: None,
             is_dirty: true,
             texture_data: HashMap::new(),
@@ -498,6 +642,20 @@ mod tests {
             visible: true,
             uv: None,
             layer: Layer::Background,
+            slot_role: None,
+            slot_index: None,
+            inventory_group: None,
+            scroll_binding: None,
+            scroll_min: None,
+            scroll_max: None,
+            visible_rows: None,
+            total_rows: None,
+            columns: None,
+            target_group: None,
+            binding: None,
+            dock: None,
+            open_width: None,
+            open_height: None,
         }
     }
 
@@ -569,6 +727,20 @@ mod tests {
             x: 79,
             y: 35,
             layer: Layer::Animatable,
+            slot_role: None,
+            slot_index: None,
+            inventory_group: None,
+            scroll_binding: None,
+            scroll_min: None,
+            scroll_max: None,
+            visible_rows: None,
+            total_rows: None,
+            columns: None,
+            target_group: None,
+            binding: None,
+            dock: None,
+            open_width: None,
+            open_height: None,
             ..sample_element_defaults()
         };
         let value = serde_json::to_value(&element).unwrap();
@@ -583,6 +755,20 @@ mod tests {
             x: 0,
             y: 0,
             layer: Layer::Background,
+            slot_role: None,
+            slot_index: None,
+            inventory_group: None,
+            scroll_binding: None,
+            scroll_min: None,
+            scroll_max: None,
+            visible_rows: None,
+            total_rows: None,
+            columns: None,
+            target_group: None,
+            binding: None,
+            dock: None,
+            open_width: None,
+            open_height: None,
             ..sample_element_defaults()
         };
         let value = serde_json::to_value(&element).unwrap();
@@ -658,6 +844,89 @@ mod tests {
         });
         let project: Project = serde_json::from_value(value).unwrap();
         assert!(project.fonts.is_empty());
+    }
+
+    #[test]
+    fn project_defaults_missing_semantic_fields() {
+        let json = r#"{
+            "name": "Legacy",
+            "gui_size": { "width": 176, "height": 166 },
+            "mod_target": "forge",
+            "elements": [],
+            "groups": [],
+            "animations": [],
+            "assets": []
+        }"#;
+
+        let project: Project = serde_json::from_str(json).unwrap();
+        assert!(project.semantic_groups.is_empty());
+        assert_eq!(project.export_settings.codegen_mode, CodegenMode::Simple);
+        assert!(project.export_settings.generate_runtime_helpers);
+        assert!(!project.export_settings.generate_semantic_registry);
+    }
+
+    #[test]
+    fn project_export_settings_defaults_missing_codegen_mode() {
+        let json = r#"{
+            "name": "Partial",
+            "gui_size": { "width": 176, "height": 166 },
+            "mod_target": "forge",
+            "elements": [],
+            "groups": [],
+            "animations": [],
+            "assets": [],
+            "export_settings": {
+                "generate_semantic_registry": true
+            }
+        }"#;
+
+        let project: Project = serde_json::from_str(json).unwrap();
+        assert_eq!(project.export_settings.codegen_mode, CodegenMode::Simple);
+        assert!(project.export_settings.generate_runtime_helpers);
+        assert!(project.export_settings.generate_semantic_registry);
+    }
+
+    #[test]
+    fn element_semantics_round_trip() {
+        let element = Element {
+            id: "buffer_slot_0".into(),
+            element_type: ElementType::Slot,
+            x: 34,
+            y: 54,
+            width: None,
+            height: None,
+            size: Some(18),
+            asset: None,
+            direction: None,
+            content: None,
+            font: None,
+            color: None,
+            shadow: None,
+            animation: None,
+            visible: true,
+            uv: None,
+            layer: Layer::Background,
+            slot_role: Some(SlotRole::ScrollableInventory),
+            slot_index: Some(0),
+            inventory_group: Some("machine_buffer".into()),
+            scroll_binding: Some("buffer_scroll".into()),
+            scroll_min: None,
+            scroll_max: None,
+            visible_rows: None,
+            total_rows: None,
+            columns: None,
+            target_group: None,
+            binding: None,
+            dock: None,
+            open_width: None,
+            open_height: None,
+        };
+
+        let value = serde_json::to_value(&element).unwrap();
+        assert_eq!(value["slot_role"], "scrollable_inventory");
+        assert_eq!(value["inventory_group"], "machine_buffer");
+        let decoded: Element = serde_json::from_value(value).unwrap();
+        assert_eq!(decoded, element);
     }
 
     #[test]

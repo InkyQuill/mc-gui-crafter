@@ -13,6 +13,7 @@
   }
 
   let selectedGroupIds = $derived.by(() => {
+    void editor.selectionRevision;
     const ids = new Set<string>();
     for (const id of editor.selectedIds) {
       const group = project.groupForElement(id);
@@ -20,13 +21,23 @@
     }
     return ids;
   });
+
+  let selectedElementId = $derived.by(() => {
+    void editor.selectionRevision;
+    return editor.selectedElementId;
+  });
+
+  let selectedCount = $derived.by(() => {
+    void editor.selectionRevision;
+    return editor.selectedIds.size;
+  });
 </script>
 
 <aside class="layers">
   <h3>Layers ({project.elements.length})</h3>
   <div class="group-actions">
     <button
-      disabled={editor.selectedIds.size < 2}
+      disabled={selectedCount < 2}
       onclick={() => project.createGroup(editor.selectedIds)}
       title="Group selected elements"
     >
@@ -53,7 +64,7 @@
         <div class="layer-row">
           <button
             class="layer-item"
-            class:selected={editor.selectedElementId === el.id}
+            class:selected={selectedElementId === el.id}
             class:hidden-el={!(el.visible ?? true)}
             onclick={() => editor.selectElement(el.id)}
           >
@@ -102,19 +113,19 @@
 <style>
   .layers {
     padding: 10px;
-    border-top: 1px solid #0f3460;
+    border-top: 1px solid var(--border);
   }
 
   h3 {
     font-size: 11px;
     text-transform: uppercase;
     letter-spacing: 1px;
-    color: #606080;
+    color: var(--muted-text);
     margin-bottom: 8px;
   }
 
   .muted {
-    color: #505060;
+    color: var(--muted-text);
     font-size: 12px;
   }
 
@@ -127,8 +138,8 @@
 
   .group-actions button {
     background: transparent;
-    border: 1px solid #0f3460;
-    color: #a0a0b0;
+    border: 1px solid var(--border);
+    color: var(--muted-text);
     padding: 4px 6px;
     font-size: 11px;
     cursor: pointer;
@@ -137,8 +148,8 @@
   }
 
   .group-actions button:hover:not(:disabled) {
-    background: #0f3460;
-    color: #e0e0e0;
+    background: var(--surface-raised);
+    color: var(--text);
   }
 
   .group-actions button:disabled {
@@ -166,7 +177,7 @@
     gap: 6px;
     background: transparent;
     border: 1px solid transparent;
-    color: #808090;
+    color: var(--muted-text);
     padding: 3px 6px;
     font-size: 11px;
     cursor: pointer;
@@ -177,13 +188,13 @@
   }
 
   .layer-item:hover {
-    background: #0f3460;
+    background: var(--surface-raised);
   }
 
   .layer-item.selected {
-    background: #0f3460;
-    color: #e94560;
-    border-color: #e94560;
+    background: var(--surface-raised);
+    color: var(--accent);
+    border-color: var(--accent);
   }
 
   .layer-item.hidden-el {
@@ -204,13 +215,13 @@
   }
 
   .layer-coords {
-    color: #505060;
+    color: var(--muted-text);
     font-size: 10px;
   }
 
   .group-chip {
-    color: #a0a0b0;
-    border: 1px solid #0f3460;
+    color: var(--muted-text);
+    border: 1px solid var(--border);
     border-radius: 2px;
     padding: 0 3px;
     font-size: 10px;
@@ -228,7 +239,7 @@
   .reorder-btn, .visibility-btn {
     background: transparent;
     border: 1px solid transparent;
-    color: #505060;
+    color: var(--muted-text);
     padding: 0 5px;
     font-size: 10px;
     cursor: pointer;
@@ -238,8 +249,8 @@
   }
 
   .reorder-btn:hover:not(:disabled), .visibility-btn:hover {
-    background: #0f3460;
-    color: #a0a0b0;
+    background: var(--surface-raised);
+    color: var(--muted-text);
   }
 
   .reorder-btn:disabled {

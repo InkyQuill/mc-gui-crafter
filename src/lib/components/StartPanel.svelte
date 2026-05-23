@@ -62,7 +62,7 @@
 
     try {
       await project.openProject(path);
-      editor.resetView();
+      editor.resetView(project.guiSize);
     } catch (error) {
       rowErrors = { ...rowErrors, [path]: readableError(error) };
       status.error(`Failed to open project: ${rowErrors[path]}`);
@@ -84,7 +84,7 @@
         "forge",
         template.name,
       );
-      editor.resetView();
+      editor.resetView(project.guiSize);
     } catch (error) {
       templateError = readableError(error);
       status.error(`Failed to create project from template: ${templateError}`);
@@ -196,9 +196,9 @@
     display: grid;
     place-items: center;
     background:
-      linear-gradient(180deg, rgba(22, 33, 62, 0.44), rgba(18, 18, 31, 0.7)),
-      #12121f;
-    color: #e0e0e0;
+      linear-gradient(180deg, var(--surface), var(--app-bg)),
+      var(--app-bg);
+    color: var(--text);
     padding: 28px;
   }
 
@@ -227,7 +227,7 @@
   }
 
   h2 {
-    color: #a0a0b0;
+    color: var(--muted-text);
     font-size: 12px;
     font-weight: 700;
     letter-spacing: 0;
@@ -236,7 +236,7 @@
 
   .header p {
     margin-top: 6px;
-    color: #808090;
+    color: var(--muted-text);
     font-size: 12px;
   }
 
@@ -246,7 +246,7 @@
     grid-template-columns: auto 1fr;
     align-items: center;
     gap: 8px;
-    color: #a0a0b0;
+    color: var(--muted-text);
     font-size: 11px;
   }
 
@@ -254,7 +254,7 @@
     width: 8px;
     height: 8px;
     border-radius: 50%;
-    background: #606080;
+    background: var(--muted-text);
   }
 
   .mcp-status > span.online {
@@ -267,13 +267,13 @@
   }
 
   .mcp-status strong {
-    color: #e0e0e0;
+    color: var(--text);
     font-size: 11px;
   }
 
   .mcp-status small {
     overflow: hidden;
-    color: #808090;
+    color: var(--muted-text);
     font-family: monospace;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -293,7 +293,7 @@
   }
 
   button:focus-visible {
-    outline: 2px solid #e94560;
+    outline: 2px solid var(--accent);
     outline-offset: 2px;
   }
 
@@ -305,35 +305,38 @@
   .primary-action,
   .secondary-action {
     min-width: 128px;
-    border: 1px solid #0f3460;
+    border: 1px solid var(--border);
     padding: 8px 14px;
     font-size: 12px;
     font-weight: 700;
   }
 
   .primary-action {
-    background: #e94560;
-    border-color: #e94560;
-    color: #12121f;
+    background: var(--accent);
+    border-color: var(--accent);
+    color: var(--app-bg);
   }
 
   .primary-action:hover {
-    background: #ff5a7a;
+    background: var(--accent);
   }
 
   .secondary-action,
   .template-button,
   .recent-open,
   .remove-button {
-    background: #16213e;
-    color: #e0e0e0;
+    background: var(--surface);
+    color: var(--text);
   }
 
   .secondary-action:hover,
   .template-button:hover,
-  .recent-open:hover,
+  .recent-open:hover {
+    border-color: var(--accent);
+  }
+
   .remove-button:hover {
-    border-color: #e94560;
+    border-color: var(--danger);
   }
 
   .templates,
@@ -344,7 +347,7 @@
 
   .template-button {
     min-width: 136px;
-    border: 1px solid #0f3460;
+    border: 1px solid var(--border);
     padding: 8px 10px;
     text-align: left;
     text-transform: capitalize;
@@ -362,14 +365,14 @@
 
   .template-button small {
     margin-top: 2px;
-    color: #808090;
+    color: var(--muted-text);
     font-family: monospace;
     font-size: 11px;
   }
 
   .inline-error,
   .row-error {
-    color: #ff8ba0;
+    color: var(--danger);
     font-size: 11px;
   }
 
@@ -380,15 +383,15 @@
   }
 
   .section-heading span {
-    color: #606080;
+    color: var(--muted-text);
     font-family: monospace;
     font-size: 11px;
   }
 
   .empty-recent {
-    border: 1px dashed #0f3460;
+    border: 1px dashed var(--border);
     padding: 12px;
-    color: #606080;
+    color: var(--muted-text);
     font-size: 12px;
   }
 
@@ -399,12 +402,12 @@
   }
 
   li {
-    border: 1px solid #0f3460;
-    background: #12121f;
+    border: 1px solid var(--border);
+    background: var(--app-bg);
   }
 
   li.error {
-    border-color: #8f3046;
+    border-color: var(--danger);
   }
 
   .recent-main {
@@ -429,34 +432,34 @@
   }
 
   .recent-open span {
-    color: #e0e0e0;
+    color: var(--text);
     font-size: 12px;
     font-weight: 700;
   }
 
   .recent-open small {
     margin-top: 2px;
-    color: #808090;
+    color: var(--muted-text);
     font-family: monospace;
     font-size: 11px;
   }
 
   .remove-button {
     border: 0;
-    border-left: 1px solid #0f3460;
+    border-left: 1px solid var(--border);
     padding: 0 10px;
-    color: #808090;
+    color: var(--muted-text);
     font-size: 11px;
   }
 
   .row-note,
   .row-error {
-    border-top: 1px solid #0f3460;
+    border-top: 1px solid var(--border);
     padding: 7px 10px;
   }
 
   .row-note {
-    color: #808090;
+    color: var(--muted-text);
     font-size: 11px;
   }
 
@@ -477,7 +480,7 @@
     }
 
     .remove-button {
-      border-top: 1px solid #0f3460;
+      border-top: 1px solid var(--border);
       border-left: 0;
       padding: 8px 10px;
       text-align: left;

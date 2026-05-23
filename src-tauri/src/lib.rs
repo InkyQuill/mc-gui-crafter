@@ -1,11 +1,13 @@
 mod animation;
 mod commands;
+mod config;
 mod export;
 mod font;
 mod format;
 #[allow(dead_code)]
 mod mcp;
 mod project;
+mod startup;
 mod templates;
 mod texture;
 
@@ -18,8 +20,24 @@ pub struct AppState {
     pub app_handle: Mutex<Option<tauri::AppHandle>>,
 }
 
+pub fn configure_platform_environment() {
+    #[cfg(target_os = "linux")]
+    if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
+        std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+    }
+}
+
 pub fn run() {
-    tauri::Builder::default()
+    let mut builder = tauri::Builder::default();
+
+    #[cfg(desktop)]
+    {
+        builder = builder.plugin(tauri_plugin_single_instance::init(
+            startup::handle_second_instance,
+        ));
+    }
+
+    builder
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .setup(|app| {
@@ -29,9 +47,16 @@ pub fn run() {
                 app_handle: Mutex::new(Some(app.handle().clone())),
             });
             let state = app.state::<AppState>();
-            let handle = mcp::start_web_server(app.handle().clone())
-                .map_err(|error| Box::<dyn std::error::Error>::from(error))?;
+            let mut app_config = config::load().map_err(Box::<dyn std::error::Error>::from)?;
+            let handle = mcp::start_web_server(app.handle().clone(), app_config.mcp_port)
+                .map_err(Box::<dyn std::error::Error>::from)?;
+            app_config.mcp_port = Some(handle.address().port());
+            config::save(&app_config).map_err(Box::<dyn std::error::Error>::from)?;
             *state.mcp_handle.lock().unwrap() = Some(handle);
+
+            let args = std::env::args().collect::<Vec<_>>();
+            let cwd = std::env::current_dir().unwrap_or_default();
+            startup::open_project_from_args(app.handle(), &args, cwd);
 
             Ok(())
         })
@@ -47,6 +72,8 @@ pub fn run() {
             commands::project_undo,
             commands::project_redo,
             commands::project_summary,
+            commands::project_export_settings_update,
+            commands::project_semantic_groups_update,
             commands::template_list,
             commands::asset_import,
             commands::asset_update,

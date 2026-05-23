@@ -8,10 +8,13 @@ import type {
   Group,
   MinecraftSource,
   ModTarget,
+  CodegenMode,
   ProjectData,
+  ProjectExportSettings,
   ProjectSessionSummary,
   ProjectSummary,
   SaveProjectResult,
+  SemanticGroup,
 } from "./types";
 
 let tauriInvoke: ((cmd: string, args?: Record<string, unknown>) => Promise<unknown>) | null = null;
@@ -226,6 +229,7 @@ function mockExportPreview(args?: Record<string, unknown>): ExportPreview {
   const packageName = sanitizeMockPackage(String(args?.package ?? ""), modId);
   const packagePath = packageName.replace(/\./g, "/");
   const resourceName = sanitizeMockResource(String(args?.class_name ?? ""), "gui");
+  const settings = mockExportSettings(session.project, args);
   const assetBase = joinMockPath(outputDir, "src/main/resources/assets", modId);
   const javaBase = joinMockPath(outputDir, "src/main/java", packagePath);
   const metadata = target === "fabric"
@@ -253,6 +257,10 @@ function mockExportPreview(args?: Record<string, unknown>): ExportPreview {
     ...[...referencedAssets].filter(asset => assets.has(asset)).map(asset => joinMockPath(assetBase, asset)),
     joinMockPath(assetBase, `gui/${resourceName}_layout.json`),
     joinMockPath(javaBase, "GuiLayout.java"),
+    ...(settings.generate_runtime_helpers ? [joinMockPath(javaBase, "GuiRuntime.java")] : []),
+    ...(settings.codegen_mode === "modular" && settings.generate_semantic_registry
+      ? [joinMockPath(javaBase, "SemanticRegistry.java")]
+      : []),
     joinMockPath(javaBase, `${className}Screen.java`),
     joinMockPath(javaBase, `${className}Client.java`),
     joinMockPath(outputDir, metadata),
@@ -271,6 +279,27 @@ function mockExportPreview(args?: Record<string, unknown>): ExportPreview {
       .map(path => `Target file already exists and will be overwritten: ${path}`),
     errors,
   };
+}
+
+function mockExportSettings(project: ProjectData, args?: Record<string, unknown>): ProjectExportSettings {
+  const settings: ProjectExportSettings = {
+    codegen_mode: project.export_settings?.codegen_mode ?? "simple",
+    generate_runtime_helpers: project.export_settings?.generate_runtime_helpers ?? true,
+    generate_semantic_registry: project.export_settings?.generate_semantic_registry ?? false,
+  };
+
+  if (args?.codegen_mode === "simple" || args?.codegen_mode === "modular") {
+    settings.codegen_mode = args.codegen_mode;
+  }
+  if (typeof args?.generate_runtime_helpers === "boolean") {
+    settings.generate_runtime_helpers = args.generate_runtime_helpers;
+  }
+  if (typeof args?.generate_semantic_registry === "boolean") {
+    settings.generate_semantic_registry = args.generate_semantic_registry;
+  }
+  if (settings.codegen_mode === "simple") settings.generate_semantic_registry = false;
+  if (settings.codegen_mode === "modular") settings.generate_semantic_registry = true;
+  return settings;
 }
 
 async function mockInvoke(cmd: string, args?: Record<string, unknown>): Promise<unknown> {
@@ -356,6 +385,28 @@ async function mockInvoke(cmd: string, args?: Record<string, unknown>): Promise<
       session.revision += 1;
       updateMockHistoryFlags(session);
       return mockSummary(session);
+    }
+    case "project_export_settings_update": {
+      const session = mockSession(args?.projectId);
+      const settings = clone(args?.settings as ProjectExportSettings);
+      if (settings.codegen_mode === "simple") settings.generate_semantic_registry = false;
+      if (settings.codegen_mode === "modular") settings.generate_semantic_registry = true;
+      if (JSON.stringify(session.project.export_settings) !== JSON.stringify(settings)) {
+        const previous = clone(session.project);
+        session.project.export_settings = settings;
+        markMockChanged(session, previous);
+      }
+      return clone(session.project.export_settings);
+    }
+    case "project_semantic_groups_update": {
+      const session = mockSession(args?.projectId);
+      const groups = clone((args?.groups as SemanticGroup[]) ?? []);
+      if (JSON.stringify(session.project.semantic_groups) !== JSON.stringify(groups)) {
+        const previous = clone(session.project);
+        session.project.semantic_groups = groups;
+        markMockChanged(session, previous);
+      }
+      return clone(session.project.semantic_groups ?? []);
     }
     case "element_add": {
       const session = mockSession(args?.project_id);
@@ -701,6 +752,16 @@ export async function projectRedo(projectId?: string): Promise<ProjectSessionSum
   return invoke("project_redo", { project_id: projectId }) as Promise<ProjectSessionSummary>;
 }
 
+export async function projectExportSettingsUpdate(settings: ProjectExportSettings, projectId?: string): Promise<ProjectExportSettings> {
+  const invoke = await getInvoke();
+  return invoke("project_export_settings_update", { projectId, settings }) as Promise<ProjectExportSettings>;
+}
+
+export async function projectSemanticGroupsUpdate(groups: SemanticGroup[], projectId?: string): Promise<SemanticGroup[]> {
+  const invoke = await getInvoke();
+  return invoke("project_semantic_groups_update", { projectId, groups }) as Promise<SemanticGroup[]>;
+}
+
 export async function elementAdd(element: Element, projectId?: string): Promise<Element> {
   const invoke = await getInvoke();
   return invoke("element_add", { element, project_id: projectId }) as Promise<Element>;
@@ -816,6 +877,12 @@ export interface ExportPreview {
   errors: string[];
 }
 
+export interface ExportSettingsOverride {
+  codegen_mode: CodegenMode;
+  generate_runtime_helpers: boolean;
+  generate_semantic_registry: boolean;
+}
+
 export async function assetImport(filePath: string, projectId?: string, dataUrl?: string): Promise<AssetImportResult> {
   const invoke = await getInvoke();
   return invoke("asset_import", { file_path: filePath, project_id: projectId, data_url: dataUrl }) as Promise<AssetImportResult>;
@@ -848,6 +915,7 @@ export async function projectExportPreview(
   className: string,
   outputDir: string,
   projectId?: string,
+  settingsOverride?: ExportSettingsOverride,
 ): Promise<ExportPreview> {
   const invoke = await getInvoke();
   return invoke("project_export_preview", {
@@ -857,6 +925,7 @@ export async function projectExportPreview(
     class_name: className,
     output_dir: outputDir,
     project_id: projectId,
+    ...settingsOverride,
   }) as Promise<ExportPreview>;
 }
 
@@ -892,6 +961,7 @@ export async function projectExport(
   className: string,
   outputDir: string,
   projectId?: string,
+  settingsOverride?: ExportSettingsOverride,
 ): Promise<string[]> {
   const invoke = await getInvoke();
   return invoke("project_export", {
@@ -901,6 +971,7 @@ export async function projectExport(
     class_name: className,
     output_dir: outputDir,
     project_id: projectId,
+    ...settingsOverride,
   }) as Promise<string[]>;
 }
 

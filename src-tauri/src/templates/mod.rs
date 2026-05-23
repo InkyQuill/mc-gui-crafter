@@ -1,4 +1,16 @@
-use crate::project::{Element, ElementType, Layer, Project};
+use crate::project::{
+    Element, ElementType, FillDirection, Layer, Project, SemanticGroup, SemanticGroupKind, SlotRole,
+};
+use serde::Serialize;
+
+pub const GENERATED_GUI_PANEL: &str = "textures/generated/gui_panel.png";
+pub const GENERATED_SLOT: &str = "textures/generated/slot.png";
+pub const GENERATED_PROGRESS_ARROW: &str = "textures/generated/progress_arrow.png";
+pub const GENERATED_FLUID_TANK: &str = "textures/generated/fluid_tank.png";
+pub const GENERATED_ENERGY_BAR: &str = "textures/generated/energy_bar.png";
+
+const SLOT_SIZE: i32 = 18;
+const SLOT_STEP: i32 = 18;
 
 pub struct Template {
     pub name: &'static str,
@@ -6,9 +18,8 @@ pub struct Template {
     pub default_width: u32,
     pub default_height: u32,
     pub elements: Vec<Element>,
+    pub semantic_groups: Vec<SemanticGroup>,
 }
-
-use serde::Serialize;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct TemplateInfo {
@@ -40,6 +51,7 @@ pub fn list_templates() -> Vec<Template> {
         chest_9x3(),
         chest_9x6(),
         advanced_machine(),
+        scrollable_inventory_machine(),
         fluid_tank(),
         brewing_stand(),
         anvil(),
@@ -51,6 +63,103 @@ pub fn get_template(name: &str) -> Option<Template> {
     list_templates().into_iter().find(|t| t.name == name)
 }
 
+fn ensure_generated_asset_path(project: &mut Project, path: &str) {
+    if !project.assets.iter().any(|asset| asset == path) {
+        project.assets.push(path.to_string());
+    }
+}
+
+fn generated_panel_matches_size(bytes: &[u8], width: u32, height: u32) -> bool {
+    image::load_from_memory(bytes)
+        .map(|img| img.width() == width && img.height() == height)
+        .unwrap_or(false)
+}
+
+fn add_generated_panel_asset(project: &mut Project) -> Result<(), String> {
+    ensure_generated_asset_path(project, GENERATED_GUI_PANEL);
+    let should_regenerate = project
+        .texture_data
+        .get(GENERATED_GUI_PANEL)
+        .map(|bytes| {
+            !generated_panel_matches_size(bytes, project.gui_size.width, project.gui_size.height)
+        })
+        .unwrap_or(true);
+
+    if should_regenerate {
+        project.texture_data.insert(
+            GENERATED_GUI_PANEL.to_string(),
+            crate::texture::generated_gui_panel(project.gui_size.width, project.gui_size.height)?,
+        );
+    }
+
+    Ok(())
+}
+
+fn add_static_generated_asset(project: &mut Project, path: &str, bytes: Vec<u8>) {
+    ensure_generated_asset_path(project, path);
+    project
+        .texture_data
+        .entry(path.to_string())
+        .or_insert(bytes);
+}
+
+fn add_generated_template_assets(project: &mut Project) -> Result<(), String> {
+    add_generated_panel_asset(project)?;
+    add_static_generated_asset(project, GENERATED_SLOT, crate::texture::generated_slot()?);
+    add_static_generated_asset(
+        project,
+        GENERATED_PROGRESS_ARROW,
+        crate::texture::generated_progress_arrow()?,
+    );
+    add_static_generated_asset(
+        project,
+        GENERATED_FLUID_TANK,
+        crate::texture::generated_fluid_tank()?,
+    );
+    add_static_generated_asset(
+        project,
+        GENERATED_ENERGY_BAR,
+        crate::texture::generated_energy_bar()?,
+    );
+    Ok(())
+}
+
+fn base_element(id: &str, element_type: ElementType, x: i32, y: i32) -> Element {
+    Element {
+        id: id.into(),
+        element_type,
+        x,
+        y,
+        width: None,
+        height: None,
+        size: None,
+        asset: None,
+        direction: None,
+        content: None,
+        font: None,
+        color: None,
+        shadow: None,
+        animation: None,
+        visible: true,
+        uv: None,
+        layer: Layer::Background,
+        slot_role: None,
+        slot_index: None,
+        inventory_group: None,
+        scroll_binding: None,
+        scroll_min: None,
+        scroll_max: None,
+        visible_rows: None,
+        total_rows: None,
+        columns: None,
+        target_group: None,
+        binding: None,
+        dock: None,
+        open_width: None,
+        open_height: None,
+    }
+}
+
 fn empty() -> Template {
     Template {
         name: "empty",
@@ -58,6 +167,7 @@ fn empty() -> Template {
         default_width: 176,
         default_height: 166,
         elements: vec![],
+        semantic_groups: vec![],
     }
 }
 
@@ -76,7 +186,7 @@ fn furnace() -> Template {
                 width: Some(176),
                 height: Some(166),
                 size: None,
-                asset: Some("textures/background.png".into()),
+                asset: Some(GENERATED_GUI_PANEL.into()),
                 direction: None,
                 content: None,
                 font: None,
@@ -86,6 +196,20 @@ fn furnace() -> Template {
                 visible: true,
                 uv: None,
                 layer: Layer::Background,
+                slot_role: None,
+                slot_index: None,
+                inventory_group: None,
+                scroll_binding: None,
+                scroll_min: None,
+                scroll_max: None,
+                visible_rows: None,
+                total_rows: None,
+                columns: None,
+                target_group: None,
+                binding: None,
+                dock: None,
+                open_width: None,
+                open_height: None,
             },
             Element {
                 id: "input_slot".into(),
@@ -105,6 +229,20 @@ fn furnace() -> Template {
                 visible: true,
                 uv: None,
                 layer: Layer::Background,
+                slot_role: None,
+                slot_index: None,
+                inventory_group: None,
+                scroll_binding: None,
+                scroll_min: None,
+                scroll_max: None,
+                visible_rows: None,
+                total_rows: None,
+                columns: None,
+                target_group: None,
+                binding: None,
+                dock: None,
+                open_width: None,
+                open_height: None,
             },
             Element {
                 id: "fuel_slot".into(),
@@ -124,6 +262,20 @@ fn furnace() -> Template {
                 visible: true,
                 uv: None,
                 layer: Layer::Background,
+                slot_role: None,
+                slot_index: None,
+                inventory_group: None,
+                scroll_binding: None,
+                scroll_min: None,
+                scroll_max: None,
+                visible_rows: None,
+                total_rows: None,
+                columns: None,
+                target_group: None,
+                binding: None,
+                dock: None,
+                open_width: None,
+                open_height: None,
             },
             Element {
                 id: "output_slot".into(),
@@ -143,6 +295,20 @@ fn furnace() -> Template {
                 visible: true,
                 uv: None,
                 layer: Layer::Background,
+                slot_role: None,
+                slot_index: None,
+                inventory_group: None,
+                scroll_binding: None,
+                scroll_min: None,
+                scroll_max: None,
+                visible_rows: None,
+                total_rows: None,
+                columns: None,
+                target_group: None,
+                binding: None,
+                dock: None,
+                open_width: None,
+                open_height: None,
             },
             Element {
                 id: "progress_arrow".into(),
@@ -162,6 +328,20 @@ fn furnace() -> Template {
                 visible: true,
                 uv: None,
                 layer: Layer::Animatable,
+                slot_role: None,
+                slot_index: None,
+                inventory_group: None,
+                scroll_binding: None,
+                scroll_min: None,
+                scroll_max: None,
+                visible_rows: None,
+                total_rows: None,
+                columns: None,
+                target_group: None,
+                binding: None,
+                dock: None,
+                open_width: None,
+                open_height: None,
             },
             Element {
                 id: "title".into(),
@@ -181,8 +361,23 @@ fn furnace() -> Template {
                 visible: true,
                 uv: None,
                 layer: Layer::Overlay,
+                slot_role: None,
+                slot_index: None,
+                inventory_group: None,
+                scroll_binding: None,
+                scroll_min: None,
+                scroll_max: None,
+                visible_rows: None,
+                total_rows: None,
+                columns: None,
+                target_group: None,
+                binding: None,
+                dock: None,
+                open_width: None,
+                open_height: None,
             },
         ],
+        semantic_groups: vec![],
     }
 }
 
@@ -195,7 +390,7 @@ fn crafting_3x3() -> Template {
         width: Some(176),
         height: Some(166),
         size: None,
-        asset: Some("textures/background.png".into()),
+        asset: Some(GENERATED_GUI_PANEL.into()),
         direction: None,
         content: None,
         font: None,
@@ -205,6 +400,20 @@ fn crafting_3x3() -> Template {
         visible: true,
         uv: None,
         layer: Layer::Background,
+        slot_role: None,
+        slot_index: None,
+        inventory_group: None,
+        scroll_binding: None,
+        scroll_min: None,
+        scroll_max: None,
+        visible_rows: None,
+        total_rows: None,
+        columns: None,
+        target_group: None,
+        binding: None,
+        dock: None,
+        open_width: None,
+        open_height: None,
     }];
 
     for row in 0..3 {
@@ -212,9 +421,9 @@ fn crafting_3x3() -> Template {
             elements.push(Element {
                 id: format!("craft_grid_{}_{}", row, col),
                 element_type: ElementType::Slot,
-                x: 30 + col * (18 + 2),
-                y: 17 + row * (18 + 2),
-                size: Some(18),
+                x: 30 + col * SLOT_STEP,
+                y: 17 + row * SLOT_STEP,
+                size: Some(SLOT_SIZE as u32),
                 width: None,
                 height: None,
                 asset: None,
@@ -227,6 +436,20 @@ fn crafting_3x3() -> Template {
                 visible: true,
                 uv: None,
                 layer: Layer::Background,
+                slot_role: None,
+                slot_index: None,
+                inventory_group: None,
+                scroll_binding: None,
+                scroll_min: None,
+                scroll_max: None,
+                visible_rows: None,
+                total_rows: None,
+                columns: None,
+                target_group: None,
+                binding: None,
+                dock: None,
+                open_width: None,
+                open_height: None,
             });
         }
     }
@@ -249,6 +472,20 @@ fn crafting_3x3() -> Template {
         visible: true,
         uv: None,
         layer: Layer::Animatable,
+        slot_role: None,
+        slot_index: None,
+        inventory_group: None,
+        scroll_binding: None,
+        scroll_min: None,
+        scroll_max: None,
+        visible_rows: None,
+        total_rows: None,
+        columns: None,
+        target_group: None,
+        binding: None,
+        dock: None,
+        open_width: None,
+        open_height: None,
     });
 
     elements.push(Element {
@@ -269,6 +506,20 @@ fn crafting_3x3() -> Template {
         visible: true,
         uv: None,
         layer: Layer::Background,
+        slot_role: None,
+        slot_index: None,
+        inventory_group: None,
+        scroll_binding: None,
+        scroll_min: None,
+        scroll_max: None,
+        visible_rows: None,
+        total_rows: None,
+        columns: None,
+        target_group: None,
+        binding: None,
+        dock: None,
+        open_width: None,
+        open_height: None,
     });
 
     Template {
@@ -277,6 +528,7 @@ fn crafting_3x3() -> Template {
         default_width: 176,
         default_height: 166,
         elements,
+        semantic_groups: vec![],
     }
 }
 
@@ -289,7 +541,7 @@ fn chest_9x3() -> Template {
         width: Some(176),
         height: Some(166),
         size: None,
-        asset: Some("textures/background.png".into()),
+        asset: Some(GENERATED_GUI_PANEL.into()),
         direction: None,
         content: None,
         font: None,
@@ -299,6 +551,20 @@ fn chest_9x3() -> Template {
         visible: true,
         uv: None,
         layer: Layer::Background,
+        slot_role: None,
+        slot_index: None,
+        inventory_group: None,
+        scroll_binding: None,
+        scroll_min: None,
+        scroll_max: None,
+        visible_rows: None,
+        total_rows: None,
+        columns: None,
+        target_group: None,
+        binding: None,
+        dock: None,
+        open_width: None,
+        open_height: None,
     }];
 
     for row in 0..3 {
@@ -306,9 +572,9 @@ fn chest_9x3() -> Template {
             elements.push(Element {
                 id: format!("inv_{}_{}", row, col),
                 element_type: ElementType::Slot,
-                x: 8 + col * (18 + 2),
-                y: 18 + row * (18 + 2),
-                size: Some(18),
+                x: 8 + col * SLOT_STEP,
+                y: 18 + row * SLOT_STEP,
+                size: Some(SLOT_SIZE as u32),
                 width: None,
                 height: None,
                 asset: None,
@@ -321,6 +587,20 @@ fn chest_9x3() -> Template {
                 visible: true,
                 uv: None,
                 layer: Layer::Background,
+                slot_role: None,
+                slot_index: None,
+                inventory_group: None,
+                scroll_binding: None,
+                scroll_min: None,
+                scroll_max: None,
+                visible_rows: None,
+                total_rows: None,
+                columns: None,
+                target_group: None,
+                binding: None,
+                dock: None,
+                open_width: None,
+                open_height: None,
             });
         }
     }
@@ -331,6 +611,7 @@ fn chest_9x3() -> Template {
         default_width: 176,
         default_height: 166,
         elements,
+        semantic_groups: vec![],
     }
 }
 
@@ -343,7 +624,7 @@ fn chest_9x6() -> Template {
         width: Some(176),
         height: Some(222),
         size: None,
-        asset: Some("textures/background.png".into()),
+        asset: Some(GENERATED_GUI_PANEL.into()),
         direction: None,
         content: None,
         font: None,
@@ -353,6 +634,20 @@ fn chest_9x6() -> Template {
         visible: true,
         uv: None,
         layer: Layer::Background,
+        slot_role: None,
+        slot_index: None,
+        inventory_group: None,
+        scroll_binding: None,
+        scroll_min: None,
+        scroll_max: None,
+        visible_rows: None,
+        total_rows: None,
+        columns: None,
+        target_group: None,
+        binding: None,
+        dock: None,
+        open_width: None,
+        open_height: None,
     }];
 
     for row in 0..6 {
@@ -360,9 +655,9 @@ fn chest_9x6() -> Template {
             elements.push(Element {
                 id: format!("inv_{}_{}", row, col),
                 element_type: ElementType::Slot,
-                x: 8 + col * (18 + 2),
-                y: 18 + row * (18 + 2),
-                size: Some(18),
+                x: 8 + col * SLOT_STEP,
+                y: 18 + row * SLOT_STEP,
+                size: Some(SLOT_SIZE as u32),
                 width: None,
                 height: None,
                 asset: None,
@@ -375,6 +670,20 @@ fn chest_9x6() -> Template {
                 visible: true,
                 uv: None,
                 layer: Layer::Background,
+                slot_role: None,
+                slot_index: None,
+                inventory_group: None,
+                scroll_binding: None,
+                scroll_min: None,
+                scroll_max: None,
+                visible_rows: None,
+                total_rows: None,
+                columns: None,
+                target_group: None,
+                binding: None,
+                dock: None,
+                open_width: None,
+                open_height: None,
             });
         }
     }
@@ -385,6 +694,7 @@ fn chest_9x6() -> Template {
         default_width: 176,
         default_height: 222,
         elements,
+        semantic_groups: vec![],
     }
 }
 
@@ -406,7 +716,7 @@ fn advanced_machine() -> Template {
                 width: Some(176),
                 height: Some(166),
                 size: None,
-                asset: Some("textures/background.png".into()),
+                asset: Some(GENERATED_GUI_PANEL.into()),
                 direction: None,
                 content: None,
                 font: None,
@@ -416,6 +726,20 @@ fn advanced_machine() -> Template {
                 visible: true,
                 uv: None,
                 layer: Layer::Background,
+                slot_role: None,
+                slot_index: None,
+                inventory_group: None,
+                scroll_binding: None,
+                scroll_min: None,
+                scroll_max: None,
+                visible_rows: None,
+                total_rows: None,
+                columns: None,
+                target_group: None,
+                binding: None,
+                dock: None,
+                open_width: None,
+                open_height: None,
             },
             Element {
                 id: "title".into(),
@@ -435,6 +759,20 @@ fn advanced_machine() -> Template {
                 visible: true,
                 uv: None,
                 layer: Layer::Overlay,
+                slot_role: None,
+                slot_index: None,
+                inventory_group: None,
+                scroll_binding: None,
+                scroll_min: None,
+                scroll_max: None,
+                visible_rows: None,
+                total_rows: None,
+                columns: None,
+                target_group: None,
+                binding: None,
+                dock: None,
+                open_width: None,
+                open_height: None,
             },
             Element {
                 id: "input_slot".into(),
@@ -454,6 +792,20 @@ fn advanced_machine() -> Template {
                 visible: true,
                 uv: None,
                 layer: Layer::Background,
+                slot_role: None,
+                slot_index: None,
+                inventory_group: None,
+                scroll_binding: None,
+                scroll_min: None,
+                scroll_max: None,
+                visible_rows: None,
+                total_rows: None,
+                columns: None,
+                target_group: None,
+                binding: None,
+                dock: None,
+                open_width: None,
+                open_height: None,
             },
             Element {
                 id: "fuel_slot".into(),
@@ -473,6 +825,20 @@ fn advanced_machine() -> Template {
                 visible: true,
                 uv: None,
                 layer: Layer::Background,
+                slot_role: None,
+                slot_index: None,
+                inventory_group: None,
+                scroll_binding: None,
+                scroll_min: None,
+                scroll_max: None,
+                visible_rows: None,
+                total_rows: None,
+                columns: None,
+                target_group: None,
+                binding: None,
+                dock: None,
+                open_width: None,
+                open_height: None,
             },
             Element {
                 id: "output_slot".into(),
@@ -492,6 +858,20 @@ fn advanced_machine() -> Template {
                 visible: true,
                 uv: None,
                 layer: Layer::Background,
+                slot_role: None,
+                slot_index: None,
+                inventory_group: None,
+                scroll_binding: None,
+                scroll_min: None,
+                scroll_max: None,
+                visible_rows: None,
+                total_rows: None,
+                columns: None,
+                target_group: None,
+                binding: None,
+                dock: None,
+                open_width: None,
+                open_height: None,
             },
             Element {
                 id: "progress_arrow".into(),
@@ -511,6 +891,20 @@ fn advanced_machine() -> Template {
                 visible: true,
                 uv: None,
                 layer: Layer::Animatable,
+                slot_role: None,
+                slot_index: None,
+                inventory_group: None,
+                scroll_binding: None,
+                scroll_min: None,
+                scroll_max: None,
+                visible_rows: None,
+                total_rows: None,
+                columns: None,
+                target_group: None,
+                binding: None,
+                dock: None,
+                open_width: None,
+                open_height: None,
             },
             Element {
                 id: "fluid_tank_left".into(),
@@ -530,6 +924,20 @@ fn advanced_machine() -> Template {
                 visible: true,
                 uv: None,
                 layer: Layer::Animatable,
+                slot_role: None,
+                slot_index: None,
+                inventory_group: None,
+                scroll_binding: None,
+                scroll_min: None,
+                scroll_max: None,
+                visible_rows: None,
+                total_rows: None,
+                columns: None,
+                target_group: None,
+                binding: None,
+                dock: None,
+                open_width: None,
+                open_height: None,
             },
             Element {
                 id: "fluid_tank_right".into(),
@@ -549,6 +957,20 @@ fn advanced_machine() -> Template {
                 visible: true,
                 uv: None,
                 layer: Layer::Animatable,
+                slot_role: None,
+                slot_index: None,
+                inventory_group: None,
+                scroll_binding: None,
+                scroll_min: None,
+                scroll_max: None,
+                visible_rows: None,
+                total_rows: None,
+                columns: None,
+                target_group: None,
+                binding: None,
+                dock: None,
+                open_width: None,
+                open_height: None,
             },
             Element {
                 id: "energy_bar".into(),
@@ -568,8 +990,121 @@ fn advanced_machine() -> Template {
                 visible: true,
                 uv: None,
                 layer: Layer::Animatable,
+                slot_role: None,
+                slot_index: None,
+                inventory_group: None,
+                scroll_binding: None,
+                scroll_min: None,
+                scroll_max: None,
+                visible_rows: None,
+                total_rows: None,
+                columns: None,
+                target_group: None,
+                binding: None,
+                dock: None,
+                open_width: None,
+                open_height: None,
             },
         ],
+        semantic_groups: vec![],
+    }
+}
+
+fn scrollable_inventory_machine() -> Template {
+    let mut elements = vec![
+        Element {
+            width: Some(176),
+            height: Some(166),
+            asset: Some(GENERATED_GUI_PANEL.into()),
+            ..base_element("bg", ElementType::Texture, 0, 0)
+        },
+        Element {
+            content: Some("Scrollable Machine".into()),
+            font: Some("minecraft:default".into()),
+            color: Some(0x404040),
+            shadow: Some(true),
+            layer: Layer::Overlay,
+            ..base_element("title", ElementType::Text, 8, 6)
+        },
+        Element {
+            size: Some(SLOT_SIZE as u32),
+            slot_role: Some(SlotRole::Machine),
+            slot_index: Some(0),
+            inventory_group: Some("machine".into()),
+            ..base_element("input_left", ElementType::Slot, 44, 22)
+        },
+        Element {
+            size: Some(SLOT_SIZE as u32),
+            slot_role: Some(SlotRole::Machine),
+            slot_index: Some(1),
+            inventory_group: Some("machine".into()),
+            ..base_element("input_right", ElementType::Slot, 62, 22)
+        },
+        Element {
+            size: Some(SLOT_SIZE as u32),
+            slot_role: Some(SlotRole::Machine),
+            slot_index: Some(2),
+            inventory_group: Some("machine".into()),
+            ..base_element("output", ElementType::Slot, 116, 22)
+        },
+        Element {
+            width: Some(22),
+            height: Some(15),
+            direction: Some(FillDirection::LeftToRight),
+            animation: Some("progress".into()),
+            layer: Layer::Animatable,
+            ..base_element("progress_arrow", ElementType::Progress, 86, 24)
+        },
+    ];
+
+    for row in 0..3 {
+        for column in 0..5 {
+            let visible_index = row * 5 + column;
+            elements.push(Element {
+                size: Some(SLOT_SIZE as u32),
+                slot_role: Some(SlotRole::ScrollableInventory),
+                slot_index: Some(visible_index as u32),
+                inventory_group: Some("machine_buffer".into()),
+                scroll_binding: Some("buffer_scroll".into()),
+                ..base_element(
+                    &format!("buffer_slot_{row}_{column}"),
+                    ElementType::VirtualSlotCell,
+                    34 + column * SLOT_STEP,
+                    58 + row * SLOT_STEP,
+                )
+            });
+        }
+    }
+
+    elements.push(Element {
+        width: Some(12),
+        height: Some(54),
+        scroll_min: Some(0),
+        scroll_max: Some(3),
+        visible_rows: Some(3),
+        total_rows: Some(6),
+        columns: Some(5),
+        target_group: Some("machine_buffer".into()),
+        ..base_element("buffer_scroll", ElementType::Scrollbar, 130, 58)
+    });
+
+    Template {
+        name: "scrollable_inventory_machine",
+        description: "Machine with a scrollable 5x3 inventory viewport",
+        default_width: 176,
+        default_height: 166,
+        elements,
+        semantic_groups: vec![SemanticGroup {
+            id: "machine_buffer".into(),
+            kind: SemanticGroupKind::VirtualSlotGrid,
+            columns: Some(5),
+            visible_rows: Some(3),
+            total_rows: Some(6),
+            slot_count: Some(30),
+            data_source: Some("machine_buffer".into()),
+            scroll_binding: Some("buffer_scroll".into()),
+            dynamic_height: false,
+        }],
     }
 }
 
@@ -588,7 +1123,7 @@ fn fluid_tank() -> Template {
                 width: Some(176),
                 height: Some(166),
                 size: None,
-                asset: Some("textures/background.png".into()),
+                asset: Some(GENERATED_GUI_PANEL.into()),
                 direction: None,
                 content: None,
                 font: None,
@@ -598,6 +1133,20 @@ fn fluid_tank() -> Template {
                 visible: true,
                 uv: None,
                 layer: Layer::Background,
+                slot_role: None,
+                slot_index: None,
+                inventory_group: None,
+                scroll_binding: None,
+                scroll_min: None,
+                scroll_max: None,
+                visible_rows: None,
+                total_rows: None,
+                columns: None,
+                target_group: None,
+                binding: None,
+                dock: None,
+                open_width: None,
+                open_height: None,
             },
             Element {
                 id: "title".into(),
@@ -617,6 +1166,20 @@ fn fluid_tank() -> Template {
                 visible: true,
                 uv: None,
                 layer: Layer::Overlay,
+                slot_role: None,
+                slot_index: None,
+                inventory_group: None,
+                scroll_binding: None,
+                scroll_min: None,
+                scroll_max: None,
+                visible_rows: None,
+                total_rows: None,
+                columns: None,
+                target_group: None,
+                binding: None,
+                dock: None,
+                open_width: None,
+                open_height: None,
             },
             Element {
                 id: "fluid_fill".into(),
@@ -636,6 +1199,20 @@ fn fluid_tank() -> Template {
                 visible: true,
                 uv: None,
                 layer: Layer::Animatable,
+                slot_role: None,
+                slot_index: None,
+                inventory_group: None,
+                scroll_binding: None,
+                scroll_min: None,
+                scroll_max: None,
+                visible_rows: None,
+                total_rows: None,
+                columns: None,
+                target_group: None,
+                binding: None,
+                dock: None,
+                open_width: None,
+                open_height: None,
             },
             Element {
                 id: "input_fluid_slot".into(),
@@ -655,6 +1232,20 @@ fn fluid_tank() -> Template {
                 visible: true,
                 uv: None,
                 layer: Layer::Background,
+                slot_role: None,
+                slot_index: None,
+                inventory_group: None,
+                scroll_binding: None,
+                scroll_min: None,
+                scroll_max: None,
+                visible_rows: None,
+                total_rows: None,
+                columns: None,
+                target_group: None,
+                binding: None,
+                dock: None,
+                open_width: None,
+                open_height: None,
             },
             Element {
                 id: "output_fluid_slot".into(),
@@ -674,6 +1265,20 @@ fn fluid_tank() -> Template {
                 visible: true,
                 uv: None,
                 layer: Layer::Background,
+                slot_role: None,
+                slot_index: None,
+                inventory_group: None,
+                scroll_binding: None,
+                scroll_min: None,
+                scroll_max: None,
+                visible_rows: None,
+                total_rows: None,
+                columns: None,
+                target_group: None,
+                binding: None,
+                dock: None,
+                open_width: None,
+                open_height: None,
             },
             Element {
                 id: "capacity_text".into(),
@@ -693,8 +1298,23 @@ fn fluid_tank() -> Template {
                 visible: true,
                 uv: None,
                 layer: Layer::Overlay,
+                slot_role: None,
+                slot_index: None,
+                inventory_group: None,
+                scroll_binding: None,
+                scroll_min: None,
+                scroll_max: None,
+                visible_rows: None,
+                total_rows: None,
+                columns: None,
+                target_group: None,
+                binding: None,
+                dock: None,
+                open_width: None,
+                open_height: None,
             },
         ],
+        semantic_groups: vec![],
     }
 }
 
@@ -708,7 +1328,7 @@ fn brewing_stand() -> Template {
             width: Some(176),
             height: Some(166),
             size: None,
-            asset: Some("textures/background.png".into()),
+            asset: Some(GENERATED_GUI_PANEL.into()),
             direction: None,
             content: None,
             font: None,
@@ -718,6 +1338,20 @@ fn brewing_stand() -> Template {
             visible: true,
             uv: None,
             layer: Layer::Background,
+            slot_role: None,
+            slot_index: None,
+            inventory_group: None,
+            scroll_binding: None,
+            scroll_min: None,
+            scroll_max: None,
+            visible_rows: None,
+            total_rows: None,
+            columns: None,
+            target_group: None,
+            binding: None,
+            dock: None,
+            open_width: None,
+            open_height: None,
         },
         Element {
             id: "title".into(),
@@ -737,6 +1371,20 @@ fn brewing_stand() -> Template {
             visible: true,
             uv: None,
             layer: Layer::Overlay,
+            slot_role: None,
+            slot_index: None,
+            inventory_group: None,
+            scroll_binding: None,
+            scroll_min: None,
+            scroll_max: None,
+            visible_rows: None,
+            total_rows: None,
+            columns: None,
+            target_group: None,
+            binding: None,
+            dock: None,
+            open_width: None,
+            open_height: None,
         },
         Element {
             id: "ingredient_slot".into(),
@@ -756,6 +1404,20 @@ fn brewing_stand() -> Template {
             visible: true,
             uv: None,
             layer: Layer::Background,
+            slot_role: None,
+            slot_index: None,
+            inventory_group: None,
+            scroll_binding: None,
+            scroll_min: None,
+            scroll_max: None,
+            visible_rows: None,
+            total_rows: None,
+            columns: None,
+            target_group: None,
+            binding: None,
+            dock: None,
+            open_width: None,
+            open_height: None,
         },
         Element {
             id: "blaze_slot".into(),
@@ -775,6 +1437,20 @@ fn brewing_stand() -> Template {
             visible: true,
             uv: None,
             layer: Layer::Background,
+            slot_role: None,
+            slot_index: None,
+            inventory_group: None,
+            scroll_binding: None,
+            scroll_min: None,
+            scroll_max: None,
+            visible_rows: None,
+            total_rows: None,
+            columns: None,
+            target_group: None,
+            binding: None,
+            dock: None,
+            open_width: None,
+            open_height: None,
         },
     ];
 
@@ -798,6 +1474,20 @@ fn brewing_stand() -> Template {
             visible: true,
             uv: None,
             layer: Layer::Background,
+            slot_role: None,
+            slot_index: None,
+            inventory_group: None,
+            scroll_binding: None,
+            scroll_min: None,
+            scroll_max: None,
+            visible_rows: None,
+            total_rows: None,
+            columns: None,
+            target_group: None,
+            binding: None,
+            dock: None,
+            open_width: None,
+            open_height: None,
         });
         elements.push(Element {
             id: format!("bubble_{i}"),
@@ -817,6 +1507,20 @@ fn brewing_stand() -> Template {
             visible: true,
             uv: None,
             layer: Layer::Animatable,
+            slot_role: None,
+            slot_index: None,
+            inventory_group: None,
+            scroll_binding: None,
+            scroll_min: None,
+            scroll_max: None,
+            visible_rows: None,
+            total_rows: None,
+            columns: None,
+            target_group: None,
+            binding: None,
+            dock: None,
+            open_width: None,
+            open_height: None,
         });
     }
 
@@ -838,6 +1542,20 @@ fn brewing_stand() -> Template {
         visible: true,
         uv: None,
         layer: Layer::Animatable,
+        slot_role: None,
+        slot_index: None,
+        inventory_group: None,
+        scroll_binding: None,
+        scroll_min: None,
+        scroll_max: None,
+        visible_rows: None,
+        total_rows: None,
+        columns: None,
+        target_group: None,
+        binding: None,
+        dock: None,
+        open_width: None,
+        open_height: None,
     });
 
     Template {
@@ -847,6 +1565,7 @@ fn brewing_stand() -> Template {
         default_width: 176,
         default_height: 166,
         elements,
+        semantic_groups: vec![],
     }
 }
 
@@ -865,7 +1584,7 @@ fn anvil() -> Template {
                 width: Some(176),
                 height: Some(166),
                 size: None,
-                asset: Some("textures/background.png".into()),
+                asset: Some(GENERATED_GUI_PANEL.into()),
                 direction: None,
                 content: None,
                 font: None,
@@ -875,6 +1594,20 @@ fn anvil() -> Template {
                 visible: true,
                 uv: None,
                 layer: Layer::Background,
+                slot_role: None,
+                slot_index: None,
+                inventory_group: None,
+                scroll_binding: None,
+                scroll_min: None,
+                scroll_max: None,
+                visible_rows: None,
+                total_rows: None,
+                columns: None,
+                target_group: None,
+                binding: None,
+                dock: None,
+                open_width: None,
+                open_height: None,
             },
             Element {
                 id: "title".into(),
@@ -894,6 +1627,20 @@ fn anvil() -> Template {
                 visible: true,
                 uv: None,
                 layer: Layer::Overlay,
+                slot_role: None,
+                slot_index: None,
+                inventory_group: None,
+                scroll_binding: None,
+                scroll_min: None,
+                scroll_max: None,
+                visible_rows: None,
+                total_rows: None,
+                columns: None,
+                target_group: None,
+                binding: None,
+                dock: None,
+                open_width: None,
+                open_height: None,
             },
             Element {
                 id: "input_slot_1".into(),
@@ -913,6 +1660,20 @@ fn anvil() -> Template {
                 visible: true,
                 uv: None,
                 layer: Layer::Background,
+                slot_role: None,
+                slot_index: None,
+                inventory_group: None,
+                scroll_binding: None,
+                scroll_min: None,
+                scroll_max: None,
+                visible_rows: None,
+                total_rows: None,
+                columns: None,
+                target_group: None,
+                binding: None,
+                dock: None,
+                open_width: None,
+                open_height: None,
             },
             Element {
                 id: "input_slot_2".into(),
@@ -932,6 +1693,20 @@ fn anvil() -> Template {
                 visible: true,
                 uv: None,
                 layer: Layer::Background,
+                slot_role: None,
+                slot_index: None,
+                inventory_group: None,
+                scroll_binding: None,
+                scroll_min: None,
+                scroll_max: None,
+                visible_rows: None,
+                total_rows: None,
+                columns: None,
+                target_group: None,
+                binding: None,
+                dock: None,
+                open_width: None,
+                open_height: None,
             },
             Element {
                 id: "output_slot".into(),
@@ -951,6 +1726,20 @@ fn anvil() -> Template {
                 visible: true,
                 uv: None,
                 layer: Layer::Background,
+                slot_role: None,
+                slot_index: None,
+                inventory_group: None,
+                scroll_binding: None,
+                scroll_min: None,
+                scroll_max: None,
+                visible_rows: None,
+                total_rows: None,
+                columns: None,
+                target_group: None,
+                binding: None,
+                dock: None,
+                open_width: None,
+                open_height: None,
             },
             Element {
                 id: "cost_text".into(),
@@ -970,6 +1759,20 @@ fn anvil() -> Template {
                 visible: true,
                 uv: None,
                 layer: Layer::Overlay,
+                slot_role: None,
+                slot_index: None,
+                inventory_group: None,
+                scroll_binding: None,
+                scroll_min: None,
+                scroll_max: None,
+                visible_rows: None,
+                total_rows: None,
+                columns: None,
+                target_group: None,
+                binding: None,
+                dock: None,
+                open_width: None,
+                open_height: None,
             },
             Element {
                 id: "progress_arrow".into(),
@@ -989,8 +1792,23 @@ fn anvil() -> Template {
                 visible: true,
                 uv: None,
                 layer: Layer::Animatable,
+                slot_role: None,
+                slot_index: None,
+                inventory_group: None,
+                scroll_binding: None,
+                scroll_min: None,
+                scroll_max: None,
+                visible_rows: None,
+                total_rows: None,
+                columns: None,
+                target_group: None,
+                binding: None,
+                dock: None,
+                open_width: None,
+                open_height: None,
             },
         ],
+        semantic_groups: vec![],
     }
 }
 
@@ -1003,7 +1821,7 @@ fn custom_grid_default() -> Template {
         width: Some(176),
         height: Some(166),
         size: None,
-        asset: Some("textures/background.png".into()),
+        asset: Some(GENERATED_GUI_PANEL.into()),
         direction: None,
         content: None,
         font: None,
@@ -1013,6 +1831,20 @@ fn custom_grid_default() -> Template {
         visible: true,
         uv: None,
         layer: Layer::Background,
+        slot_role: None,
+        slot_index: None,
+        inventory_group: None,
+        scroll_binding: None,
+        scroll_min: None,
+        scroll_max: None,
+        visible_rows: None,
+        total_rows: None,
+        columns: None,
+        target_group: None,
+        binding: None,
+        dock: None,
+        open_width: None,
+        open_height: None,
     }];
 
     for row in 0..3 {
@@ -1020,9 +1852,9 @@ fn custom_grid_default() -> Template {
             elements.push(Element {
                 id: format!("grid_{}_{}", row, col),
                 element_type: ElementType::Slot,
-                x: 30 + col * (18 + 2),
-                y: 17 + row * (18 + 2),
-                size: Some(18),
+                x: 30 + col * SLOT_STEP,
+                y: 17 + row * SLOT_STEP,
+                size: Some(SLOT_SIZE as u32),
                 width: None,
                 height: None,
                 asset: None,
@@ -1035,6 +1867,20 @@ fn custom_grid_default() -> Template {
                 visible: true,
                 uv: None,
                 layer: Layer::Background,
+                slot_role: None,
+                slot_index: None,
+                inventory_group: None,
+                scroll_binding: None,
+                scroll_min: None,
+                scroll_max: None,
+                visible_rows: None,
+                total_rows: None,
+                columns: None,
+                target_group: None,
+                binding: None,
+                dock: None,
+                open_width: None,
+                open_height: None,
             });
         }
     }
@@ -1057,6 +1903,20 @@ fn custom_grid_default() -> Template {
         visible: true,
         uv: None,
         layer: Layer::Animatable,
+        slot_role: None,
+        slot_index: None,
+        inventory_group: None,
+        scroll_binding: None,
+        scroll_min: None,
+        scroll_max: None,
+        visible_rows: None,
+        total_rows: None,
+        columns: None,
+        target_group: None,
+        binding: None,
+        dock: None,
+        open_width: None,
+        open_height: None,
     });
 
     elements.push(Element {
@@ -1077,6 +1937,20 @@ fn custom_grid_default() -> Template {
         visible: true,
         uv: None,
         layer: Layer::Background,
+        slot_role: None,
+        slot_index: None,
+        inventory_group: None,
+        scroll_binding: None,
+        scroll_min: None,
+        scroll_max: None,
+        visible_rows: None,
+        total_rows: None,
+        columns: None,
+        target_group: None,
+        binding: None,
+        dock: None,
+        open_width: None,
+        open_height: None,
     });
 
     for row in 0..3 {
@@ -1084,9 +1958,9 @@ fn custom_grid_default() -> Template {
             elements.push(Element {
                 id: format!("inv_{}_{}", row, col),
                 element_type: ElementType::Slot,
-                x: 8 + col * (18 + 2),
-                y: 86 + row * (18 + 2),
-                size: Some(18),
+                x: 8 + col * SLOT_STEP,
+                y: 86 + row * SLOT_STEP,
+                size: Some(SLOT_SIZE as u32),
                 width: None,
                 height: None,
                 asset: None,
@@ -1099,6 +1973,20 @@ fn custom_grid_default() -> Template {
                 visible: true,
                 uv: None,
                 layer: Layer::Background,
+                slot_role: None,
+                slot_index: None,
+                inventory_group: None,
+                scroll_binding: None,
+                scroll_min: None,
+                scroll_max: None,
+                visible_rows: None,
+                total_rows: None,
+                columns: None,
+                target_group: None,
+                binding: None,
+                dock: None,
+                open_width: None,
+                open_height: None,
             });
         }
     }
@@ -1109,6 +1997,7 @@ fn custom_grid_default() -> Template {
         default_width: 176,
         default_height: 166,
         elements,
+        semantic_groups: vec![],
     }
 }
 
@@ -1119,9 +2008,206 @@ pub fn apply_template(project: &mut Project, template_name: &str) -> Result<(), 
     project.gui_size.width = template.default_width;
     project.gui_size.height = template.default_height;
     project.elements = template.elements;
+    project.semantic_groups = template.semantic_groups;
     project.groups.clear();
     project.animations.clear();
+    add_generated_template_assets(project)?;
     project.is_dirty = true;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::project::{ElementType, ModTarget, Project, SlotRole};
+
+    fn slot_right(element: &crate::project::Element) -> i32 {
+        element.x + element.size.unwrap_or(18) as i32
+    }
+
+    fn slot_bottom(element: &crate::project::Element) -> i32 {
+        element.y + element.size.unwrap_or(18) as i32
+    }
+
+    #[test]
+    fn starter_template_slots_stay_inside_gui_bounds() {
+        for template in list_templates() {
+            for element in &template.elements {
+                if element.element_type != ElementType::Slot {
+                    continue;
+                }
+
+                assert!(
+                    element.x >= 0,
+                    "{} slot {} has negative x {}",
+                    template.name,
+                    element.id,
+                    element.x
+                );
+                assert!(
+                    element.y >= 0,
+                    "{} slot {} has negative y {}",
+                    template.name,
+                    element.id,
+                    element.y
+                );
+                assert!(
+                    slot_right(element) <= template.default_width as i32,
+                    "{} slot {} right edge {} exceeds width {}",
+                    template.name,
+                    element.id,
+                    slot_right(element),
+                    template.default_width
+                );
+                assert!(
+                    slot_bottom(element) <= template.default_height as i32,
+                    "{} slot {} bottom edge {} exceeds height {}",
+                    template.name,
+                    element.id,
+                    slot_bottom(element),
+                    template.default_height
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn nine_column_inventory_templates_use_eighteen_pixel_cadence() {
+        for name in ["chest_9x3", "chest_9x6"] {
+            let template = get_template(name).expect("template exists");
+            let first_row: Vec<_> = template
+                .elements
+                .iter()
+                .filter(|element| element.element_type == ElementType::Slot && element.y == 18)
+                .collect();
+
+            assert_eq!(first_row.len(), 9, "{name} first row should have 9 slots");
+            for pair in first_row.windows(2) {
+                assert_eq!(
+                    pair[1].x - pair[0].x,
+                    18,
+                    "{name} slot cadence should be 18px"
+                );
+            }
+            assert_eq!(first_row[8].x + 18 - first_row[0].x, 162);
+        }
+    }
+
+    #[test]
+    fn crafting_grid_uses_eighteen_pixel_cadence() {
+        let template = get_template("crafting_3x3").expect("template exists");
+        let first_row: Vec<_> = template
+            .elements
+            .iter()
+            .filter(|element| {
+                element.element_type == ElementType::Slot && element.id.starts_with("craft_grid_0_")
+            })
+            .collect();
+
+        assert_eq!(first_row.len(), 3);
+        for pair in first_row.windows(2) {
+            assert_eq!(pair[1].x - pair[0].x, 18);
+        }
+    }
+
+    #[test]
+    fn applying_template_inserts_generated_background_asset() {
+        let mut project = Project::new("Generated", 1, 1, ModTarget::Forge);
+
+        apply_template(&mut project, "furnace").expect("template applies");
+
+        assert!(project
+            .assets
+            .iter()
+            .any(|asset| asset == GENERATED_GUI_PANEL));
+        assert!(project.texture_data.contains_key(GENERATED_GUI_PANEL));
+    }
+
+    #[test]
+    fn scrollable_inventory_template_is_listed() {
+        let templates = list_template_info();
+        let template = templates
+            .iter()
+            .find(|template| template.name == "scrollable_inventory_machine")
+            .unwrap();
+        assert_eq!(template.default_width, 176);
+        assert_eq!(template.default_height, 166);
+    }
+
+    #[test]
+    fn scrollable_inventory_template_has_semantic_slots_and_scrollbar() {
+        let mut project = Project::new("Scrollable", 176, 166, ModTarget::Forge);
+        apply_template(&mut project, "scrollable_inventory_machine").unwrap();
+
+        let scrollable_slots = project
+            .elements
+            .iter()
+            .filter(|element| element.slot_role == Some(SlotRole::ScrollableInventory))
+            .count();
+        assert_eq!(scrollable_slots, 15);
+        assert!(project
+            .elements
+            .iter()
+            .any(|element| element.element_type == ElementType::Scrollbar));
+        assert!(project
+            .semantic_groups
+            .iter()
+            .any(|group| group.id == "machine_buffer"));
+    }
+
+    #[test]
+    fn applying_different_sized_templates_regenerates_generated_background_asset() {
+        let mut project = Project::new("Generated", 1, 1, ModTarget::Forge);
+
+        apply_template(&mut project, "chest_9x3").expect("template applies");
+        let first_panel = project
+            .texture_data
+            .get(GENERATED_GUI_PANEL)
+            .expect("generated panel exists");
+        let first_decoded = image::load_from_memory(first_panel).unwrap().to_rgba8();
+        assert_eq!(first_decoded.height(), 166);
+
+        apply_template(&mut project, "chest_9x6").expect("template applies");
+        let second_panel = project
+            .texture_data
+            .get(GENERATED_GUI_PANEL)
+            .expect("generated panel exists");
+        let second_decoded = image::load_from_memory(second_panel).unwrap().to_rgba8();
+        assert_eq!(second_decoded.height(), 222);
+
+        assert_eq!(
+            project
+                .assets
+                .iter()
+                .filter(|asset| asset.as_str() == GENERATED_GUI_PANEL)
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn applying_same_sized_template_preserves_existing_generated_background_asset() {
+        let mut project = Project::new("Generated", 176, 166, ModTarget::Forge);
+        let edited_panel =
+            image::RgbaImage::from_pixel(176, 166, image::Rgba([0x42, 0x42, 0x42, 0xff]));
+        let mut edited_bytes = Vec::new();
+        edited_panel
+            .write_to(
+                &mut std::io::Cursor::new(&mut edited_bytes),
+                image::ImageFormat::Png,
+            )
+            .unwrap();
+        project
+            .texture_data
+            .insert(GENERATED_GUI_PANEL.to_string(), edited_bytes.clone());
+        project.assets.push(GENERATED_GUI_PANEL.to_string());
+
+        apply_template(&mut project, "furnace").expect("template applies");
+
+        assert_eq!(
+            project.texture_data.get(GENERATED_GUI_PANEL),
+            Some(&edited_bytes)
+        );
+    }
 }

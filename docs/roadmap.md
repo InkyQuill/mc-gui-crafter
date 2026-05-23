@@ -102,8 +102,13 @@
 ## Phase 6.x / Phase 7 Candidates
 
 - [x] More starter templates: advanced machine, fluid tank, brewing stand, anvil, and Custom Grid as a default 3×3 starter layout
+- [x] Minecraft visual fidelity pass: light/dark Minecraft-like themes, generated default GUI textures, and vanilla-aligned template slot metrics
+- [x] Semantic slot roles and semantic group metadata for machine, player, hotbar, scrollable, virtual, upgrade, filter, ghost, and offhand slots
+- [x] Scrollable inventory machine template with baked visible slots, scrollbar preview, and virtual slot grid metadata
+- [x] Configurable simple vs modular code generation, including MCP and export-dialog overrides
 - [ ] Parameterized custom grid generation
 - [ ] Expression support in animation bindings (`cook_time / total_cook_time`)
+- [ ] Full runtime container/menu code generation for semantic inventories and virtual storage grids
 - [ ] Resource pack export (Bedrock JSON UI) — research, not implemented
 - [x] Font import for project font selection and canvas preview
 - [ ] Custom runtime font support for exported Minecraft screens; exported runtime currently uses the platform text renderer

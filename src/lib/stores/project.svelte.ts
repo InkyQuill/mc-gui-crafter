@@ -1,4 +1,17 @@
-import type { Element, ElementType, FontAsset, FontRenderData, Group, Animation, Size, ModTarget, ActiveProjectPayload, ProjectSessionSummary } from "../types";
+import type {
+  ActiveProjectPayload,
+  Animation,
+  Element,
+  ElementType,
+  FontAsset,
+  FontRenderData,
+  Group,
+  ModTarget,
+  ProjectExportSettings,
+  ProjectSessionSummary,
+  SemanticGroup,
+  Size,
+} from "../types";
 import * as api from "../api";
 import { SvelteMap } from "svelte/reactivity";
 
@@ -9,6 +22,12 @@ function uid(): string {
 
 // Global map of asset name -> data URL for rendering
 export const assetDataUrls = new SvelteMap<string, string>();
+
+const DEFAULT_EXPORT_SETTINGS: ProjectExportSettings = {
+  codegen_mode: "simple",
+  generate_runtime_helpers: true,
+  generate_semantic_registry: false,
+};
 
 export class ProjectStore {
   sessions = $state<ProjectSessionSummary[]>([]);
@@ -21,6 +40,8 @@ export class ProjectStore {
   animations = $state<Animation[]>([]);
   assets = $state<string[]>([]);
   fonts = $state<FontAsset[]>([]);
+  semanticGroups = $state<SemanticGroup[]>([]);
+  exportSettings = $state<ProjectExportSettings>({ ...DEFAULT_EXPORT_SETTINGS });
   fontRenderData = new SvelteMap<string, FontRenderData>();
   fontRenderDataVersion = $state(0);
   revision = $state(0);
@@ -133,6 +154,13 @@ export class ProjectStore {
       element.size = 18;
     }
 
+    if (type === "text") {
+      element.content ??= "Text";
+      element.font ??= "minecraft:default";
+      element.color ??= 0x404040;
+      element.shadow ??= false;
+    }
+
     const result = await api.elementAdd(element, this.activeProjectId ?? undefined);
     this.elements = [...this.elements, result];
     this.isDirty = true;
@@ -201,6 +229,30 @@ export class ProjectStore {
 
     const updated = await api.elementUpdate(id, changes, this.activeProjectId ?? undefined);
     Object.assign(el, updated);
+    await this.refreshSessions();
+    await this.hydrateActiveProject();
+  }
+
+  async updateExportSettings(changes: Partial<ProjectExportSettings>) {
+    const next: ProjectExportSettings = {
+      ...this.exportSettings,
+      ...changes,
+    };
+    if (next.codegen_mode === "simple") {
+      next.generate_semantic_registry = false;
+    }
+    if (next.codegen_mode === "modular") {
+      next.generate_semantic_registry = true;
+    }
+    const updated = await api.projectExportSettingsUpdate(next, this.activeProjectId ?? undefined);
+    this.exportSettings = updated;
+    await this.refreshSessions();
+    await this.hydrateActiveProject();
+  }
+
+  async updateSemanticGroups(groups: SemanticGroup[]) {
+    const updated = await api.projectSemanticGroupsUpdate(groups, this.activeProjectId ?? undefined);
+    this.semanticGroups = updated;
     await this.refreshSessions();
     await this.hydrateActiveProject();
   }
@@ -417,6 +469,8 @@ export class ProjectStore {
     this.animations = project.animations;
     this.assets = project.assets;
     this.fonts = project.fonts ?? [];
+    this.semanticGroups = project.semantic_groups ?? [];
+    this.exportSettings = project.export_settings ?? { ...DEFAULT_EXPORT_SETTINGS };
     this.invalidateFontRenderData();
     this.projectPath = payload.summary.path ?? project.project_path ?? null;
     this.isDirty = payload.summary.is_dirty;
@@ -498,6 +552,8 @@ export class ProjectStore {
     this.animations = [];
     this.assets = [];
     this.fonts = [];
+    this.semanticGroups = [];
+    this.exportSettings = { ...DEFAULT_EXPORT_SETTINGS };
     this.invalidateFontRenderData();
     this.projectPath = null;
     this.isDirty = false;

@@ -1,5 +1,5 @@
 use crate::animation::Animation;
-use crate::project::{ElementType, Layer, Project};
+use crate::project::{CodegenMode, ElementType, Layer, Project, ProjectExportSettings};
 use std::borrow::Cow;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -9,6 +9,7 @@ pub struct ExportConfig {
     pub package: String,
     pub class_name: String,
     pub output_dir: String,
+    pub settings_override: Option<ProjectExportSettings>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -141,7 +142,10 @@ pub fn preview_export(
     config: &ExportConfig,
     target: &str,
 ) -> Result<ExportPreview, String> {
+    let settings = effective_export_settings(project, config);
     let plan = plan_export(project, config, target)?;
+    let mut warnings = existing_file_warnings(&plan.files);
+    warnings.extend(semantic_warnings(project, &settings));
     Ok(ExportPreview {
         target: plan.target.loader_id().to_string(),
         mod_id: plan.export.mod_id,
@@ -153,7 +157,7 @@ pub fn preview_export(
             .iter()
             .map(|file| file.path.to_string_lossy().to_string())
             .collect(),
-        warnings: existing_file_warnings(&plan.files),
+        warnings,
         errors: plan.errors,
     })
 }
@@ -165,6 +169,7 @@ fn plan_export(
 ) -> Result<ExportPlan, String> {
     let target = ExportTarget::parse(target)?;
     let export = SanitizedExport::new(config)?;
+    let settings = effective_export_settings(project, config);
     validate_project_dimensions(project)?;
 
     let mut files = Vec::new();
@@ -234,25 +239,8 @@ fn plan_export(
             serde_json::json!(format!("textures/gui/{}_overlay.png", export.resource_name));
     }
 
-    let elements_json: Vec<serde_json::Value> = project
-        .elements
-        .iter()
-        .map(|e| {
-            let mut val = serde_json::to_value(e).unwrap();
-            if e.layer == Layer::Animatable {
-                val["texture"] = serde_json::json!(format!("textures/gui/{}.png", e.id));
-            }
-            val
-        })
-        .collect();
-
-    let layout = serde_json::json!({
-        "gui_size": project.gui_size,
-        "textures": textures_json,
-        "elements": elements_json,
-        "groups": project.groups,
-        "animations": project.animations,
-    });
+    let layout_project = project_with_effective_settings(project, &settings);
+    let layout = layout_json_value(&layout_project, textures_json);
     let layout_path = export
         .asset_dir()
         .join(format!("gui/{}_layout.json", export.resource_name));
@@ -266,6 +254,15 @@ fn plan_export(
         layout_java_path,
         generate_gui_layout_java(&export, target, project).into_bytes(),
     )?;
+
+    if settings.codegen_mode == CodegenMode::Modular && settings.generate_semantic_registry {
+        let registry_path = export.java_dir().join("GuiSemanticRegistry.java");
+        plan_file(
+            &mut files,
+            registry_path,
+            generate_semantic_registry_java(&export, project).into_bytes(),
+        )?;
+    }
 
     let screen_path = export
         .java_dir()
@@ -316,6 +313,51 @@ fn plan_file(files: &mut Vec<PlannedFile>, path: PathBuf, data: Vec<u8>) -> Resu
     Ok(())
 }
 
+fn effective_export_settings(project: &Project, config: &ExportConfig) -> ProjectExportSettings {
+    config
+        .settings_override
+        .clone()
+        .unwrap_or_else(|| project.export_settings.clone())
+        .normalized()
+}
+
+fn project_with_effective_settings<'a>(
+    project: &'a Project,
+    settings: &ProjectExportSettings,
+) -> Cow<'a, Project> {
+    if &project.export_settings == settings {
+        Cow::Borrowed(project)
+    } else {
+        let mut project = project.clone();
+        project.export_settings = settings.clone();
+        Cow::Owned(project)
+    }
+}
+
+fn layout_json_value(project: &Project, textures_json: serde_json::Value) -> serde_json::Value {
+    let elements_json: Vec<serde_json::Value> = project
+        .elements
+        .iter()
+        .map(|e| {
+            let mut val = serde_json::to_value(e).unwrap();
+            if e.layer == Layer::Animatable {
+                val["texture"] = serde_json::json!(format!("textures/gui/{}.png", e.id));
+            }
+            val
+        })
+        .collect();
+
+    serde_json::json!({
+        "gui_size": project.gui_size,
+        "textures": textures_json,
+        "elements": elements_json,
+        "groups": project.groups,
+        "semantic_groups": project.semantic_groups,
+        "animations": project.animations,
+        "export_settings": project.export_settings,
+    })
+}
+
 fn write_file(path: &Path, data: &[u8]) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
@@ -353,14 +395,42 @@ fn existing_file_warnings(files: &[PlannedFile]) -> Vec<String> {
         .collect()
 }
 
+fn semantic_warnings(project: &Project, settings: &ProjectExportSettings) -> Vec<String> {
+    if settings.codegen_mode != CodegenMode::Modular {
+        return Vec::new();
+    }
+
+    let mut warnings = Vec::new();
+    if project.semantic_groups.is_empty() {
+        return vec![
+            "Modular code generation is enabled, but the project has no semantic groups."
+                .to_string(),
+        ];
+    }
+
+    for element in &project.elements {
+        if matches!(
+            element.element_type,
+            ElementType::Panel | ElementType::Tab | ElementType::VirtualSlotCell
+        ) && element.inventory_group.is_none()
+            && element.target_group.is_none()
+        {
+            warnings.push(format!(
+                "Element '{}' is modular but has no semantic group binding.",
+                element.id
+            ));
+        }
+    }
+
+    warnings
+}
+
 fn referenced_texture_assets(project: &Project) -> Vec<Cow<'_, str>> {
     let mut assets = Vec::new();
     for element in &project.elements {
-        if element.element_type == ElementType::Texture {
-            if let Some(asset) = element.asset.as_deref() {
-                if !assets.iter().any(|known: &Cow<'_, str>| known == asset) {
-                    assets.push(Cow::Borrowed(asset));
-                }
+        if let Some(asset) = element.asset.as_deref() {
+            if !assets.iter().any(|known: &Cow<'_, str>| known == asset) {
+                assets.push(Cow::Borrowed(asset));
             }
         }
     }
@@ -445,7 +515,7 @@ fn sanitize_class_name(value: &str) -> String {
 fn sanitize_package(value: &str, mod_id: &str) -> String {
     let segments: Vec<String> = value
         .split('.')
-        .filter_map(|segment| sanitize_package_segment(segment))
+        .filter_map(sanitize_package_segment)
         .collect();
 
     if segments.is_empty() {
@@ -678,6 +748,27 @@ fn generate_gui_layout_java(
     }
 }
 
+fn generate_semantic_registry_java(export: &SanitizedExport, project: &Project) -> String {
+    let groups =
+        serde_json::to_string_pretty(&project.semantic_groups).unwrap_or_else(|_| "[]".into());
+    format!(
+        r#"package {};
+
+public final class GuiSemanticRegistry {{
+    public static final String CODEGEN_MODE = "modular";
+    public static final String GROUPS_JSON = "{}";
+
+    private GuiSemanticRegistry() {{}}
+}}
+"#,
+        export.package,
+        groups
+            .replace('\\', "\\\\")
+            .replace('"', "\\\"")
+            .replace('\n', "\\n")
+    )
+}
+
 fn generate_forge_like_layout_java(
     export: &SanitizedExport,
     target: ExportTarget,
@@ -814,13 +905,12 @@ public final class GuiLayout {{
     public void renderStaticElements(GuiGraphics graphics, int left, int top) {{
         Font font = Minecraft.getInstance().font;
         for (Element element : elements) {{
-            if (!element.isVisible() || "texture".equals(element.type) || "progress".equals(element.type)) {{
+            if (!element.isVisible() || "texture".equals(element.type) || "slot".equals(element.type) || "progress".equals(element.type)) {{
                 continue;
             }}
             int x = left + element.x;
             int y = top + element.y;
             switch (element.type) {{
-                case "slot" -> renderSlot(graphics, x, y, element.sizeOrDefault());
                 case "text" -> graphics.drawString(font, element.contentOrEmpty(), x, y, element.colorOrDefault(), element.shadowOrDefault());
                 case "fluid_tank", "energy_bar" -> renderMeterShell(graphics, x, y, element.widthOrDefault(16), element.heightOrDefault(48));
                 default -> {{ }}
@@ -843,12 +933,6 @@ public final class GuiLayout {{
             }}
         }}
         return null;
-    }}
-
-    private static void renderSlot(GuiGraphics graphics, int x, int y, int size) {{
-        graphics.fill(x, y, x + size, y + size, 0xFF8B8B8B);
-        graphics.fill(x + 1, y + 1, x + size - 1, y + size - 1, 0xFF373737);
-        graphics.fill(x + 2, y + 2, x + size - 2, y + size - 2, 0xFFC6C6C6);
     }}
 
     private static void renderMeterShell(GuiGraphics graphics, int x, int y, int width, int height) {{
@@ -1047,13 +1131,12 @@ public final class GuiLayout {{
     public void renderStaticElements(DrawContext context, int left, int top) {{
         TextRenderer textRenderer = MinecraftClient.getInstance().textRenderer;
         for (Element element : elements) {{
-            if (!element.isVisible() || "texture".equals(element.type) || "progress".equals(element.type)) {{
+            if (!element.isVisible() || "texture".equals(element.type) || "slot".equals(element.type) || "progress".equals(element.type)) {{
                 continue;
             }}
             int x = left + element.x;
             int y = top + element.y;
             switch (element.type) {{
-                case "slot" -> renderSlot(context, x, y, element.sizeOrDefault());
                 case "text" -> context.drawText(textRenderer, element.contentOrEmpty(), x, y, element.colorOrDefault(), element.shadowOrDefault());
                 case "fluid_tank", "energy_bar" -> renderMeterShell(context, x, y, element.widthOrDefault(16), element.heightOrDefault(48));
                 default -> {{ }}
@@ -1076,12 +1159,6 @@ public final class GuiLayout {{
             }}
         }}
         return null;
-    }}
-
-    private static void renderSlot(DrawContext context, int x, int y, int size) {{
-        context.fill(x, y, x + size, y + size, 0xFF8B8B8B);
-        context.fill(x + 1, y + 1, x + size - 1, y + size - 1, 0xFF373737);
-        context.fill(x + 2, y + 2, x + size - 2, y + size - 2, 0xFFC6C6C6);
     }}
 
     private static void renderMeterShell(DrawContext context, int x, int y, int width, int height) {{
@@ -1536,7 +1613,7 @@ fn escape_java_string(value: &str) -> String {
 mod tests {
     use super::*;
     use crate::animation::{Animation, AnimationType};
-    use crate::project::{Element, FillDirection, Layer, ModTarget, Size};
+    use crate::project::{Element, ElementType, FillDirection, Layer, ModTarget, Size};
     use image::{Rgba, RgbaImage};
     use std::collections::HashMap;
 
@@ -1573,6 +1650,20 @@ mod tests {
                     visible: true,
                     uv: None,
                     layer: Layer::Background,
+                    slot_role: None,
+                    slot_index: None,
+                    inventory_group: None,
+                    scroll_binding: None,
+                    scroll_min: None,
+                    scroll_max: None,
+                    visible_rows: None,
+                    total_rows: None,
+                    columns: None,
+                    target_group: None,
+                    binding: None,
+                    dock: None,
+                    open_width: None,
+                    open_height: None,
                 },
                 Element {
                     id: "slot_1".to_string(),
@@ -1592,6 +1683,20 @@ mod tests {
                     visible: true,
                     uv: None,
                     layer: Layer::Background,
+                    slot_role: None,
+                    slot_index: None,
+                    inventory_group: None,
+                    scroll_binding: None,
+                    scroll_min: None,
+                    scroll_max: None,
+                    visible_rows: None,
+                    total_rows: None,
+                    columns: None,
+                    target_group: None,
+                    binding: None,
+                    dock: None,
+                    open_width: None,
+                    open_height: None,
                 },
                 Element {
                     id: "progress_arrow".to_string(),
@@ -1611,6 +1716,20 @@ mod tests {
                     visible: true,
                     uv: None,
                     layer: Layer::Background,
+                    slot_role: None,
+                    slot_index: None,
+                    inventory_group: None,
+                    scroll_binding: None,
+                    scroll_min: None,
+                    scroll_max: None,
+                    visible_rows: None,
+                    total_rows: None,
+                    columns: None,
+                    target_group: None,
+                    binding: None,
+                    dock: None,
+                    open_width: None,
+                    open_height: None,
                 },
             ],
             groups: Vec::new(),
@@ -1627,6 +1746,8 @@ mod tests {
                 triggers_on: None,
             }],
             assets: vec![texture_asset],
+            semantic_groups: Vec::new(),
+            export_settings: crate::project::ProjectExportSettings::default(),
             project_path: None,
             is_dirty: true,
             texture_data,
@@ -1654,6 +1775,20 @@ mod tests {
             visible: true,
             uv: None,
             layer: Layer::Overlay,
+            slot_role: None,
+            slot_index: None,
+            inventory_group: None,
+            scroll_binding: None,
+            scroll_min: None,
+            scroll_max: None,
+            visible_rows: None,
+            total_rows: None,
+            columns: None,
+            target_group: None,
+            binding: None,
+            dock: None,
+            open_width: None,
+            open_height: None,
         });
         if let Some(progress) = project
             .elements
@@ -1714,6 +1849,7 @@ mod tests {
             package: "com.example.1bad.class".to_string(),
             class_name: "123 Furnace GUI".to_string(),
             output_dir: output_dir.to_string_lossy().to_string(),
+            settings_override: None,
         };
         let files = export_project(&sample_project(project_target), &config, target).unwrap();
         (output_dir, files)
@@ -1721,6 +1857,88 @@ mod tests {
 
     fn read(path: &Path) -> String {
         fs::read_to_string(path).unwrap()
+    }
+
+    fn textures_json_for_test() -> serde_json::Value {
+        serde_json::json!({
+            "background": "textures/gui/scrollable_gui.png",
+        })
+    }
+
+    #[test]
+    fn layout_json_contains_semantic_groups_and_export_settings() {
+        let mut project = Project::new("Scrollable", 176, 166, ModTarget::Forge);
+        crate::templates::apply_template(&mut project, "scrollable_inventory_machine").unwrap();
+        project.export_settings.codegen_mode = CodegenMode::Modular;
+        project.export_settings.generate_semantic_registry = true;
+
+        let layout = layout_json_value(&project, textures_json_for_test());
+
+        assert_eq!(layout["semantic_groups"][0]["id"], "machine_buffer");
+        assert_eq!(layout["export_settings"]["codegen_mode"], "modular");
+    }
+
+    #[test]
+    fn effective_export_settings_normalizes_simple_semantic_registry_flag() {
+        let mut project = Project::new("Simple", 176, 166, ModTarget::Forge);
+        project.export_settings.codegen_mode = CodegenMode::Simple;
+        project.export_settings.generate_semantic_registry = true;
+        let config = ExportConfig {
+            mod_id: "demo".into(),
+            package: "com.example.demo".into(),
+            class_name: "SimpleGui".into(),
+            output_dir: "/tmp/gui-crafter-export-normalized".into(),
+            settings_override: None,
+        };
+
+        let settings = effective_export_settings(&project, &config);
+        let layout_project = project_with_effective_settings(&project, &settings);
+        let layout = layout_json_value(&layout_project, textures_json_for_test());
+
+        assert_eq!(settings.codegen_mode, CodegenMode::Simple);
+        assert!(!settings.generate_semantic_registry);
+        assert_eq!(
+            layout["export_settings"]["generate_semantic_registry"],
+            false
+        );
+    }
+
+    #[test]
+    fn modular_semantic_warnings_stop_after_no_groups_warning() {
+        let mut project = sample_project(ModTarget::Forge);
+        project.export_settings.codegen_mode = CodegenMode::Modular;
+        project.elements[0].element_type = ElementType::Panel;
+        let settings = project.export_settings.clone().normalized();
+
+        let warnings = semantic_warnings(&project, &settings);
+
+        assert_eq!(
+            warnings,
+            vec!["Modular code generation is enabled, but the project has no semantic groups."]
+        );
+    }
+
+    #[test]
+    fn modular_export_plans_semantic_registry() {
+        let output_dir = TempExportDir::new("modular-semantic-registry");
+        let mut project = Project::new("Scrollable", 176, 166, ModTarget::Forge);
+        crate::templates::apply_template(&mut project, "scrollable_inventory_machine").unwrap();
+        project.export_settings.codegen_mode = CodegenMode::Modular;
+        project.export_settings.generate_semantic_registry = true;
+        let config = ExportConfig {
+            mod_id: "demo".into(),
+            package: "com.example.demo".into(),
+            class_name: "ScrollableGui".into(),
+            output_dir: output_dir.path().to_string_lossy().to_string(),
+            settings_override: None,
+        };
+
+        let preview = preview_export(&project, &config, "forge").unwrap();
+
+        assert!(preview
+            .files
+            .iter()
+            .any(|path| path.ends_with("GuiSemanticRegistry.java")));
     }
 
     #[test]
@@ -1768,6 +1986,7 @@ mod tests {
             package: "com.example".to_string(),
             class_name: "LayeredGui".to_string(),
             output_dir: output_dir.path().to_string_lossy().to_string(),
+            settings_override: None,
         };
 
         let files = export_project(&layered_project(ModTarget::Fabric), &config, "fabric").unwrap();
@@ -1800,6 +2019,7 @@ mod tests {
             package: "com.example".to_string(),
             class_name: "LayeredGui".to_string(),
             output_dir: output_dir.path().to_string_lossy().to_string(),
+            settings_override: None,
         };
 
         let preview = preview_export(&layered_project(ModTarget::Forge), &config, "forge").unwrap();
@@ -1823,6 +2043,53 @@ mod tests {
     }
 
     #[test]
+    fn animatable_sprite_export_uses_source_texture_pixels() {
+        let output_dir = TempExportDir::new("animatable-sprite-texture");
+        let config = ExportConfig {
+            mod_id: "testmod".to_string(),
+            package: "com.example".to_string(),
+            class_name: "LayeredGui".to_string(),
+            output_dir: output_dir.path().to_string_lossy().to_string(),
+            settings_override: None,
+        };
+
+        export_project(&layered_project(ModTarget::Forge), &config, "forge").unwrap();
+        let sprite_path = output_dir
+            .path()
+            .join("src/main/resources/assets/testmod/textures/gui/progress_arrow.png");
+        let sprite = image::open(sprite_path).unwrap().to_rgba8();
+
+        assert_eq!(sprite.dimensions(), (24, 16));
+        assert_eq!(sprite.get_pixel(0, 0).0, [240, 180, 40, 255]);
+    }
+
+    #[test]
+    fn background_export_bakes_slot_texture_pixels() {
+        let output_dir = TempExportDir::new("slot-baked-background");
+        let config = ExportConfig {
+            mod_id: "testmod".to_string(),
+            package: "com.example".to_string(),
+            class_name: "SlotBakedGui".to_string(),
+            output_dir: output_dir.path().to_string_lossy().to_string(),
+            settings_override: None,
+        };
+
+        export_project(&sample_project(ModTarget::Forge), &config, "forge").unwrap();
+        let background_path = output_dir
+            .path()
+            .join("src/main/resources/assets/testmod/textures/gui/slotbakedgui_gui.png");
+        let background = image::open(background_path).unwrap().to_rgba8();
+        let layout = read(
+            &output_dir
+                .path()
+                .join("src/main/java/com/example/GuiLayout.java"),
+        );
+
+        assert_eq!(background.get_pixel(8, 18).0, [0x37, 0x37, 0x37, 0xff]);
+        assert!(!layout.contains("renderSlot("));
+    }
+
+    #[test]
     fn mixed_progress_export_keeps_sprite_and_fill_runtime_paths() {
         let output_dir = TempExportDir::new("mixed-progress-runtime");
         let config = ExportConfig {
@@ -1830,6 +2097,7 @@ mod tests {
             package: "com.example".to_string(),
             class_name: "LayeredGui".to_string(),
             output_dir: output_dir.path().to_string_lossy().to_string(),
+            settings_override: None,
         };
         let mut project = layered_project(ModTarget::Forge);
         project.elements.push(Element {
@@ -1850,6 +2118,20 @@ mod tests {
             visible: true,
             uv: None,
             layer: Layer::Background,
+            slot_role: None,
+            slot_index: None,
+            inventory_group: None,
+            scroll_binding: None,
+            scroll_min: None,
+            scroll_max: None,
+            visible_rows: None,
+            total_rows: None,
+            columns: None,
+            target_group: None,
+            binding: None,
+            dock: None,
+            open_width: None,
+            open_height: None,
         });
         project.animations.push(Animation {
             id: "burn_time".to_string(),
@@ -1930,6 +2212,7 @@ mod tests {
             package: "com.example".to_string(),
             class_name: "TestGui".to_string(),
             output_dir: output_dir.to_string_lossy().to_string(),
+            settings_override: None,
         };
 
         let error = export_project(&project, &config, "forge").unwrap_err();
@@ -1946,6 +2229,7 @@ mod tests {
             package: "com.example.1bad.class".to_string(),
             class_name: "123 Furnace GUI".to_string(),
             output_dir: output_dir.to_string_lossy().to_string(),
+            settings_override: None,
         };
 
         let preview = preview_export(&sample_project(ModTarget::Forge), &config, "forge").unwrap();
@@ -1986,6 +2270,7 @@ mod tests {
             package: "com.example".to_string(),
             class_name: "TestGui".to_string(),
             output_dir: output_dir.to_string_lossy().to_string(),
+            settings_override: None,
         };
 
         let preview = preview_export(&project, &config, "forge").unwrap();
@@ -2010,6 +2295,7 @@ mod tests {
             package: "com.example".to_string(),
             class_name: "TestGui".to_string(),
             output_dir: output_dir.to_string_lossy().to_string(),
+            settings_override: None,
         };
 
         let preview = preview_export(&sample_project(ModTarget::Forge), &config, "forge").unwrap();

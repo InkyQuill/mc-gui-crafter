@@ -9,11 +9,17 @@
       : "—"
   );
 
-  let selInfo = $derived(
-    editor.selectedElementId
+  let activeTool = $derived.by(() => {
+    void editor.toolRevision;
+    return editor.tool;
+  });
+
+  let selInfo = $derived.by(() => {
+    void editor.selectionRevision;
+    return editor.selectedElementId
       ? `Sel: ${editor.selectedElementId}`
       : ""
-  );
+  });
 
   let gridInfo = $derived(
     preferences.values.showGrid
@@ -29,7 +35,7 @@
 </script>
 
 <footer class="statusbar">
-  <span class="tool">{editor.tool}</span>
+  <span class="tool">{activeTool}</span>
   <span class="coord">{coordText}</span>
   <span class="zoom">Zoom: {editor.zoom}×</span>
   <span class="grid">{gridInfo}</span>
@@ -44,23 +50,23 @@
     align-items: center;
     gap: 16px;
     padding: 3px 12px;
-    background: #16213e;
-    border-top: 1px solid #0f3460;
+    background: var(--surface);
+    border-top: 1px solid var(--border);
     height: 24px;
     flex-shrink: 0;
     font-size: 11px;
-    color: #606080;
+    color: var(--muted-text);
     user-select: none;
   }
 
   .coord {
-    color: #e94560;
+    color: var(--accent);
     font-family: monospace;
     min-width: 60px;
   }
 
   .tool {
-    color: #808090;
+    color: var(--muted-text);
     text-transform: capitalize;
     min-width: 50px;
   }
@@ -72,16 +78,16 @@
   .grid,
   .snap {
     font-family: monospace;
-    color: #70708c;
+    color: var(--muted-text);
   }
 
   .dirty {
-    color: #e9a23b;
+    color: var(--warning);
   }
 
   .sel-info {
     margin-left: auto;
-    color: #505060;
+    color: var(--muted-text);
     font-family: monospace;
     font-size: 10px;
     overflow: hidden;

@@ -10,6 +10,7 @@ Built with **Tauri 2 + Svelte 5 + Rust**.
 - Drag-and-drop elements: slots, textures, text labels, progress bars, fluid tanks, energy bars
 - Animation timeline: fill, cycle, pulse, toggle
 - Pixel-art texture editor and numeric UV region editing for sprite sheets
+- Generated Minecraft-like default GUI textures for new templates, with user-imported textures taking precedence
 - Templates: furnace, crafting table, chest (9×3, 9×6), advanced machine, fluid tank, brewing stand, anvil, and a Custom Grid default 3×3 starter layout
 - Parameterized custom grid generation is planned for a later template pass
 - Font import supports project font selection and canvas preview; exported Minecraft runtime currently uses the platform text renderer unless custom runtime font support is added
@@ -39,9 +40,46 @@ pnpm tauri build
 ### Prerequisites
 
 - Rust 1.75+ (`rustc`, `cargo`)
-- Node.js 22+
+- Node.js 22.12+ or 20.19+
 - pnpm
 - Tauri system dependencies ([see docs](https://v2.tauri.app/start/prerequisites/))
+
+## Opening Project Files
+
+Passing a `.mcgui` path to the app opens that project on startup:
+
+```bash
+mc-gui-crafter /path/to/project.mcgui
+```
+
+If MCGUI Crafter is already running, the existing instance opens the project in
+a new tab and focuses the main window instead of starting a second app window.
+
+## Linux Wayland Startup
+
+MCGUI Crafter sets `WEBKIT_DISABLE_DMABUF_RENDERER=1` automatically on Linux
+before GTK/WebKitGTK starts. This works around a known WebKitGTK/Wry/Tauri
+Wayland crash that looks like:
+
+```text
+Gdk-Message: Error 71 (Protocol error) dispatching to Wayland display.
+```
+
+If you need to test or override the behavior manually, launch with:
+
+```bash
+WEBKIT_DISABLE_DMABUF_RENDERER=1 ./mc-gui-crafter
+```
+
+If your compositor or GPU driver still fails, try forcing the X11 GTK backend
+from an XWayland-capable session:
+
+```bash
+GDK_BACKEND=x11 WEBKIT_DISABLE_DMABUF_RENDERER=1 ./mc-gui-crafter
+```
+
+This issue is upstream in the Linux GTK/WebKitGTK graphics stack; keep
+WebKitGTK, GTK, Mesa/NVIDIA drivers, and your compositor updated.
 
 ## Project Structure
 
@@ -70,19 +108,19 @@ docs/                   # Architecture docs and ADRs
 
 ## MCP Integration
 
-MCGUI Crafter starts a localhost MCP endpoint from the running app instance. It mutates the same tabbed project sessions used by the editor UI, save/export, and backend undo/redo.
+MCGUI Crafter starts a localhost MCP endpoint from the running app instance. It mutates the same tabbed project sessions used by the editor UI, save/export, and backend undo/redo. The preferred port is `47381`; the app stores the selected port in `~/.config/mc-gui-crafter/config.json` and falls back to a free port only when the preferred port is busy.
 
 ```json
 {
   "mcpServers": {
     "mc-gui-crafter": {
-      "url": "http://127.0.0.1:{port}/mcp"
+      "url": "http://127.0.0.1:47381/mcp"
     }
   }
 }
 ```
 
-The selected port is available through the Tauri `mcp_status` command. See `docs/mcp.md` for the current tool list and protocol notes.
+The selected URL is shown in the start panel and available through the Tauri `mcp_status` command. See `docs/mcp.md` for client setup, the current tool list, and protocol notes.
 
 ## License
 

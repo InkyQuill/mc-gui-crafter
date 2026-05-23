@@ -1,6 +1,9 @@
 use crate::animation::Animation;
 use crate::format;
-use crate::project::{Element, Group, ModTarget, Project, ProjectSessionSummary};
+use crate::project::{
+    CodegenMode, Element, Group, ModTarget, Project, ProjectExportSettings, ProjectSessionSummary,
+    SemanticGroup,
+};
 use crate::templates::TemplateInfo;
 use crate::AppState;
 use tauri::State;
@@ -116,6 +119,26 @@ pub fn project_summary(
         "revision": session.revision,
         "session": sessions.list_sessions().into_iter().find(|summary| summary.id == session.id),
     }))
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub fn project_export_settings_update(
+    state: State<AppState>,
+    settings: ProjectExportSettings,
+    project_id: Option<String>,
+) -> Result<ProjectExportSettings, String> {
+    let mut sessions = state.sessions.lock().unwrap();
+    update_export_settings_in_session(&mut sessions, project_id.as_deref(), settings)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub fn project_semantic_groups_update(
+    state: State<AppState>,
+    groups: Vec<SemanticGroup>,
+    project_id: Option<String>,
+) -> Result<Vec<SemanticGroup>, String> {
+    let mut sessions = state.sessions.lock().unwrap();
+    update_semantic_groups_in_session(&mut sessions, project_id.as_deref(), groups)
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -430,15 +453,25 @@ pub fn project_export_preview(
     class_name: String,
     output_dir: String,
     project_id: Option<String>,
+    codegen_mode: Option<String>,
+    generate_runtime_helpers: Option<bool>,
+    generate_semantic_registry: Option<bool>,
 ) -> Result<crate::export::ExportPreview, String> {
     let sessions = state.sessions.lock().unwrap();
     let project = &sessions.resolve(project_id.as_deref())?.project;
+    let settings_override = export_settings_override(
+        project,
+        codegen_mode,
+        generate_runtime_helpers,
+        generate_semantic_registry,
+    )?;
 
     let config = crate::export::ExportConfig {
         mod_id,
         package,
         class_name,
         output_dir,
+        settings_override,
     };
 
     crate::export::preview_export(project, &config, &target)
@@ -453,15 +486,25 @@ pub fn project_export(
     class_name: String,
     output_dir: String,
     project_id: Option<String>,
+    codegen_mode: Option<String>,
+    generate_runtime_helpers: Option<bool>,
+    generate_semantic_registry: Option<bool>,
 ) -> Result<Vec<String>, String> {
     let sessions = state.sessions.lock().unwrap();
     let project = &sessions.resolve(project_id.as_deref())?.project;
+    let settings_override = export_settings_override(
+        project,
+        codegen_mode,
+        generate_runtime_helpers,
+        generate_semantic_registry,
+    )?;
 
     let config = crate::export::ExportConfig {
         mod_id,
         package,
         class_name,
         output_dir,
+        settings_override,
     };
 
     crate::export::export_project(project, &config, &target)
@@ -717,6 +760,70 @@ fn parse_mod_target(mod_target: &str) -> ModTarget {
     }
 }
 
+fn update_export_settings_in_session(
+    sessions: &mut crate::project::ProjectSessionManager,
+    project_id: Option<&str>,
+    settings: ProjectExportSettings,
+) -> Result<ProjectExportSettings, String> {
+    let settings = settings.normalized();
+    let current = &sessions.resolve(project_id)?.project.export_settings;
+    if current == &settings {
+        return Ok(current.clone());
+    }
+
+    sessions.record_history(project_id)?;
+    sessions.resolve_mut(project_id)?.project.export_settings = settings.clone();
+    sessions.mark_changed(project_id)?;
+    Ok(settings)
+}
+
+fn export_settings_override(
+    project: &Project,
+    codegen_mode: Option<String>,
+    generate_runtime_helpers: Option<bool>,
+    generate_semantic_registry: Option<bool>,
+) -> Result<Option<ProjectExportSettings>, String> {
+    if codegen_mode.is_none()
+        && generate_runtime_helpers.is_none()
+        && generate_semantic_registry.is_none()
+    {
+        return Ok(None);
+    }
+
+    let mut settings = project.export_settings.clone();
+    if let Some(mode) = codegen_mode {
+        settings.codegen_mode = match mode.as_str() {
+            "simple" => CodegenMode::Simple,
+            "modular" => CodegenMode::Modular,
+            other => return Err(format!("Unknown codegen_mode: {other}")),
+        };
+    }
+    if let Some(value) = generate_runtime_helpers {
+        settings.generate_runtime_helpers = value;
+    }
+    if let Some(value) = generate_semantic_registry {
+        settings.generate_semantic_registry = value;
+    }
+
+    Ok(Some(settings.normalized()))
+}
+
+fn update_semantic_groups_in_session(
+    sessions: &mut crate::project::ProjectSessionManager,
+    project_id: Option<&str>,
+    groups: Vec<SemanticGroup>,
+) -> Result<Vec<SemanticGroup>, String> {
+    let current = &sessions.resolve(project_id)?.project.semantic_groups;
+    if current == &groups {
+        return Ok(current.clone());
+    }
+
+    sessions.record_history(project_id)?;
+    sessions.resolve_mut(project_id)?.project.semantic_groups = groups.clone();
+    sessions.mark_changed(project_id)?;
+    Ok(groups)
+}
+
 fn move_element_in_session(
     sessions: &mut crate::project::ProjectSessionManager,
     project_id: Option<&str>,
@@ -906,7 +1013,7 @@ fn create_group_in_session(
         let mut unique_count = 0usize;
         let mut unique_ids: Vec<&String> = Vec::new();
         for element_id in &element_ids {
-            if !unique_ids.iter().any(|existing| *existing == element_id) {
+            if !unique_ids.contains(&element_id) {
                 unique_count += 1;
                 unique_ids.push(element_id);
             }
@@ -1307,6 +1414,20 @@ mod tests {
             visible: true,
             uv: None,
             layer: crate::project::Layer::Background,
+            slot_role: None,
+            slot_index: None,
+            inventory_group: None,
+            scroll_binding: None,
+            scroll_min: None,
+            scroll_max: None,
+            visible_rows: None,
+            total_rows: None,
+            columns: None,
+            target_group: None,
+            binding: None,
+            dock: None,
+            open_width: None,
+            open_height: None,
         }
     }
 
@@ -1385,6 +1506,154 @@ mod tests {
                 .project_path,
             previous_path
         );
+    }
+
+    #[test]
+    fn export_settings_update_normalizes_mode_and_records_history() {
+        let mut sessions = ProjectSessionManager::default();
+        let project_id =
+            sessions.create_session(Project::new("Export Settings", 176, 166, ModTarget::Forge));
+
+        let updated = update_export_settings_in_session(
+            &mut sessions,
+            Some(&project_id),
+            ProjectExportSettings {
+                codegen_mode: CodegenMode::Modular,
+                generate_runtime_helpers: true,
+                generate_semantic_registry: false,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(updated.codegen_mode, CodegenMode::Modular);
+        assert!(updated.generate_semantic_registry);
+        assert_eq!(session_summary(&sessions, &project_id).unwrap().revision, 1);
+        assert!(session_summary(&sessions, &project_id).unwrap().can_undo);
+
+        let updated = update_export_settings_in_session(
+            &mut sessions,
+            Some(&project_id),
+            ProjectExportSettings {
+                codegen_mode: CodegenMode::Simple,
+                generate_runtime_helpers: false,
+                generate_semantic_registry: true,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(updated.codegen_mode, CodegenMode::Simple);
+        assert!(!updated.generate_semantic_registry);
+        assert!(!updated.generate_runtime_helpers);
+        assert_eq!(session_summary(&sessions, &project_id).unwrap().revision, 2);
+    }
+
+    #[test]
+    fn export_settings_noop_preserves_redo() {
+        let mut sessions = ProjectSessionManager::default();
+        let project_id =
+            sessions.create_session(Project::new("Export Settings", 176, 166, ModTarget::Forge));
+        update_export_settings_in_session(
+            &mut sessions,
+            Some(&project_id),
+            ProjectExportSettings {
+                codegen_mode: CodegenMode::Modular,
+                generate_runtime_helpers: true,
+                generate_semantic_registry: true,
+            },
+        )
+        .unwrap();
+        sessions.undo(Some(&project_id)).unwrap();
+
+        let unchanged = update_export_settings_in_session(
+            &mut sessions,
+            Some(&project_id),
+            ProjectExportSettings::default(),
+        )
+        .unwrap();
+
+        assert_eq!(unchanged, ProjectExportSettings::default());
+        let summary = session_summary(&sessions, &project_id).unwrap();
+        assert!(!summary.can_undo);
+        assert!(summary.can_redo);
+    }
+
+    #[test]
+    fn export_settings_override_applies_supplied_fields_and_normalizes() {
+        let mut project = Project::new("Export Override", 176, 166, ModTarget::Forge);
+        project.export_settings = ProjectExportSettings {
+            codegen_mode: CodegenMode::Simple,
+            generate_runtime_helpers: true,
+            generate_semantic_registry: false,
+        };
+
+        let override_settings = export_settings_override(
+            &project,
+            Some("modular".to_string()),
+            Some(false),
+            Some(false),
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(override_settings.codegen_mode, CodegenMode::Modular);
+        assert!(!override_settings.generate_runtime_helpers);
+        assert!(override_settings.generate_semantic_registry);
+        assert_eq!(project.export_settings.codegen_mode, CodegenMode::Simple);
+    }
+
+    #[test]
+    fn export_settings_override_returns_none_when_no_fields_supplied() {
+        let project = Project::new("Export Override", 176, 166, ModTarget::Forge);
+
+        let override_settings =
+            export_settings_override(&project, None, None, None).expect("override parsing failed");
+
+        assert_eq!(override_settings, None);
+    }
+
+    #[test]
+    fn export_settings_override_rejects_unknown_codegen_mode() {
+        let project = Project::new("Export Override", 176, 166, ModTarget::Forge);
+
+        let error = export_settings_override(&project, Some("split".to_string()), None, None)
+            .expect_err("unknown codegen mode should fail");
+
+        assert_eq!(error, "Unknown codegen_mode: split");
+    }
+
+    #[test]
+    fn semantic_groups_update_records_history() {
+        let mut sessions = ProjectSessionManager::default();
+        let project_id =
+            sessions.create_session(Project::new("Semantic Groups", 176, 166, ModTarget::Forge));
+        let groups = vec![SemanticGroup {
+            id: "virtual_storage".to_string(),
+            kind: crate::project::SemanticGroupKind::VirtualSlotGrid,
+            columns: Some(9),
+            visible_rows: Some(3),
+            total_rows: Some(6),
+            slot_count: Some(54),
+            data_source: Some("storage".to_string()),
+            scroll_binding: Some("storage_scroll".to_string()),
+            dynamic_height: true,
+        }];
+
+        let updated =
+            update_semantic_groups_in_session(&mut sessions, Some(&project_id), groups.clone())
+                .unwrap();
+
+        assert_eq!(updated, groups);
+        assert_eq!(
+            sessions
+                .resolve(Some(&project_id))
+                .unwrap()
+                .project
+                .semantic_groups,
+            groups
+        );
+        let summary = session_summary(&sessions, &project_id).unwrap();
+        assert_eq!(summary.revision, 1);
+        assert!(summary.can_undo);
     }
 
     #[test]

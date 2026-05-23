@@ -1,10 +1,65 @@
 export type Layer = "background" | "overlay" | "animatable";
 
-export type ElementType = "texture" | "slot" | "progress" | "text" | "fluid_tank" | "energy_bar";
+export type ElementType =
+  | "texture"
+  | "slot"
+  | "progress"
+  | "text"
+  | "fluid_tank"
+  | "energy_bar"
+  | "scrollbar"
+  | "button"
+  | "toggle_button"
+  | "text_input"
+  | "tab"
+  | "panel"
+  | "virtual_slot_cell";
 
 export type FillDirection = "left_to_right" | "right_to_left" | "bottom_to_top" | "top_to_bottom";
 
 export type ModTarget = "forge" | "fabric" | "neoforge";
+
+export type SlotRole =
+  | "machine"
+  | "player_inventory"
+  | "hotbar"
+  | "scrollable_inventory"
+  | "virtual_storage"
+  | "upgrade"
+  | "upgrade_settings"
+  | "filter"
+  | "ghost"
+  | "offhand";
+
+export type SemanticGroupKind =
+  | "fixed_slots"
+  | "virtual_slot_grid"
+  | "player_inventory"
+  | "hotbar"
+  | "upgrade_slots"
+  | "upgrade_panel"
+  | "search_field"
+  | "control_buttons";
+
+export interface SemanticGroup {
+  id: string;
+  kind: SemanticGroupKind;
+  columns?: number;
+  visible_rows?: number;
+  total_rows?: number;
+  slot_count?: number;
+  data_source?: string;
+  scroll_binding?: string;
+  dynamic_height?: boolean;
+}
+
+export type CodegenMode = "simple" | "modular";
+
+export interface ProjectExportSettings {
+  codegen_mode: CodegenMode;
+  generate_runtime_helpers: boolean;
+  generate_semantic_registry: boolean;
+}
 
 export interface Size {
   width: number;
@@ -36,6 +91,20 @@ export interface Element {
   visible?: boolean;
   uv?: UvRect | null;
   layer?: Layer;
+  slot_role?: SlotRole | null;
+  slot_index?: number | null;
+  inventory_group?: string | null;
+  scroll_binding?: string | null;
+  scroll_min?: number;
+  scroll_max?: number;
+  visible_rows?: number | null;
+  total_rows?: number | null;
+  columns?: number | null;
+  target_group?: string | null;
+  binding?: string;
+  dock?: string;
+  open_width?: number;
+  open_height?: number;
 }
 
 export interface Group {
@@ -129,6 +198,8 @@ export interface ProjectData {
   project_path?: string | null;
   is_dirty?: boolean;
   fonts?: FontAsset[];
+  semantic_groups?: SemanticGroup[];
+  export_settings?: ProjectExportSettings;
 }
 
 export interface ProjectSessionSummary {

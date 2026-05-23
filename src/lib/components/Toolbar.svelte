@@ -19,7 +19,7 @@
     if (path) {
       try {
         await project.openProject(path);
-        editor.resetView();
+        editor.resetView(project.guiSize);
         status.success("Project opened.");
       } catch (error) {
         status.error(`Failed to open project: ${readableError(error)}`);
@@ -69,13 +69,13 @@
   async function handleSwitchProject(projectId: string) {
     await project.switchProject(projectId);
     editor.clearSelection();
-    editor.resetView();
+    editor.resetView(project.guiSize);
   }
 
   async function handleCloseProject(projectId: string) {
     await project.closeProject(projectId);
     editor.clearSelection();
-    editor.resetView();
+    editor.resetView(project.guiSize);
   }
 
   function isEditableTarget(target: EventTarget | null): boolean {
@@ -144,7 +144,7 @@
     <button class="icon-button" onclick={() => editor.zoomOut()} title="Zoom out" aria-label="Zoom out">−</button>
     <span class="zoom-label">{editor.zoom}×</span>
     <button class="icon-button" onclick={() => editor.zoomIn()} title="Zoom in" aria-label="Zoom in">+</button>
-    <button class="icon-button" onclick={() => editor.resetView()} title="Reset view" aria-label="Reset view">⊡</button>
+    <button class="icon-button" onclick={() => editor.resetView(project.guiSize)} title="Reset view" aria-label="Reset view">⊡</button>
   </div>
 
   <div class="toolbar-group">
@@ -200,8 +200,8 @@
     align-items: center;
     gap: 8px;
     padding: 5px 12px;
-    background: #16213e;
-    border-bottom: 1px solid #0f3460;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
     height: 36px;
     flex-shrink: 0;
     min-width: 0;
@@ -211,7 +211,7 @@
 
   .logo {
     font-weight: 700;
-    color: #e94560;
+    color: var(--accent);
     font-size: 13px;
     margin-right: 4px;
     flex: 0 0 auto;
@@ -223,7 +223,7 @@
     align-items: center;
     gap: 2px;
     padding: 0 6px;
-    border-right: 1px solid #0f3460;
+    border-right: 1px solid var(--border);
     flex: 0 0 auto;
     min-width: 0;
   }
@@ -249,7 +249,7 @@
   button {
     background: transparent;
     border: 1px solid transparent;
-    color: #a0a0b0;
+    color: var(--muted-text);
     padding: 3px 10px;
     font-size: 12px;
     cursor: pointer;
@@ -261,8 +261,8 @@
   }
 
   button:hover:not(:disabled) {
-    background: #0f3460;
-    color: #e0e0e0;
+    background: var(--surface-raised);
+    color: var(--text);
   }
 
   button:disabled {
@@ -271,13 +271,13 @@
   }
 
   button.active {
-    background: #0f3460;
-    color: #e94560;
-    border-color: #e94560;
+    background: var(--surface-raised);
+    color: var(--accent);
+    border-color: var(--accent);
   }
 
   button:focus-visible {
-    outline: 2px solid #e94560;
+    outline: 2px solid var(--accent);
     outline-offset: 2px;
   }
 
@@ -293,7 +293,7 @@
 
   .zoom-label {
     font-size: 11px;
-    color: #606080;
+    color: var(--muted-text);
     min-width: 28px;
     text-align: center;
     font-family: monospace;
@@ -302,7 +302,7 @@
 
   .project-name {
     margin-left: 0;
-    color: #a0a0b0;
+    color: var(--muted-text);
     font-size: 12px;
     max-width: 200px;
     overflow: hidden;

@@ -7,7 +7,9 @@ use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::animation::Animation;
-use crate::project::{Element, ModTarget, Project, ProjectSessionManager};
+use crate::project::{
+    CodegenMode, Element, ModTarget, Project, ProjectSessionManager, SemanticGroup,
+};
 use crate::{templates, AppState};
 
 const MCP_PATH: &str = "/mcp";
@@ -63,9 +65,11 @@ pub struct McpServerStatus {
     pub address: String,
 }
 
-pub fn start_web_server(app_handle: AppHandle) -> Result<McpServerHandle, String> {
-    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
-        .map_err(|error| format!("Failed to bind MCP server: {error}"))?;
+pub fn start_web_server(
+    app_handle: AppHandle,
+    preferred_port: Option<u16>,
+) -> Result<McpServerHandle, String> {
+    let listener = bind_mcp_listener(preferred_port)?;
     listener
         .set_nonblocking(true)
         .map_err(|error| format!("Failed to configure MCP server: {error}"))?;
@@ -94,6 +98,17 @@ pub fn start_web_server(app_handle: AppHandle) -> Result<McpServerHandle, String
     });
 
     Ok(McpServerHandle { address, shutdown })
+}
+
+pub(crate) fn bind_mcp_listener(preferred_port: Option<u16>) -> Result<TcpListener, String> {
+    if let Some(port) = preferred_port {
+        if let Ok(listener) = TcpListener::bind((Ipv4Addr::LOCALHOST, port)) {
+            return Ok(listener);
+        }
+    }
+
+    TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+        .map_err(|error| format!("Failed to bind MCP server: {error}"))
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -453,6 +468,8 @@ fn is_mutating_tool(tool_name: &str) -> bool {
         "project_summary"
             | "project_list_sessions"
             | "project_get_active"
+            | "project_export_preview"
+            | "project_export"
             | "element_list"
             | "group_list"
             | "animation_list"
@@ -482,9 +499,48 @@ fn get_tool_definitions() -> Vec<serde_json::Value> {
         ),
         td("project_save", "Save a project", project_props(&[])),
         td(
+            "project_save_as",
+            "Save a project to a .mcgui path",
+            project_props(&[("path", "string", "Path to write the .mcgui project", true)]),
+        ),
+        td(
+            "project_export_preview",
+            "Preview generated export files and preflight warnings",
+            export_props(),
+        ),
+        td(
+            "project_export",
+            "Export generated mod files",
+            export_props(),
+        ),
+        td(
             "project_summary",
             "Get a project summary",
             project_props(&[]),
+        ),
+        td(
+            "project_export_settings_update",
+            "Update project code generation/export settings",
+            project_props(&[
+                ("codegen_mode", "string", "simple or modular", false),
+                (
+                    "generate_runtime_helpers",
+                    "boolean",
+                    "Generate runtime helper hooks",
+                    false,
+                ),
+                (
+                    "generate_semantic_registry",
+                    "boolean",
+                    "Generate semantic registry in modular mode",
+                    false,
+                ),
+            ]),
+        ),
+        td(
+            "project_semantic_groups_update",
+            "Replace project semantic group definitions",
+            project_props(&[("semantic_groups", "array", "Semantic group array", true)]),
         ),
         td(
             "project_list_sessions",
@@ -652,6 +708,34 @@ fn project_props(items: &[(&str, &str, &str, bool)]) -> serde_json::Value {
     props(&with_project)
 }
 
+fn export_props() -> serde_json::Value {
+    project_props(&[
+        ("target", "string", "forge, fabric, or neoforge", true),
+        ("mod_id", "string", "Minecraft mod id", true),
+        ("package", "string", "Java package name", true),
+        ("class_name", "string", "Generated Screen class name", true),
+        (
+            "output_dir",
+            "string",
+            "Directory where export files are written",
+            true,
+        ),
+        ("codegen_mode", "string", "simple or modular", false),
+        (
+            "generate_runtime_helpers",
+            "boolean",
+            "Generate runtime helper hooks",
+            false,
+        ),
+        (
+            "generate_semantic_registry",
+            "boolean",
+            "Generate semantic registry in modular mode",
+            false,
+        ),
+    ])
+}
+
 fn props(items: &[(&str, &str, &str, bool)]) -> serde_json::Value {
     let mut required = Vec::new();
     let mut properties = serde_json::Map::new();
@@ -680,7 +764,16 @@ fn execute_tool(
         "project_new" => project_new(&mut sessions, args),
         "project_open" => project_open(&mut sessions, args),
         "project_save" => project_save(&mut sessions, project_id),
+        "project_save_as" => project_save_as(&mut sessions, project_id, args),
+        "project_export_preview" => project_export_preview(&sessions, project_id, args),
+        "project_export" => project_export(&sessions, project_id, args),
         "project_summary" => project_summary(&sessions, project_id),
+        "project_export_settings_update" => {
+            project_export_settings_update(&mut sessions, project_id, args)
+        }
+        "project_semantic_groups_update" => {
+            project_semantic_groups_update(&mut sessions, project_id, args)
+        }
         "project_list_sessions" => Ok(serde_json::json!({ "sessions": sessions.list_sessions() })),
         "project_get_active" => project_get_active(&sessions),
         "project_undo" => Ok(serde_json::to_value(sessions.undo(project_id)?).unwrap()),
@@ -778,6 +871,82 @@ fn project_save(
     }))
 }
 
+fn project_save_as(
+    sessions: &mut ProjectSessionManager,
+    project_id: Option<&str>,
+    args: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let path = required_str(args, "path")?.to_string();
+    let session = sessions.resolve_mut(project_id)?;
+    let previous_path = session.project.project_path.clone();
+    session.project.project_path = Some(path.clone());
+    if let Err(error) = crate::format::save_to_mcgui(&session.project) {
+        session.project.project_path = previous_path;
+        return Err(error);
+    }
+    session.project.is_dirty = false;
+    Ok(serde_json::json!({
+        "project_id": session.id,
+        "status": "saved",
+        "path": path,
+        "is_dirty": false,
+    }))
+}
+
+fn project_export_preview(
+    sessions: &ProjectSessionManager,
+    project_id: Option<&str>,
+    args: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let (project, config, target) = export_request(sessions, project_id, args)?;
+    serde_json::to_value(crate::export::preview_export(project, &config, target)?)
+        .map_err(|error| error.to_string())
+}
+
+fn project_export(
+    sessions: &ProjectSessionManager,
+    project_id: Option<&str>,
+    args: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let (project, config, target) = export_request(sessions, project_id, args)?;
+    Ok(serde_json::json!({
+        "files": crate::export::export_project(project, &config, target)?,
+    }))
+}
+
+fn export_request<'a>(
+    sessions: &'a ProjectSessionManager,
+    project_id: Option<&str>,
+    args: &'a serde_json::Value,
+) -> Result<(&'a Project, crate::export::ExportConfig, &'a str), String> {
+    let target = required_str(args, "target")?;
+    let project = &sessions.resolve(project_id)?.project;
+    let config = crate::export::ExportConfig {
+        mod_id: required_str(args, "mod_id")?.to_string(),
+        package: required_str(args, "package")?.to_string(),
+        class_name: required_str(args, "class_name")?.to_string(),
+        output_dir: required_str(args, "output_dir")?.to_string(),
+        settings_override: export_settings_override(project, args)?,
+    };
+    Ok((project, config, target))
+}
+
+fn export_settings_override(
+    project: &Project,
+    args: &serde_json::Value,
+) -> Result<Option<crate::project::ProjectExportSettings>, String> {
+    let has_override = args.get("codegen_mode").is_some()
+        || args.get("generate_runtime_helpers").is_some()
+        || args.get("generate_semantic_registry").is_some();
+    if !has_override {
+        return Ok(None);
+    }
+
+    let mut settings = project.export_settings.clone();
+    apply_export_settings_args(&mut settings, args)?;
+    Ok(Some(settings.normalized()))
+}
+
 fn project_summary(
     sessions: &ProjectSessionManager,
     project_id: Option<&str>,
@@ -791,9 +960,90 @@ fn project_summary(
         "element_count": session.project.elements.len(),
         "is_dirty": session.project.is_dirty,
         "path": session.project.project_path,
+        "export_settings": session.project.export_settings,
         "revision": session.revision,
         "session": sessions.list_sessions().into_iter().find(|summary| summary.id == session.id),
     }))
+}
+
+fn project_export_settings_update(
+    sessions: &mut ProjectSessionManager,
+    project_id: Option<&str>,
+    args: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let current = sessions
+        .resolve(project_id)?
+        .project
+        .export_settings
+        .clone();
+    let mut next = current.clone();
+    apply_export_settings_args(&mut next, args)?;
+    next = next.normalized();
+    if next == current {
+        return serde_json::to_value(next).map_err(|error| error.to_string());
+    }
+
+    sessions.record_history(project_id)?;
+    let session = sessions.resolve_mut(project_id)?;
+    session.project.export_settings = next.clone();
+    sessions.mark_changed(project_id)?;
+    serde_json::to_value(next).map_err(|error| error.to_string())
+}
+
+fn apply_export_settings_args(
+    settings: &mut crate::project::ProjectExportSettings,
+    args: &serde_json::Value,
+) -> Result<(), String> {
+    if let Some(value) = args.get("codegen_mode") {
+        let mode = value
+            .as_str()
+            .ok_or("codegen_mode must be \"simple\" or \"modular\"")?;
+        settings.codegen_mode = match mode {
+            "simple" => CodegenMode::Simple,
+            "modular" => CodegenMode::Modular,
+            other => return Err(format!("Unknown codegen_mode: {other}")),
+        };
+    }
+    if let Some(value) = args.get("generate_runtime_helpers") {
+        let value = value
+            .as_bool()
+            .ok_or("generate_runtime_helpers must be boolean")?;
+        settings.generate_runtime_helpers = value;
+    }
+    if let Some(value) = args.get("generate_semantic_registry") {
+        let value = value
+            .as_bool()
+            .ok_or("generate_semantic_registry must be boolean")?;
+        settings.generate_semantic_registry = value;
+    }
+    Ok(())
+}
+
+fn project_semantic_groups_update(
+    sessions: &mut ProjectSessionManager,
+    project_id: Option<&str>,
+    args: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let groups_value = args
+        .get("semantic_groups")
+        .ok_or("Missing semantic_groups")?
+        .clone();
+    let groups: Vec<SemanticGroup> = serde_json::from_value(groups_value)
+        .map_err(|error| format!("Invalid semantic_groups: {error}"))?;
+    let current = sessions
+        .resolve(project_id)?
+        .project
+        .semantic_groups
+        .clone();
+    if groups == current {
+        return serde_json::to_value(groups).map_err(|error| error.to_string());
+    }
+
+    sessions.record_history(project_id)?;
+    let session = sessions.resolve_mut(project_id)?;
+    session.project.semantic_groups = groups.clone();
+    sessions.mark_changed(project_id)?;
+    serde_json::to_value(groups).map_err(|error| error.to_string())
 }
 
 fn project_get_active(sessions: &ProjectSessionManager) -> Result<serde_json::Value, String> {
@@ -1027,7 +1277,7 @@ fn validate_group_create(
     }
     let mut unique_ids: Vec<&String> = Vec::new();
     for id in element_ids {
-        if !unique_ids.iter().any(|existing| *existing == id) {
+        if !unique_ids.contains(&id) {
             unique_ids.push(id);
         }
         if project.find_element(id).is_none() {
@@ -1446,6 +1696,7 @@ fn required_u32(value: &serde_json::Value, key: &str) -> Result<u32, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::net::{Ipv4Addr, TcpListener};
     use std::sync::Mutex;
 
     fn test_state() -> AppState {
@@ -1514,6 +1765,9 @@ mod tests {
 
         assert!(names.contains(&"project_list_sessions"));
         assert!(names.contains(&"project_get_active"));
+        assert!(names.contains(&"project_save_as"));
+        assert!(names.contains(&"project_export_preview"));
+        assert!(names.contains(&"project_export"));
         assert!(names.contains(&"element_update"));
         assert!(names.contains(&"element_reorder"));
         assert!(names.contains(&"group_create"));
@@ -1521,6 +1775,122 @@ mod tests {
         assert!(names.contains(&"asset_get_data_url"));
         assert!(names.contains(&"project_undo"));
         assert!(names.contains(&"project_redo"));
+    }
+
+    #[test]
+    fn tools_list_exposes_export_settings_update() {
+        let tools = get_tool_definitions();
+
+        assert!(tools
+            .iter()
+            .any(|tool| tool["name"] == "project_export_settings_update"));
+    }
+
+    #[test]
+    fn export_props_accept_codegen_override() {
+        let schema = export_props();
+        let properties = schema["properties"].as_object().unwrap();
+
+        assert!(properties.contains_key("codegen_mode"));
+        assert!(properties.contains_key("generate_runtime_helpers"));
+        assert!(properties.contains_key("generate_semantic_registry"));
+    }
+
+    #[test]
+    fn bind_mcp_listener_uses_fallback_when_preferred_port_is_busy() {
+        let occupied = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let occupied_port = occupied.local_addr().unwrap().port();
+
+        let listener = bind_mcp_listener(Some(occupied_port)).unwrap();
+
+        assert_ne!(listener.local_addr().unwrap().port(), occupied_port);
+    }
+
+    #[test]
+    fn project_save_as_tool_sets_project_path() {
+        let state = test_state();
+        let path = std::env::temp_dir()
+            .join(format!(
+                "gui-crafter-mcp-save-as-{}.mcgui",
+                uuid::Uuid::new_v4()
+            ))
+            .to_string_lossy()
+            .into_owned();
+        let project_id = {
+            let mut sessions = state.sessions.lock().unwrap();
+            sessions.create_session(Project::new("Save As MCP", 176, 166, ModTarget::Forge))
+        };
+
+        let response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "save-as",
+                "method": "tools/call",
+                "params": {
+                    "name": "project_save_as",
+                    "arguments": {
+                        "project_id": project_id,
+                        "path": path,
+                    }
+                }
+            }),
+            &state,
+        );
+        let _ = std::fs::remove_file(&path);
+
+        assert!(response["error"].is_null());
+        let content = response["result"]["content"][0]["text"].as_str().unwrap();
+        let value: serde_json::Value = serde_json::from_str(content).unwrap();
+        assert_eq!(value["path"], path);
+        assert_eq!(value["is_dirty"], false);
+    }
+
+    #[test]
+    fn project_export_preview_tool_returns_planned_files() {
+        let state = test_state();
+        let project_id = {
+            let mut sessions = state.sessions.lock().unwrap();
+            sessions.create_session(Project::new(
+                "Export Preview MCP",
+                176,
+                166,
+                ModTarget::Forge,
+            ))
+        };
+        let output_dir = std::env::temp_dir()
+            .join(format!("gui-crafter-mcp-export-{}", uuid::Uuid::new_v4()))
+            .to_string_lossy()
+            .into_owned();
+
+        let response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "export-preview",
+                "method": "tools/call",
+                "params": {
+                    "name": "project_export_preview",
+                    "arguments": {
+                        "project_id": project_id,
+                        "target": "forge",
+                        "mod_id": "mcp_test",
+                        "package": "net.inkyquill.mcptest",
+                        "class_name": "FourInputProcessor",
+                        "output_dir": output_dir,
+                    }
+                }
+            }),
+            &state,
+        );
+
+        assert!(response["error"].is_null());
+        let content = response["result"]["content"][0]["text"].as_str().unwrap();
+        let value: serde_json::Value = serde_json::from_str(content).unwrap();
+        assert_eq!(value["target"], "forge");
+        assert!(value["files"].as_array().unwrap().iter().any(|path| {
+            path.as_str()
+                .unwrap()
+                .ends_with("FourInputProcessorScreen.java")
+        }));
     }
 
     #[test]
@@ -1557,6 +1927,201 @@ mod tests {
         assert_eq!(active.project.elements[0].id, "slot_1");
         assert_eq!(active.revision, 1);
         assert!(active.project.is_dirty);
+    }
+
+    #[test]
+    fn project_export_settings_update_changes_live_session() {
+        let state = test_state();
+        let project_id = {
+            let mut sessions = state.sessions.lock().unwrap();
+            sessions.create_session(Project::new("Settings", 176, 166, ModTarget::Forge))
+        };
+
+        let response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "settings-update",
+                "method": "tools/call",
+                "params": {
+                    "name": "project_export_settings_update",
+                    "arguments": {
+                        "project_id": project_id,
+                        "codegen_mode": "modular",
+                        "generate_runtime_helpers": false,
+                        "generate_semantic_registry": false,
+                    }
+                }
+            }),
+            &state,
+        );
+
+        assert!(response["error"].is_null());
+        let content = response["result"]["content"][0]["text"].as_str().unwrap();
+        let value: serde_json::Value = serde_json::from_str(content).unwrap();
+        assert_eq!(value["codegen_mode"], "modular");
+        assert_eq!(value["generate_runtime_helpers"], false);
+        assert_eq!(value["generate_semantic_registry"], true);
+
+        let sessions = state.sessions.lock().unwrap();
+        let active = sessions.active_session().unwrap();
+        assert_eq!(
+            active.project.export_settings.codegen_mode,
+            CodegenMode::Modular
+        );
+        assert_eq!(active.revision, 1);
+        assert!(active.project.is_dirty);
+    }
+
+    #[test]
+    fn project_export_settings_update_rejects_wrong_typed_boolean() {
+        let state = test_state();
+        let project_id = {
+            let mut sessions = state.sessions.lock().unwrap();
+            sessions.create_session(Project::new("Settings", 176, 166, ModTarget::Forge))
+        };
+
+        let response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "settings-update",
+                "method": "tools/call",
+                "params": {
+                    "name": "project_export_settings_update",
+                    "arguments": {
+                        "project_id": project_id,
+                        "generate_runtime_helpers": "false",
+                    }
+                }
+            }),
+            &state,
+        );
+
+        assert_eq!(
+            response["error"]["message"],
+            "generate_runtime_helpers must be boolean"
+        );
+
+        let sessions = state.sessions.lock().unwrap();
+        let active = sessions.active_session().unwrap();
+        assert_eq!(active.revision, 0);
+        assert!(active.project.export_settings.generate_runtime_helpers);
+    }
+
+    #[test]
+    fn project_semantic_groups_update_changes_live_session() {
+        let state = test_state();
+        let project_id = {
+            let mut sessions = state.sessions.lock().unwrap();
+            sessions.create_session(Project::new("Semantic Groups", 176, 166, ModTarget::Forge))
+        };
+
+        let response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "semantic-groups-update",
+                "method": "tools/call",
+                "params": {
+                    "name": "project_semantic_groups_update",
+                    "arguments": {
+                        "project_id": project_id,
+                        "semantic_groups": [{
+                            "id": "inventory",
+                            "kind": "player_inventory",
+                            "columns": 9,
+                            "visible_rows": 3,
+                            "total_rows": 3
+                        }],
+                    }
+                }
+            }),
+            &state,
+        );
+
+        assert!(response["error"].is_null());
+        let sessions = state.sessions.lock().unwrap();
+        let active = sessions.active_session().unwrap();
+        assert_eq!(active.project.semantic_groups.len(), 1);
+        assert_eq!(
+            active.project.semantic_groups[0].kind,
+            crate::project::SemanticGroupKind::PlayerInventory
+        );
+        assert_eq!(active.revision, 1);
+        assert!(active.project.is_dirty);
+    }
+
+    #[test]
+    fn export_request_parses_codegen_override() {
+        let mut sessions = ProjectSessionManager::default();
+        let project_id =
+            sessions.create_session(Project::new("Export Override", 176, 166, ModTarget::Forge));
+        let (_, config, _) = export_request(
+            &sessions,
+            Some(&project_id),
+            &serde_json::json!({
+                "target": "forge",
+                "mod_id": "mcp_test",
+                "package": "net.inkyquill.mcptest",
+                "class_name": "OverrideScreen",
+                "output_dir": "/tmp/gui-crafter-mcp-export",
+                "codegen_mode": "modular",
+                "generate_runtime_helpers": false,
+                "generate_semantic_registry": false,
+            }),
+        )
+        .unwrap();
+
+        let settings = config.settings_override.unwrap();
+        assert_eq!(settings.codegen_mode, CodegenMode::Modular);
+        assert!(!settings.generate_runtime_helpers);
+        assert!(settings.generate_semantic_registry);
+    }
+
+    #[test]
+    fn export_request_rejects_unknown_codegen_override() {
+        let mut sessions = ProjectSessionManager::default();
+        let project_id =
+            sessions.create_session(Project::new("Export Override", 176, 166, ModTarget::Forge));
+        let error = match export_request(
+            &sessions,
+            Some(&project_id),
+            &serde_json::json!({
+                "target": "forge",
+                "mod_id": "mcp_test",
+                "package": "net.inkyquill.mcptest",
+                "class_name": "OverrideScreen",
+                "output_dir": "/tmp/gui-crafter-mcp-export",
+                "codegen_mode": "split",
+            }),
+        ) {
+            Ok(_) => panic!("expected codegen override error"),
+            Err(error) => error,
+        };
+
+        assert_eq!(error, "Unknown codegen_mode: split");
+    }
+
+    #[test]
+    fn export_request_rejects_wrong_typed_codegen_override() {
+        let mut sessions = ProjectSessionManager::default();
+        let project_id =
+            sessions.create_session(Project::new("Export Override", 176, 166, ModTarget::Forge));
+        let error = match export_request(
+            &sessions,
+            Some(&project_id),
+            &serde_json::json!({
+                "target": "forge",
+                "mod_id": "mcp_test",
+                "package": "net.inkyquill.mcptest",
+                "class_name": "OverrideScreen",
+                "output_dir": "/tmp/gui-crafter-mcp-export",
+                "codegen_mode": 123,
+            }),
+        ) {
+            Ok(_) => panic!("expected codegen override type error"),
+            Err(error) => error,
+        };
+
+        assert_eq!(error, "codegen_mode must be \"simple\" or \"modular\"");
     }
 
     #[test]

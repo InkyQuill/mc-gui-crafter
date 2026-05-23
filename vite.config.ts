@@ -5,7 +5,8 @@ export default defineConfig({
   plugins: [svelte()],
   clearScreen: false,
   server: {
-    port: 1420,
+    host: "127.0.0.1",
+    port: 49320,
     strictPort: true,
     watch: {
       ignored: ["**/src-tauri/**"],
