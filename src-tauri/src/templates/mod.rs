@@ -1,5 +1,6 @@
 use crate::project::{
-    Element, ElementType, FillDirection, Layer, Project, SemanticGroup, SemanticGroupKind, SlotRole,
+    Element, ElementType, FillDirection, Group, Layer, Project, SemanticGroup, SemanticGroupKind,
+    SlotRole,
 };
 use serde::Serialize;
 
@@ -11,6 +12,12 @@ pub const GENERATED_ENERGY_BAR: &str = "textures/generated/energy_bar.png";
 
 const SLOT_SIZE: i32 = 18;
 const SLOT_STEP: i32 = 18;
+const PLAYER_INVENTORY_ID: &str = "player_inventory";
+const HOTBAR_ID: &str = "hotbar";
+const PLAYER_INVENTORY_X: i32 = 8;
+const PLAYER_INVENTORY_Y: i32 = 84;
+const HOTBAR_X: i32 = 8;
+const HOTBAR_Y: i32 = 142;
 
 pub struct Template {
     pub name: &'static str,
@@ -18,6 +25,7 @@ pub struct Template {
     pub default_width: u32,
     pub default_height: u32,
     pub elements: Vec<Element>,
+    pub groups: Vec<Group>,
     pub semantic_groups: Vec<SemanticGroup>,
 }
 
@@ -46,16 +54,16 @@ pub fn list_template_info() -> Vec<TemplateInfo> {
 pub fn list_templates() -> Vec<Template> {
     vec![
         empty(),
-        furnace(),
+        with_player_inventory(furnace()),
         crafting_3x3(),
         chest_9x3(),
         chest_9x6(),
-        advanced_machine(),
-        scrollable_inventory_machine(),
-        fluid_tank(),
-        brewing_stand(),
-        anvil(),
-        custom_grid_default(),
+        with_player_inventory(advanced_machine()),
+        with_player_inventory(scrollable_inventory_machine()),
+        with_player_inventory(fluid_tank()),
+        with_player_inventory(brewing_stand()),
+        with_player_inventory(anvil()),
+        with_player_inventory(custom_grid_default()),
     ]
 }
 
@@ -160,6 +168,158 @@ fn base_element(id: &str, element_type: ElementType, x: i32, y: i32) -> Element 
     }
 }
 
+fn slot_grid(
+    id_prefix: &str,
+    x: i32,
+    y: i32,
+    columns: u32,
+    rows: u32,
+    slot_role: SlotRole,
+    inventory_group: &str,
+    slot_index_start: u32,
+) -> Vec<Element> {
+    let mut elements = Vec::with_capacity((columns * rows) as usize);
+    for local_index in 0..columns * rows {
+        let column = local_index % columns;
+        let row = local_index / columns;
+        let slot_index = slot_index_start + local_index;
+        elements.push(Element {
+            size: Some(SLOT_SIZE as u32),
+            slot_role: Some(slot_role.clone()),
+            slot_index: Some(slot_index),
+            inventory_group: Some(inventory_group.into()),
+            ..base_element(
+                &format!("{id_prefix}_{slot_index}"),
+                ElementType::Slot,
+                x + column as i32 * SLOT_STEP,
+                y + row as i32 * SLOT_STEP,
+            )
+        });
+    }
+    elements
+}
+
+fn player_inventory_grid() -> Vec<Element> {
+    slot_grid(
+        PLAYER_INVENTORY_ID,
+        PLAYER_INVENTORY_X,
+        PLAYER_INVENTORY_Y,
+        9,
+        3,
+        SlotRole::PlayerInventory,
+        PLAYER_INVENTORY_ID,
+        9,
+    )
+}
+
+fn hotbar_grid() -> Vec<Element> {
+    slot_grid(
+        HOTBAR_ID,
+        HOTBAR_X,
+        HOTBAR_Y,
+        9,
+        1,
+        SlotRole::Hotbar,
+        HOTBAR_ID,
+        0,
+    )
+}
+
+fn inventory_semantic_group(
+    id: &str,
+    kind: SemanticGroupKind,
+    rows: u32,
+    slot_count: u32,
+) -> SemanticGroup {
+    SemanticGroup {
+        id: id.into(),
+        kind,
+        columns: Some(9),
+        visible_rows: Some(rows),
+        total_rows: Some(rows),
+        slot_count: Some(slot_count),
+        data_source: Some(id.into()),
+        scroll_binding: None,
+        dynamic_height: false,
+    }
+}
+
+fn player_inventory_semantic_groups() -> [SemanticGroup; 2] {
+    [
+        inventory_semantic_group(
+            PLAYER_INVENTORY_ID,
+            SemanticGroupKind::PlayerInventory,
+            3,
+            27,
+        ),
+        inventory_semantic_group(HOTBAR_ID, SemanticGroupKind::Hotbar, 1, 9),
+    ]
+}
+
+fn group_for_slots(id: &str, x: i32, y: i32, elements: &[Element]) -> Option<Group> {
+    let element_ids = elements
+        .iter()
+        .filter(|element| element.inventory_group.as_deref() == Some(id))
+        .map(|element| element.id.clone())
+        .collect::<Vec<_>>();
+    (!element_ids.is_empty()).then(|| Group {
+        id: id.into(),
+        x,
+        y,
+        elements: element_ids,
+    })
+}
+
+fn append_player_inventory(template: &mut Template) {
+    if !template.elements.iter().any(|element| {
+        element.slot_role == Some(SlotRole::PlayerInventory)
+            && element.inventory_group.as_deref() == Some(PLAYER_INVENTORY_ID)
+    }) {
+        template.elements.extend(player_inventory_grid());
+    }
+    if !template.elements.iter().any(|element| {
+        element.slot_role == Some(SlotRole::Hotbar)
+            && element.inventory_group.as_deref() == Some(HOTBAR_ID)
+    }) {
+        template.elements.extend(hotbar_grid());
+    }
+
+    for semantic_group in player_inventory_semantic_groups() {
+        if !template
+            .semantic_groups
+            .iter()
+            .any(|group| group.id == semantic_group.id)
+        {
+            template.semantic_groups.push(semantic_group);
+        }
+    }
+
+    if !template
+        .groups
+        .iter()
+        .any(|group| group.id == PLAYER_INVENTORY_ID)
+    {
+        if let Some(group) = group_for_slots(
+            PLAYER_INVENTORY_ID,
+            PLAYER_INVENTORY_X,
+            PLAYER_INVENTORY_Y,
+            &template.elements,
+        ) {
+            template.groups.push(group);
+        }
+    }
+    if !template.groups.iter().any(|group| group.id == HOTBAR_ID) {
+        if let Some(group) = group_for_slots(HOTBAR_ID, HOTBAR_X, HOTBAR_Y, &template.elements) {
+            template.groups.push(group);
+        }
+    }
+}
+
+fn with_player_inventory(mut template: Template) -> Template {
+    append_player_inventory(&mut template);
+    template
+}
+
 fn empty() -> Template {
     Template {
         name: "empty",
@@ -167,6 +327,7 @@ fn empty() -> Template {
         default_width: 176,
         default_height: 166,
         elements: vec![],
+        groups: vec![],
         semantic_groups: vec![],
     }
 }
@@ -377,6 +538,7 @@ fn furnace() -> Template {
                 open_height: None,
             },
         ],
+        groups: vec![],
         semantic_groups: vec![],
     }
 }
@@ -528,6 +690,7 @@ fn crafting_3x3() -> Template {
         default_width: 176,
         default_height: 166,
         elements,
+        groups: vec![],
         semantic_groups: vec![],
     }
 }
@@ -611,6 +774,7 @@ fn chest_9x3() -> Template {
         default_width: 176,
         default_height: 166,
         elements,
+        groups: vec![],
         semantic_groups: vec![],
     }
 }
@@ -694,6 +858,7 @@ fn chest_9x6() -> Template {
         default_width: 176,
         default_height: 222,
         elements,
+        groups: vec![],
         semantic_groups: vec![],
     }
 }
@@ -1006,6 +1171,7 @@ fn advanced_machine() -> Template {
                 open_height: None,
             },
         ],
+        groups: vec![],
         semantic_groups: vec![],
     }
 }
@@ -1094,6 +1260,7 @@ fn scrollable_inventory_machine() -> Template {
         default_width: 176,
         default_height: 166,
         elements,
+        groups: vec![],
         semantic_groups: vec![SemanticGroup {
             id: "machine_buffer".into(),
             kind: SemanticGroupKind::VirtualSlotGrid,
@@ -1314,6 +1481,7 @@ fn fluid_tank() -> Template {
                 open_height: None,
             },
         ],
+        groups: vec![],
         semantic_groups: vec![],
     }
 }
@@ -1565,6 +1733,7 @@ fn brewing_stand() -> Template {
         default_width: 176,
         default_height: 166,
         elements,
+        groups: vec![],
         semantic_groups: vec![],
     }
 }
@@ -1808,6 +1977,7 @@ fn anvil() -> Template {
                 open_height: None,
             },
         ],
+        groups: vec![],
         semantic_groups: vec![],
     }
 }
@@ -1953,50 +2123,13 @@ fn custom_grid_default() -> Template {
         open_height: None,
     });
 
-    for row in 0..3 {
-        for col in 0..9 {
-            elements.push(Element {
-                id: format!("inv_{}_{}", row, col),
-                element_type: ElementType::Slot,
-                x: 8 + col * SLOT_STEP,
-                y: 86 + row * SLOT_STEP,
-                size: Some(SLOT_SIZE as u32),
-                width: None,
-                height: None,
-                asset: None,
-                direction: None,
-                content: None,
-                font: None,
-                color: None,
-                shadow: None,
-                animation: None,
-                visible: true,
-                uv: None,
-                layer: Layer::Background,
-                slot_role: None,
-                slot_index: None,
-                inventory_group: None,
-                scroll_binding: None,
-                scroll_min: None,
-                scroll_max: None,
-                visible_rows: None,
-                total_rows: None,
-                columns: None,
-                target_group: None,
-                binding: None,
-                dock: None,
-                open_width: None,
-                open_height: None,
-            });
-        }
-    }
-
     Template {
         name: "custom_grid",
         description: "Custom N×M grid with optional output, progress, and inventory",
         default_width: 176,
         default_height: 166,
         elements,
+        groups: vec![],
         semantic_groups: vec![],
     }
 }
@@ -2005,11 +2138,13 @@ pub fn apply_template(project: &mut Project, template_name: &str) -> Result<(), 
     let template =
         get_template(template_name).ok_or_else(|| format!("Unknown template: {template_name}"))?;
 
-    project.gui_size.width = template.default_width;
-    project.gui_size.height = template.default_height;
+    if template.name != "empty" {
+        project.gui_size.width = template.default_width;
+        project.gui_size.height = template.default_height;
+    }
     project.elements = template.elements;
+    project.groups = template.groups;
     project.semantic_groups = template.semantic_groups;
-    project.groups.clear();
     project.animations.clear();
     add_generated_template_assets(project)?;
     project.is_dirty = true;
@@ -2020,7 +2155,7 @@ pub fn apply_template(project: &mut Project, template_name: &str) -> Result<(), 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::project::{ElementType, ModTarget, Project, SlotRole};
+    use crate::project::{ElementType, ModTarget, Project, SemanticGroupKind, SlotRole};
 
     fn slot_right(element: &crate::project::Element) -> i32 {
         element.x + element.size.unwrap_or(18) as i32
@@ -2108,6 +2243,113 @@ mod tests {
         assert_eq!(first_row.len(), 3);
         for pair in first_row.windows(2) {
             assert_eq!(pair[1].x - pair[0].x, 18);
+        }
+    }
+
+    #[test]
+    fn applying_empty_template_preserves_requested_canvas_size() {
+        let mut project = Project::new("Custom Empty", 264, 162, ModTarget::Forge);
+
+        apply_template(&mut project, "empty").expect("template applies");
+
+        assert_eq!(project.gui_size.width, 264);
+        assert_eq!(project.gui_size.height, 162);
+        assert!(project.elements.is_empty());
+    }
+
+    #[test]
+    fn machine_templates_include_vanilla_player_inventory_and_hotbar_metadata() {
+        for name in [
+            "furnace",
+            "advanced_machine",
+            "fluid_tank",
+            "brewing_stand",
+            "anvil",
+            "scrollable_inventory_machine",
+            "custom_grid",
+        ] {
+            let template = get_template(name).expect("template exists");
+            let player_inventory = template
+                .elements
+                .iter()
+                .filter(|element| {
+                    element.element_type == ElementType::Slot
+                        && element.slot_role == Some(SlotRole::PlayerInventory)
+                        && element.inventory_group.as_deref() == Some("player_inventory")
+                })
+                .collect::<Vec<_>>();
+            let hotbar = template
+                .elements
+                .iter()
+                .filter(|element| {
+                    element.element_type == ElementType::Slot
+                        && element.slot_role == Some(SlotRole::Hotbar)
+                        && element.inventory_group.as_deref() == Some("hotbar")
+                })
+                .collect::<Vec<_>>();
+
+            assert_eq!(player_inventory.len(), 27, "{name} player inventory slots");
+            assert_eq!(hotbar.len(), 9, "{name} hotbar slots");
+            for slot in &player_inventory {
+                let index = slot.slot_index.expect("player inventory slot index");
+                assert!(
+                    (9..=35).contains(&index),
+                    "{name} player inventory slot index {index}"
+                );
+                assert_eq!(slot.x, 8 + ((index - 9) % 9) as i32 * 18);
+                assert_eq!(slot.y, 84 + ((index - 9) / 9) as i32 * 18);
+            }
+            for slot in &hotbar {
+                let index = slot.slot_index.expect("hotbar slot index");
+                assert!(index <= 8, "{name} hotbar slot index {index}");
+                assert_eq!(slot.x, 8 + index as i32 * 18);
+                assert_eq!(slot.y, 142);
+            }
+
+            let player_group = template
+                .semantic_groups
+                .iter()
+                .find(|group| group.id == "player_inventory")
+                .expect("player_inventory semantic group");
+            assert_eq!(player_group.kind, SemanticGroupKind::PlayerInventory);
+            assert_eq!(player_group.columns, Some(9));
+            assert_eq!(player_group.visible_rows, Some(3));
+            assert_eq!(player_group.total_rows, Some(3));
+            assert_eq!(player_group.slot_count, Some(27));
+            assert_eq!(
+                player_group.data_source.as_deref(),
+                Some("player_inventory")
+            );
+
+            let hotbar_group = template
+                .semantic_groups
+                .iter()
+                .find(|group| group.id == "hotbar")
+                .expect("hotbar semantic group");
+            assert_eq!(hotbar_group.kind, SemanticGroupKind::Hotbar);
+            assert_eq!(hotbar_group.columns, Some(9));
+            assert_eq!(hotbar_group.visible_rows, Some(1));
+            assert_eq!(hotbar_group.total_rows, Some(1));
+            assert_eq!(hotbar_group.slot_count, Some(9));
+            assert_eq!(hotbar_group.data_source.as_deref(), Some("hotbar"));
+
+            let player_project_group = template
+                .groups
+                .iter()
+                .find(|group| group.id == "player_inventory")
+                .expect("player_inventory project group");
+            assert_eq!(player_project_group.x, 8);
+            assert_eq!(player_project_group.y, 84);
+            assert_eq!(player_project_group.elements.len(), 27);
+
+            let hotbar_project_group = template
+                .groups
+                .iter()
+                .find(|group| group.id == "hotbar")
+                .expect("hotbar project group");
+            assert_eq!(hotbar_project_group.x, 8);
+            assert_eq!(hotbar_project_group.y, 142);
+            assert_eq!(hotbar_project_group.elements.len(), 9);
         }
     }
 

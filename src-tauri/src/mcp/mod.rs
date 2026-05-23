@@ -2385,6 +2385,39 @@ mod tests {
     }
 
     #[test]
+    fn project_new_empty_template_respects_requested_dimensions() {
+        let state = test_state();
+
+        let response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "new-empty",
+                "method": "tools/call",
+                "params": {
+                    "name": "project_new",
+                    "arguments": {
+                        "name": "Custom Empty",
+                        "template": "empty",
+                        "width": 264,
+                        "height": 162,
+                    }
+                }
+            }),
+            &state,
+        );
+
+        assert!(response["error"].is_null());
+        let value = tool_text_value(&response);
+        assert_eq!(value["project"]["gui_size"]["width"], 264);
+        assert_eq!(value["project"]["gui_size"]["height"], 162);
+
+        let sessions = state.sessions.lock().unwrap();
+        let active = sessions.active_session().unwrap();
+        assert_eq!(active.project.gui_size.width, 264);
+        assert_eq!(active.project.gui_size.height, 162);
+    }
+
+    #[test]
     fn project_export_preview_tool_returns_planned_files() {
         let state = test_state();
         let project_id = {
