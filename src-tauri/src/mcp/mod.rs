@@ -2026,7 +2026,11 @@ fn project_screenshot(
                 uuid::Uuid::new_v4()
             ))
         });
-    if path.extension().and_then(|value| value.to_str()) != Some("png") {
+    if !path
+        .extension()
+        .and_then(|value| value.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("png"))
+    {
         return Err("output_path must end with .png".to_string());
     }
     if let Some(parent) = path.parent() {
@@ -2273,6 +2277,7 @@ fn optional_semantic_group_kind(
 mod tests {
     use super::*;
     use std::net::{Ipv4Addr, TcpListener};
+    use std::path::{Path, PathBuf};
     use std::sync::Mutex;
 
     fn test_state() -> AppState {
@@ -2293,6 +2298,41 @@ mod tests {
     fn tool_text_value(response: &serde_json::Value) -> serde_json::Value {
         let content = response["result"]["content"][0]["text"].as_str().unwrap();
         serde_json::from_str(content).unwrap()
+    }
+
+    struct TempPath {
+        path: PathBuf,
+    }
+
+    impl TempPath {
+        fn new(prefix: &str, extension: &str) -> Self {
+            let file_name = if extension.is_empty() {
+                format!("{prefix}-{}", uuid::Uuid::new_v4())
+            } else {
+                format!("{prefix}-{}.{}", uuid::Uuid::new_v4(), extension)
+            };
+            Self {
+                path: std::env::temp_dir().join(file_name),
+            }
+        }
+
+        fn from_path(path: PathBuf) -> Self {
+            Self { path }
+        }
+
+        fn path(&self) -> &Path {
+            &self.path
+        }
+
+        fn path_string(&self) -> String {
+            self.path.to_string_lossy().into_owned()
+        }
+    }
+
+    impl Drop for TempPath {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.path);
+        }
     }
 
     #[test]
@@ -3019,8 +3059,8 @@ mod tests {
             );
             sessions.create_session(project)
         };
-        let output_path =
-            std::env::temp_dir().join(format!("mc-gui-crafter-test-{}.png", uuid::Uuid::new_v4()));
+        let output_path = TempPath::new("mc-gui-crafter-test", "png");
+        let output_path_string = output_path.path_string();
 
         let response = response_for(
             serde_json::json!({
@@ -3031,7 +3071,7 @@ mod tests {
                     "name": "project_screenshot",
                     "arguments": {
                         "project_id": project_id,
-                        "output_path": output_path,
+                        "output_path": output_path_string,
                     }
                 }
             }),
@@ -3046,7 +3086,8 @@ mod tests {
         assert!(value["bytes"].as_u64().unwrap() > 0);
         assert_eq!(value["sha256"].as_str().unwrap().len(), 64);
         assert!(value.get("data_url").is_none());
-        assert!(std::path::Path::new(value["path"].as_str().unwrap()).exists());
+        assert!(output_path.path().exists());
+        assert_eq!(value["path"], output_path.path_string());
     }
 
     #[test]
@@ -3078,10 +3119,81 @@ mod tests {
         assert!(response["error"].is_null(), "{response:#}");
         let text = response["result"]["content"][0]["text"].as_str().unwrap();
         let value: serde_json::Value = serde_json::from_str(text).unwrap();
+        let _written_path = TempPath::from_path(PathBuf::from(value["path"].as_str().unwrap()));
         assert!(value["data_url"]
             .as_str()
             .unwrap()
             .starts_with("data:image/png;base64,"));
+    }
+
+    #[test]
+    fn project_screenshot_accepts_png_extension_case_insensitively() {
+        let state = test_state();
+        {
+            let mut sessions = state.sessions.lock().unwrap();
+            sessions.create_session(Project::new(
+                "Screenshot PNG Extension",
+                32,
+                24,
+                ModTarget::Forge,
+            ));
+        }
+        let output_path = TempPath::new("mc-gui-crafter-test", "PNG");
+        let output_path_string = output_path.path_string();
+
+        let response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "screenshot",
+                "method": "tools/call",
+                "params": {
+                    "name": "project_screenshot",
+                    "arguments": { "output_path": output_path_string }
+                }
+            }),
+            &state,
+        );
+
+        assert!(response["error"].is_null(), "{response:#}");
+        let value = tool_text_value(&response);
+        assert_eq!(value["path"], output_path.path_string());
+        assert!(output_path.path().exists());
+    }
+
+    #[test]
+    fn project_screenshot_rejects_missing_or_non_png_extension() {
+        let state = test_state();
+        {
+            let mut sessions = state.sessions.lock().unwrap();
+            sessions.create_session(Project::new(
+                "Screenshot Bad Extension",
+                32,
+                24,
+                ModTarget::Forge,
+            ));
+        }
+
+        for output_path in [
+            TempPath::new("mc-gui-crafter-test", ""),
+            TempPath::new("mc-gui-crafter-test", "jpg"),
+        ] {
+            let output_path_string = output_path.path_string();
+            let response = response_for(
+                serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": "screenshot",
+                    "method": "tools/call",
+                    "params": {
+                        "name": "project_screenshot",
+                        "arguments": { "output_path": output_path_string }
+                    }
+                }),
+                &state,
+            );
+
+            assert!(!response["error"].is_null(), "{response:#}");
+            assert!(!output_path.path().exists());
+        }
     }
 
     #[test]

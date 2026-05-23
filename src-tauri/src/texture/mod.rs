@@ -53,7 +53,29 @@ pub fn composite_atlas_for_layer(project: &Project, layer: Layer) -> Result<Vec<
 }
 
 pub fn composite_project_preview(project: &Project) -> Result<Vec<u8>, String> {
-    composite_atlas_for_layer(project, Layer::Background)
+    let mut preview = RgbaImage::new(project.gui_size.width, project.gui_size.height);
+    let mut visible_project = project.clone();
+    visible_project.elements.retain(|element| element.visible);
+
+    for layer in [Layer::Background, Layer::Overlay, Layer::Animatable] {
+        let atlas = composite_atlas_for_layer(&visible_project, layer.clone())?;
+        overlay_png(&mut preview, &atlas, 0, 0, "layer atlas")?;
+
+        for element in project.elements.iter().filter(|element| {
+            element.visible && element.layer == layer && !is_baked_atlas_element(element)
+        }) {
+            let element_png = composite_single_element(element, project)?;
+            overlay_png(
+                &mut preview,
+                &element_png,
+                element.x as i64,
+                element.y as i64,
+                &element.id,
+            )?;
+        }
+    }
+
+    encode_png(preview)
 }
 
 fn is_baked_atlas_element(element: &Element) -> bool {
@@ -172,6 +194,14 @@ fn overlay_texture_data(
 
     let resized = image::imageops::resize(&source, tw, th, image::imageops::FilterType::Nearest);
     image::imageops::overlay(img, &resized, element.x as i64, element.y as i64);
+    Ok(())
+}
+
+fn overlay_png(img: &mut RgbaImage, png: &[u8], x: i64, y: i64, label: &str) -> Result<(), String> {
+    let overlay = image::load_from_memory(png)
+        .map_err(|error| format!("Failed to load preview image '{}': {error}", label))?
+        .to_rgba8();
+    image::imageops::overlay(img, &overlay, x, y);
     Ok(())
 }
 
@@ -831,5 +861,60 @@ mod tests {
         let png = composite_atlas_for_layer(&project, Layer::Background).unwrap();
         let img = image::load_from_memory(&png).unwrap().to_rgba8();
         assert_ne!(img.get_pixel(130, 54).0[3], 0);
+    }
+
+    #[test]
+    fn project_preview_composites_visible_layers_and_non_baked_elements() {
+        let mut project = Project::new("Preview", 4, 4, ModTarget::Forge);
+        project.texture_data.insert(
+            "textures/background.png".into(),
+            test_png(4, 4, Rgba([0x11, 0x22, 0x33, 0xff])),
+        );
+        project.texture_data.insert(
+            "textures/overlay.png".into(),
+            test_png(1, 1, Rgba([0x44, 0xaa, 0x66, 0xff])),
+        );
+        project.texture_data.insert(
+            "textures/hidden.png".into(),
+            test_png(1, 1, Rgba([0xff, 0x00, 0xff, 0xff])),
+        );
+
+        let mut background = button_element("background", 0, 0);
+        background.element_type = ElementType::Texture;
+        background.width = Some(4);
+        background.height = Some(4);
+        background.asset = Some("textures/background.png".into());
+        project.elements.push(background);
+
+        let mut overlay = button_element("overlay", 1, 1);
+        overlay.element_type = ElementType::Texture;
+        overlay.width = Some(1);
+        overlay.height = Some(1);
+        overlay.asset = Some("textures/overlay.png".into());
+        overlay.layer = Layer::Overlay;
+        project.elements.push(overlay);
+
+        let mut hidden_overlay = button_element("hidden", 0, 0);
+        hidden_overlay.element_type = ElementType::Texture;
+        hidden_overlay.width = Some(1);
+        hidden_overlay.height = Some(1);
+        hidden_overlay.asset = Some("textures/hidden.png".into());
+        hidden_overlay.layer = Layer::Overlay;
+        hidden_overlay.visible = false;
+        project.elements.push(hidden_overlay);
+
+        let mut progress = button_element("progress", 2, 2);
+        progress.element_type = ElementType::Progress;
+        progress.width = Some(1);
+        progress.height = Some(1);
+        progress.layer = Layer::Animatable;
+        project.elements.push(progress);
+
+        let png = composite_project_preview(&project).unwrap();
+        let image = image::load_from_memory(&png).unwrap().to_rgba8();
+
+        assert_eq!(image.get_pixel(0, 0).0, [0x11, 0x22, 0x33, 0xff]);
+        assert_eq!(image.get_pixel(1, 1).0, [0x44, 0xaa, 0x66, 0xff]);
+        assert_eq!(image.get_pixel(2, 2).0, [0xe9, 0xa2, 0x3b, 0xff]);
     }
 }
