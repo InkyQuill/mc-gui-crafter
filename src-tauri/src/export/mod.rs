@@ -299,7 +299,7 @@ fn plan_export(
     plan_file(
         &mut files,
         metadata_path,
-        generated_text(generate_loader_metadata(&export, target)),
+        loader_metadata_data(generate_loader_metadata(&export, target), target),
     )?;
 
     let readme_path = export.output_dir.join("README.txt");
@@ -332,6 +332,13 @@ fn generated_text(text: String) -> Vec<u8> {
         output.push('\n');
     }
     output.into_bytes()
+}
+
+fn loader_metadata_data(metadata: String, target: ExportTarget) -> Vec<u8> {
+    match target {
+        ExportTarget::Fabric => metadata.into_bytes(),
+        ExportTarget::Forge | ExportTarget::NeoForge => generated_text(metadata),
+    }
 }
 
 fn effective_export_settings(project: &Project, config: &ExportConfig) -> ProjectExportSettings {
@@ -531,7 +538,10 @@ fn control_button_warnings(project: &Project, group: &SemanticGroup) -> Vec<Stri
         })
         .filter(|element| {
             element.inventory_group.as_deref() == Some(group.id.as_str())
-                || element.binding.as_deref() == group.data_source.as_deref()
+                || group
+                    .data_source
+                    .as_deref()
+                    .is_some_and(|data_source| element.binding.as_deref() == Some(data_source))
                 || element.target_group.as_deref() == Some(group.id.as_str())
         })
         .count();
@@ -2296,6 +2306,20 @@ mod tests {
     }
 
     #[test]
+    fn loader_metadata_data_preserves_fabric_json_but_trims_toml_text() {
+        let metadata = "line with trailing spaces   \nnext line\t\n".to_string();
+
+        assert_eq!(
+            loader_metadata_data(metadata.clone(), ExportTarget::Fabric),
+            metadata.as_bytes()
+        );
+        assert_eq!(
+            loader_metadata_data(metadata, ExportTarget::Forge),
+            b"line with trailing spaces\nnext line\n"
+        );
+    }
+
+    #[test]
     fn effective_export_settings_normalizes_simple_semantic_registry_flag() {
         let mut project = Project::new("Simple", 176, 166, ModTarget::Forge);
         project.export_settings.codegen_mode = CodegenMode::Simple;
@@ -2551,6 +2575,40 @@ mod tests {
         assert!(warnings
             .iter()
             .any(|warning| warning.contains("settings") && warning.contains("button")));
+    }
+
+    #[test]
+    fn preview_warns_for_control_buttons_without_data_source_when_unbound_button_exists() {
+        let mut project = Project::new("Control Buttons", 176, 166, ModTarget::Forge);
+        project.export_settings.codegen_mode = CodegenMode::Modular;
+        project.semantic_groups.push(SemanticGroup {
+            id: "settings".into(),
+            kind: SemanticGroupKind::ControlButtons,
+            columns: None,
+            visible_rows: None,
+            total_rows: None,
+            slot_count: Some(1),
+            data_source: None,
+            scroll_binding: None,
+            dynamic_height: false,
+        });
+        project.elements.push(button_element(
+            "unrelated",
+            ElementType::Button,
+            8,
+            8,
+            Some("Unrelated"),
+        ));
+        let settings = project.export_settings.clone().normalized();
+
+        let warnings = semantic_warnings(&project, &settings);
+
+        assert!(
+            warnings
+                .iter()
+                .any(|warning| warning.contains("settings") && warning.contains("button")),
+            "unbound unrelated buttons must not satisfy an unbound control group: {warnings:?}"
+        );
     }
 
     #[test]
