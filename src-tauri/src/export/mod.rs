@@ -1068,7 +1068,7 @@ public final class GuiLayout {{
 
     private static void renderButtonLabel(GuiGraphics graphics, Font font, Element element, int x, int y) {{
         String label = element.contentOrEmpty();
-        if (label.isEmpty()) {{
+        if (label.isEmpty() || element.hasIcon()) {{
             return;
         }}
         int width = element.widthOrDefault(40);
@@ -1103,12 +1103,14 @@ public final class GuiLayout {{
         String animation;
         Boolean visible;
         String texture;
+        String icon;
 
         boolean isVisible() {{ return visible == null || visible; }}
         int widthOrDefault(int fallback) {{ return width == null ? fallback : width; }}
         int heightOrDefault(int fallback) {{ return height == null ? fallback : height; }}
         int sizeOrDefault() {{ return size == null ? 18 : size; }}
         String contentOrEmpty() {{ return content == null ? "" : content; }}
+        boolean hasIcon() {{ return icon != null && !icon.isEmpty(); }}
         int colorOrDefault() {{ return color == null ? 0x404040 : color; }}
         boolean shadowOrDefault() {{ return shadow != null && shadow; }}
     }}
@@ -1307,7 +1309,7 @@ public final class GuiLayout {{
 
     private static void renderButtonLabel(DrawContext context, TextRenderer textRenderer, Element element, int x, int y) {{
         String label = element.contentOrEmpty();
-        if (label.isEmpty()) {{
+        if (label.isEmpty() || element.hasIcon()) {{
             return;
         }}
         int width = element.widthOrDefault(40);
@@ -1342,12 +1344,14 @@ public final class GuiLayout {{
         String animation;
         Boolean visible;
         String texture;
+        String icon;
 
         boolean isVisible() {{ return visible == null || visible; }}
         int widthOrDefault(int fallback) {{ return width == null ? fallback : width; }}
         int heightOrDefault(int fallback) {{ return height == null ? fallback : height; }}
         int sizeOrDefault() {{ return size == null ? 18 : size; }}
         String contentOrEmpty() {{ return content == null ? "" : content; }}
+        boolean hasIcon() {{ return icon != null && !icon.isEmpty(); }}
         int colorOrDefault() {{ return color == null ? 0x404040 : color; }}
         boolean shadowOrDefault() {{ return shadow != null && shadow; }}
     }}
@@ -2751,7 +2755,7 @@ mod tests {
             assert!(layout.contains(
                 "case \"button\", \"toggle_button\" -> renderButtonLabel(graphics, font, element, x, y);"
             ));
-            assert!(layout.contains("if (label.isEmpty()) {"));
+            assert!(layout.contains("if (label.isEmpty() || element.hasIcon()) {"));
             assert!(layout.contains("int labelX = x + (width - font.width(label)) / 2;"));
             assert!(layout.contains("int labelY = y + (height - 8) / 2;"));
             assert!(layout.contains(
@@ -2803,7 +2807,7 @@ mod tests {
         assert!(layout.contains(
             "case \"button\", \"toggle_button\" -> renderButtonLabel(context, textRenderer, element, x, y);"
         ));
-        assert!(layout.contains("if (label.isEmpty()) {"));
+        assert!(layout.contains("if (label.isEmpty() || element.hasIcon()) {"));
         assert!(layout.contains("int labelX = x + (width - textRenderer.getWidth(label)) / 2;"));
         assert!(layout.contains("int labelY = y + (height - 8) / 2;"));
         assert!(layout.contains(
@@ -2811,6 +2815,117 @@ mod tests {
         ));
         assert!(layout_json.contains(r#""content": "Start""#));
         assert!(layout_json.contains(r#""content": "Mode""#));
+    }
+
+    #[test]
+    fn forge_like_export_skips_runtime_labels_for_icon_buttons() {
+        for (target, project_target) in [
+            ("forge", ModTarget::Forge),
+            ("neoforge", ModTarget::NeoForge),
+        ] {
+            let output_dir = TempExportDir::new(&format!("{target}-icon-button-labels"));
+            let config = ExportConfig {
+                mod_id: "testmod".to_string(),
+                package: "com.example".to_string(),
+                class_name: "IconButtonLabelsGui".to_string(),
+                output_dir: output_dir.path().to_string_lossy().to_string(),
+                settings_override: None,
+            };
+            let mut project = sample_project(project_target);
+            let mut icon_button = button_element(
+                "settings_button",
+                ElementType::Button,
+                40,
+                60,
+                Some("Button"),
+            );
+            icon_button.icon = Some("textures/gui/settings_icon.png".to_string());
+            project.elements.push(icon_button);
+            project.elements.push(button_element(
+                "start_button",
+                ElementType::Button,
+                84,
+                60,
+                Some("Start"),
+            ));
+
+            export_project(&project, &config, target).unwrap();
+            let layout = read(
+                &output_dir
+                    .path()
+                    .join("src/main/java/com/example/GuiLayout.java"),
+            );
+            let layout_json = read(
+                &output_dir
+                    .path()
+                    .join("src/main/resources/assets/testmod/gui/iconbuttonlabelsgui_layout.json"),
+            );
+
+            assert!(layout.contains("if (label.isEmpty() || element.hasIcon()) {"));
+            assert!(
+                layout.contains("boolean hasIcon() { return icon != null && !icon.isEmpty(); }")
+            );
+            assert!(layout.contains(
+                "graphics.drawString(font, label, labelX, labelY, element.colorOrDefault(), element.shadowOrDefault());"
+            ));
+            assert!(layout_json.contains(r#""id": "settings_button""#));
+            assert!(layout_json.contains(r#""content": "Button""#));
+            assert!(layout_json.contains(r#""icon": "textures/gui/settings_icon.png""#));
+            assert!(layout_json.contains(r#""id": "start_button""#));
+            assert!(layout_json.contains(r#""content": "Start""#));
+        }
+    }
+
+    #[test]
+    fn fabric_export_skips_runtime_labels_for_icon_buttons() {
+        let output_dir = TempExportDir::new("fabric-icon-button-labels");
+        let config = ExportConfig {
+            mod_id: "testmod".to_string(),
+            package: "com.example".to_string(),
+            class_name: "IconButtonLabelsGui".to_string(),
+            output_dir: output_dir.path().to_string_lossy().to_string(),
+            settings_override: None,
+        };
+        let mut project = sample_project(ModTarget::Fabric);
+        let mut icon_toggle = button_element(
+            "settings_toggle",
+            ElementType::ToggleButton,
+            40,
+            60,
+            Some("Button"),
+        );
+        icon_toggle.icon = Some("textures/gui/settings_icon.png".to_string());
+        project.elements.push(icon_toggle);
+        project.elements.push(button_element(
+            "start_button",
+            ElementType::Button,
+            84,
+            60,
+            Some("Start"),
+        ));
+
+        export_project(&project, &config, "fabric").unwrap();
+        let layout = read(
+            &output_dir
+                .path()
+                .join("src/main/java/com/example/GuiLayout.java"),
+        );
+        let layout_json = read(
+            &output_dir
+                .path()
+                .join("src/main/resources/assets/testmod/gui/iconbuttonlabelsgui_layout.json"),
+        );
+
+        assert!(layout.contains("if (label.isEmpty() || element.hasIcon()) {"));
+        assert!(layout.contains("boolean hasIcon() { return icon != null && !icon.isEmpty(); }"));
+        assert!(layout.contains(
+            "context.drawText(textRenderer, label, labelX, labelY, element.colorOrDefault(), element.shadowOrDefault());"
+        ));
+        assert!(layout_json.contains(r#""id": "settings_toggle""#));
+        assert!(layout_json.contains(r#""content": "Button""#));
+        assert!(layout_json.contains(r#""icon": "textures/gui/settings_icon.png""#));
+        assert!(layout_json.contains(r#""id": "start_button""#));
+        assert!(layout_json.contains(r#""content": "Start""#));
     }
 
     #[test]
