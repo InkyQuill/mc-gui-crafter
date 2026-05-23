@@ -118,6 +118,10 @@ Use a Streamable HTTP / HTTP MCP server configuration with:
 Clients that only support stdio MCP servers need an HTTP-to-stdio MCP bridge.
 Point the bridge at the MCGUI Crafter URL shown in the app.
 
+Some MCP clients cache tool discovery for the current session. If newly added
+tools are missing after upgrading MCGUI Crafter, reconnect the MCP server or
+restart the MCP client session.
+
 ## Generating GUIs With an Agent
 
 Once the client is connected, ask the agent to use the `mc-gui-crafter` MCP
@@ -128,8 +132,9 @@ starting prompt is:
 Use the mc-gui-crafter MCP server to create a Minecraft machine GUI.
 First call gui_template_list, then create a 176x166 Forge project from the
 closest template. Add and position slots, labels, progress indicators, and
-fluid or energy bars using Minecraft pixel coordinates. After each major step,
-call project_summary and element_list to verify the result.
+fluid or energy bars using Minecraft pixel coordinates. Use slot_grid_add for
+regular slot grids and element_add_many for batches of non-grid elements. After
+each major step, call project_summary and element_list to verify the result.
 ```
 
 For more precise results, include:
@@ -143,6 +148,11 @@ For more precise results, include:
   `bottom_to_top`.
 - Whether elements should be on `background`, `overlay`, or `animatable` layer.
 
+Vanilla Minecraft slot coordinates use 18-pixel origins with no extra gap. A
+9-column row at `x=8` has slots at `8`, `26`, `44`, and so on. Slot border pixels
+create the visual separation, so use `slot_size: 18` and `spacing: 18` unless a
+custom texture intentionally breaks vanilla cadence.
+
 Example request:
 
 ```text
@@ -155,8 +165,111 @@ final element list.
 
 MCP-created projects are live editor sessions. If `project_id` is omitted, tools
 target the active tab in the app. New sessions created by `project_new` do not
-have a file path yet; save them with the app's Save As workflow. `project_save`
-is useful for projects that were opened from an existing `.mcgui` file.
+have a file path yet; save them with `project_save_as`. `project_save` is useful
+for projects that were opened from an existing `.mcgui` file or already saved.
+
+### Bulk Slot And Grid Tools
+
+Use `slot_grid_add` for player inventories, hotbars, storage grids, repeated
+machine slot blocks, and visible scrollable cells. It creates real `slot`
+elements in one history entry and can also create a project group and semantic
+group.
+
+Common vanilla coordinates for a 176x166 container:
+
+- Player inventory: `x=8`, `y=84`, `columns=9`, `rows=3`,
+  `slot_index_start=9`
+- Hotbar: `x=8`, `y=142`, `columns=9`, `rows=1`, `slot_index_start=0`
+
+Player inventory grid:
+
+```json
+{
+  "name": "slot_grid_add",
+  "arguments": {
+    "id_prefix": "player_inventory",
+    "x": 8,
+    "y": 84,
+    "columns": 9,
+    "rows": 3,
+    "slot_role": "player_inventory",
+    "inventory_group": "player_inventory",
+    "slot_index_start": 9,
+    "group_id": "player_inventory",
+    "semantic_group_kind": "player_inventory",
+    "slot_count": 27
+  }
+}
+```
+
+Hotbar grid:
+
+```json
+{
+  "name": "slot_grid_add",
+  "arguments": {
+    "id_prefix": "hotbar",
+    "x": 8,
+    "y": 142,
+    "columns": 9,
+    "rows": 1,
+    "slot_role": "hotbar",
+    "inventory_group": "hotbar",
+    "slot_index_start": 0,
+    "group_id": "hotbar",
+    "semantic_group_kind": "hotbar",
+    "slot_count": 9
+  }
+}
+```
+
+Use `element_add_many` when the elements are not a regular grid, such as adding
+a title, progress arrow, energy bar, and button together:
+
+```json
+{
+  "name": "element_add_many",
+  "arguments": {
+    "elements": [
+      {
+        "id": "title",
+        "type": "text",
+        "x": 8,
+        "y": 6,
+        "content": "Alloy Smelter",
+        "font": "minecraft:default",
+        "color": 4210752,
+        "layer": "overlay"
+      },
+      {
+        "id": "progress_arrow",
+        "type": "progress",
+        "x": 79,
+        "y": 35,
+        "width": 24,
+        "height": 17,
+        "direction": "left_to_right",
+        "asset": "textures/generated/progress_arrow.png",
+        "layer": "animatable"
+      },
+      {
+        "id": "start_button",
+        "type": "button",
+        "x": 116,
+        "y": 60,
+        "width": 46,
+        "height": 20,
+        "content": "Start",
+        "asset": "textures/generated/button.png",
+        "layer": "background"
+      }
+    ]
+  }
+}
+```
+
+`element_add_many` is atomic: if any element payload is invalid or conflicts with
+an existing ID, no elements are added.
 
 ### Simple And Modular Codegen
 
@@ -203,6 +316,30 @@ Use `project_semantic_groups_update` to replace the project semantic group list.
 Elements can then reference those groups with fields such as `slot_role`,
 `slot_index`, `inventory_group`, `scroll_binding`, and scrollbar fields like
 `target_group`, `columns`, `visible_rows`, and `total_rows`.
+
+Accepted slot roles:
+
+- `machine`
+- `player_inventory`
+- `hotbar`
+- `scrollable_inventory`
+- `virtual_storage`
+- `upgrade`
+- `upgrade_settings`
+- `filter`
+- `ghost`
+- `offhand`
+
+Accepted semantic group kinds:
+
+- `fixed_slots`
+- `virtual_slot_grid`
+- `player_inventory`
+- `hotbar`
+- `upgrade_slots`
+- `upgrade_panel`
+- `search_field`
+- `control_buttons`
 
 Example semantic group for a 5x3 visible scrollable inventory backed by 30
 logical slots:
@@ -259,6 +396,73 @@ Example visible cell and scrollbar elements:
 The exported layout JSON includes `semantic_groups` and `export_settings`, and
 modular exports can emit `GuiSemanticRegistry.java` for runtime lookup.
 
+`project_export_preview` returns planned files plus warnings before anything is
+written. In modular mode, warnings include semantic slot-count mismatches such
+as a `player_inventory` group declaring 27 slots while fewer or more matching
+slot elements exist. Scrollable `virtual_slot_grid` groups can also warn when a
+required `scroll_binding` is missing or when no matching scrollbar element is
+found. Fix these by aligning `slot_count`, `slot_role`, `inventory_group`, and
+scrollbar `target_group`/`scroll_binding` values, then preview again.
+
+### Template Defaults
+
+Machine-style default templates include a vanilla `player_inventory` 9x3 grid at
+`(8,84)` and a `hotbar` 9x1 grid at `(8,142)`, with project groups and semantic
+groups using the same IDs. The blank `empty` template remains empty so agents can
+create custom-size projects without inherited slots.
+
+The app provides generated assets such as `textures/generated/gui_panel.png`,
+`textures/generated/progress_arrow.png`, and `textures/generated/button.png`.
+Button and toggle-button elements using the generated button texture are visible
+in the editor and baked into the exported GUI texture. Their `content` labels are
+rendered by the generated Java screen classes.
+
+### Asset Payloads
+
+`asset_import` and `asset_list` return compact asset metadata instead of large
+base64 payloads:
+
+```json
+{
+  "name": "textures/generated/button.png",
+  "width": 16,
+  "height": 16,
+  "bytes": 128,
+  "sha256": "..."
+}
+```
+
+Use `asset_get_data_url` when a client explicitly needs the full PNG data URL:
+
+```json
+{
+  "name": "asset_get_data_url",
+  "arguments": {
+    "name": "textures/generated/button.png"
+  }
+}
+```
+
+### Save And Export
+
+`project_save_as` is available for MCP-created projects without an existing file
+path:
+
+```json
+{
+  "name": "project_save_as",
+  "arguments": {
+    "path": "/tmp/alloy-smelter.mcgui"
+  }
+}
+```
+
+Always call `project_export_preview` before `project_export`. Export settings can
+be stored on the project with `project_export_settings_update` or passed as
+one-off override fields to preview/export. `class_name` is sanitized for Java;
+the generated screen class appends `Screen` only when the sanitized name does not
+already end with `Screen`.
+
 ## Protocol Notes
 
 - `POST /mcp` accepts JSON-RPC 2.0 requests with `Content-Type: application/json`.
@@ -300,6 +504,8 @@ as UI-driven edits.
 | Tool | Description |
 |------|-------------|
 | `element_add` | Add an element |
+| `element_add_many` | Add multiple elements atomically |
+| `slot_grid_add` | Create a grouped grid of slot elements with semantic metadata |
 | `element_move` | Move an element |
 | `element_update` | Update element fields |
 | `element_resize` | Resize an element |
