@@ -432,21 +432,42 @@ fn progress_texture_warnings(project: &Project) -> Vec<String> {
             let asset = element.asset.as_deref()?;
             let data = project.texture_data.get(asset)?;
             let image = image::load_from_memory(data).ok()?;
-            let width = element.width.unwrap_or(image.width());
-            let height = element.height.unwrap_or(image.height());
-            ((width, height) != (image.width(), image.height())).then(|| {
+            let (source_width, source_height) =
+                progress_source_dimensions(image.width(), image.height(), element.uv.as_ref())?;
+            let width = element.width.unwrap_or(source_width);
+            let height = element.height.unwrap_or(source_height);
+            ((width, height) != (source_width, source_height)).then(|| {
                 format!(
                     "Progress element '{}' is stretched from texture '{}' ({}x{}) to {}x{}; this is allowed but may be accidental for pixel-art GUI work.",
                     element.id,
                     asset,
-                    image.width(),
-                    image.height(),
+                    source_width,
+                    source_height,
                     width,
                     height
                 )
             })
         })
         .collect()
+}
+
+fn progress_source_dimensions(
+    texture_width: u32,
+    texture_height: u32,
+    uv: Option<&crate::project::UvRect>,
+) -> Option<(u32, u32)> {
+    if let Some(uv) = uv {
+        let x = uv.x.min(texture_width);
+        let y = uv.y.min(texture_height);
+        let width = uv.width.min(texture_width.saturating_sub(x));
+        let height = uv.height.min(texture_height.saturating_sub(y));
+        if width == 0 || height == 0 {
+            return None;
+        }
+        Some((width, height))
+    } else {
+        Some((texture_width, texture_height))
+    }
 }
 
 fn semantic_warnings(project: &Project, settings: &ProjectExportSettings) -> Vec<String> {
@@ -523,10 +544,9 @@ fn control_button_warnings(project: &Project, group: &SemanticGroup) -> Vec<Stri
     if group.kind != SemanticGroupKind::ControlButtons {
         return Vec::new();
     }
-    if group.slot_count.is_none() && group.data_source.is_none() {
+    let Some(expected) = group.slot_count.map(|slot_count| slot_count as usize) else {
         return Vec::new();
-    }
-    let expected = group.slot_count.unwrap_or(1) as usize;
+    };
     let matching = project
         .elements
         .iter()
@@ -1865,7 +1885,7 @@ mod tests {
     use crate::animation::{Animation, AnimationType};
     use crate::project::{
         Element, ElementType, FillDirection, Layer, ModTarget, SemanticGroup, SemanticGroupKind,
-        Size, SlotRole,
+        Size, SlotRole, UvRect,
     };
     use image::{Rgba, RgbaImage};
     use std::collections::HashMap;
@@ -2066,7 +2086,11 @@ mod tests {
     }
 
     fn png_bytes(color: [u8; 4]) -> Vec<u8> {
-        let img = RgbaImage::from_pixel(2, 2, Rgba(color));
+        png_bytes_with_size(2, 2, color)
+    }
+
+    fn png_bytes_with_size(width: u32, height: u32, color: [u8; 4]) -> Vec<u8> {
+        let img = RgbaImage::from_pixel(width, height, Rgba(color));
         let mut bytes = Vec::new();
         img.write_to(
             &mut std::io::Cursor::new(&mut bytes),
@@ -2608,6 +2632,33 @@ mod tests {
                 .iter()
                 .any(|warning| warning.contains("settings") && warning.contains("button")),
             "unbound unrelated buttons must not satisfy an unbound control group: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn preview_does_not_warn_for_data_source_only_control_buttons_metadata() {
+        let mut project = Project::new("Control Buttons", 176, 166, ModTarget::Forge);
+        project.export_settings.codegen_mode = CodegenMode::Modular;
+        project.semantic_groups.push(SemanticGroup {
+            id: "settings".into(),
+            kind: SemanticGroupKind::ControlButtons,
+            columns: None,
+            visible_rows: None,
+            total_rows: None,
+            slot_count: None,
+            data_source: Some("settings".into()),
+            scroll_binding: None,
+            dynamic_height: false,
+        });
+        let settings = project.export_settings.clone().normalized();
+
+        let warnings = semantic_warnings(&project, &settings);
+
+        assert!(
+            warnings
+                .iter()
+                .all(|warning| !warning.contains("settings") || !warning.contains("button")),
+            "data-source-only control metadata should not require a button: {warnings:?}"
         );
     }
 
@@ -3484,6 +3535,89 @@ mod tests {
             mod_id: "progress_stretch".into(),
             package: "net.inkyquill.progress".into(),
             class_name: "ProgressStretchScreen".into(),
+            output_dir: output_dir.path().to_string_lossy().into_owned(),
+            settings_override: None,
+            overwrite: false,
+        };
+
+        let preview = preview_export(&project, &config, "forge").unwrap();
+
+        assert!(preview
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("progress_arrow") && warning.contains("stretched")));
+    }
+
+    #[test]
+    fn preview_does_not_warn_when_progress_matches_uv_source_size() {
+        let output_dir = TempExportDir::new("progress-uv-size-preview");
+        let mut project = sample_project(ModTarget::Forge);
+        project.texture_data.insert(
+            "textures/widgets/progress.png".into(),
+            png_bytes_with_size(32, 32, [240, 180, 40, 255]),
+        );
+        let progress = project
+            .elements
+            .iter_mut()
+            .find(|element| element.id == "progress_arrow")
+            .unwrap();
+        progress.asset = Some("textures/widgets/progress.png".into());
+        progress.width = Some(14);
+        progress.height = Some(14);
+        progress.uv = Some(UvRect {
+            x: 4,
+            y: 4,
+            width: 14,
+            height: 14,
+        });
+        project.export_settings.codegen_mode = CodegenMode::Simple;
+        let config = ExportConfig {
+            mod_id: "progress_uv_size".into(),
+            package: "net.inkyquill.progress".into(),
+            class_name: "ProgressUvSizeScreen".into(),
+            output_dir: output_dir.path().to_string_lossy().into_owned(),
+            settings_override: None,
+            overwrite: false,
+        };
+
+        let preview = preview_export(&project, &config, "forge").unwrap();
+
+        assert!(
+            preview.warnings.iter().all(
+                |warning| !warning.contains("progress_arrow") || !warning.contains("stretched")
+            ),
+            "progress matching UV source size should not warn: {:?}",
+            preview.warnings
+        );
+    }
+
+    #[test]
+    fn preview_warns_when_progress_differs_from_uv_source_size() {
+        let output_dir = TempExportDir::new("progress-uv-stretch-preview");
+        let mut project = sample_project(ModTarget::Forge);
+        project.texture_data.insert(
+            "textures/widgets/progress.png".into(),
+            png_bytes_with_size(32, 32, [240, 180, 40, 255]),
+        );
+        let progress = project
+            .elements
+            .iter_mut()
+            .find(|element| element.id == "progress_arrow")
+            .unwrap();
+        progress.asset = Some("textures/widgets/progress.png".into());
+        progress.width = Some(16);
+        progress.height = Some(14);
+        progress.uv = Some(UvRect {
+            x: 4,
+            y: 4,
+            width: 14,
+            height: 14,
+        });
+        project.export_settings.codegen_mode = CodegenMode::Simple;
+        let config = ExportConfig {
+            mod_id: "progress_uv_stretch".into(),
+            package: "net.inkyquill.progress".into(),
+            class_name: "ProgressUvStretchScreen".into(),
             output_dir: output_dir.path().to_string_lossy().into_owned(),
             settings_override: None,
             overwrite: false,
