@@ -1039,21 +1039,29 @@ export class GuiRenderer {
     const cached = this.fontSourceTextureCache.get(identity);
     if (cached) return cached;
 
-    const texture = Texture.from(dataUrl);
-    if (texture.source.width > 0 && texture.source.height > 0) {
-      this.fontSourceTextureCache.set(identity, texture);
-      return texture;
+    if (Assets.cache.has(dataUrl)) {
+      const texture = Assets.get<Texture>(dataUrl);
+      if (texture.source.width > 0 && texture.source.height > 0) {
+        this.fontSourceTextureCache.set(identity, texture);
+        return texture;
+      }
     }
 
     if (!this.loadingFontSources.has(identity)) {
       this.loadingFontSources.add(identity);
       Assets.load<Texture>(dataUrl)
         .then(loaded => {
+          if (!this.loadingFontSources.has(identity)) return;
+          if (loaded.source.width <= 0 || loaded.source.height <= 0) return;
+
           this.fontSourceTextureCache.set(identity, loaded);
           this.glyphTextureCache.clear();
           this.render();
         })
         .catch(() => {
+          // Glyph rendering will continue falling back to canvas text until a later render retries.
+        })
+        .finally(() => {
           this.loadingFontSources.delete(identity);
         });
     }
