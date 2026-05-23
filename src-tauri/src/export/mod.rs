@@ -438,27 +438,30 @@ fn semantic_integrity_warnings(project: &Project) -> Vec<String> {
     for group in &project.semantic_groups {
         if let Some(slot_count) = slot_count_requirement(group) {
             let matching = count_matching_group_elements(project, group);
-            if matching < slot_count {
+            if matching != slot_count {
+                let qualifier = if matching < slot_count { "only " } else { "" };
                 warnings.push(format!(
-                    "Semantic group '{}' declares {} slots but only {} matching elements were found.",
-                    group.id, slot_count, matching
+                    "Semantic group '{}' declares {} slots but {}{} matching elements were found.",
+                    group.id, slot_count, qualifier, matching
                 ));
             }
         }
 
-        if scroll_binding_expected(group) && group.scroll_binding.is_none() {
-            warnings.push(format!(
-                "Semantic group '{}' is scrollable or dynamic but has no scroll binding.",
-                group.id
-            ));
-        }
-
-        if let Some(binding) = group.scroll_binding.as_deref() {
-            if !has_matching_scrollbar(project, group, binding) {
+        if scroll_binding_semantics_apply(group) {
+            if scroll_binding_expected(group) && group.scroll_binding.is_none() {
                 warnings.push(format!(
-                    "Semantic group '{}' declares scroll binding '{}' but no matching scrollbar element was found.",
-                    group.id, binding
+                    "Semantic group '{}' is scrollable or dynamic but has no scroll binding.",
+                    group.id
                 ));
+            }
+
+            if let Some(binding) = group.scroll_binding.as_deref() {
+                if !has_matching_scrollbar(project, group, binding) {
+                    warnings.push(format!(
+                        "Semantic group '{}' declares scroll binding '{}' but no matching scrollbar element was found.",
+                        group.id, binding
+                    ));
+                }
             }
         }
     }
@@ -510,6 +513,10 @@ fn scroll_binding_expected(group: &SemanticGroup) -> bool {
                 .total_rows
                 .zip(group.visible_rows)
                 .is_some_and(|(total, visible)| total > visible))
+}
+
+fn scroll_binding_semantics_apply(group: &SemanticGroup) -> bool {
+    matches!(group.kind, SemanticGroupKind::VirtualSlotGrid)
 }
 
 fn has_matching_scrollbar(project: &Project, group: &SemanticGroup, binding: &str) -> bool {
@@ -2237,6 +2244,98 @@ mod tests {
                 && warning.contains("declares 27 slots")
                 && warning.contains("6 matching")
         }));
+    }
+
+    #[test]
+    fn modular_semantic_warnings_report_extra_slot_count_mismatch() {
+        let mut project = sample_project(ModTarget::Forge);
+        project.export_settings.codegen_mode = CodegenMode::Modular;
+        project.elements.clear();
+        project.semantic_groups.push(SemanticGroup {
+            id: "player_inventory".to_string(),
+            kind: SemanticGroupKind::PlayerInventory,
+            columns: Some(9),
+            visible_rows: Some(3),
+            total_rows: Some(3),
+            slot_count: Some(27),
+            data_source: Some("player_inventory".to_string()),
+            scroll_binding: None,
+            dynamic_height: false,
+        });
+        for index in 0..28 {
+            project.elements.push(semantic_slot_element(
+                &format!("player_slot_{index}"),
+                SlotRole::PlayerInventory,
+                "player_inventory",
+                index,
+            ));
+        }
+        let settings = project.export_settings.clone().normalized();
+
+        let warnings = semantic_warnings(&project, &settings);
+
+        assert!(warnings.iter().any(|warning| {
+            warning.contains("player_inventory")
+                && warning.contains("declares 27 slots")
+                && warning.contains("28 matching")
+        }));
+
+        let output_dir = TempExportDir::new("preview-semantic-extra-slot-count");
+        let config = ExportConfig {
+            mod_id: "testmod".to_string(),
+            package: "com.example".to_string(),
+            class_name: "SemanticGui".to_string(),
+            output_dir: output_dir.path().to_string_lossy().to_string(),
+            settings_override: None,
+        };
+        let preview = preview_export(&project, &config, "forge").unwrap();
+
+        assert!(preview.warnings.iter().any(|warning| {
+            warning.contains("player_inventory")
+                && warning.contains("declares 27 slots")
+                && warning.contains("28 matching")
+        }));
+    }
+
+    #[test]
+    fn modular_semantic_warnings_ignore_non_scrollable_group_bindings() {
+        let mut project = sample_project(ModTarget::Forge);
+        project.export_settings.codegen_mode = CodegenMode::Modular;
+        project.elements.clear();
+        project.semantic_groups.extend([
+            SemanticGroup {
+                id: "search_field".to_string(),
+                kind: SemanticGroupKind::SearchField,
+                columns: None,
+                visible_rows: None,
+                total_rows: None,
+                slot_count: None,
+                data_source: Some("query".to_string()),
+                scroll_binding: Some("search_scroll_metadata".to_string()),
+                dynamic_height: false,
+            },
+            SemanticGroup {
+                id: "control_buttons".to_string(),
+                kind: SemanticGroupKind::ControlButtons,
+                columns: None,
+                visible_rows: None,
+                total_rows: None,
+                slot_count: None,
+                data_source: Some("controls".to_string()),
+                scroll_binding: Some("button_scroll_metadata".to_string()),
+                dynamic_height: false,
+            },
+        ]);
+        let settings = project.export_settings.clone().normalized();
+
+        let warnings = semantic_warnings(&project, &settings);
+
+        assert!(
+            warnings
+                .iter()
+                .all(|warning| !warning.contains("no matching scrollbar")),
+            "non-scrollable semantic group metadata should not require scrollbars: {warnings:?}"
+        );
     }
 
     #[test]
