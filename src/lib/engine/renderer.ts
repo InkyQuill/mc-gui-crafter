@@ -360,9 +360,22 @@ export class GuiRenderer {
         editor.startDragElementAt(clicked.id, pointer.x, pointer.y, clicked.x, clicked.y);
       } else if (editor.tool === "select" && !clicked && !shiftHeld) {
         editor.clearSelection();
-      } else if (editor.tool === "slot" || editor.tool === "texture" || editor.tool === "text") {
-        // Place new element
-        project.addElement(editor.tool, gui.x, gui.y);
+      } else {
+        switch (editor.tool) {
+          case "slot":
+          case "texture":
+          case "text":
+            void project.addElement(editor.tool, gui.x, gui.y);
+            break;
+          case "button":
+            void project.addElement("button", gui.x, gui.y);
+            editor.tool = "select";
+            break;
+          case "toggle_button":
+            void project.addElement("toggle_button", gui.x, gui.y);
+            editor.tool = "select";
+            break;
+        }
       }
     };
 

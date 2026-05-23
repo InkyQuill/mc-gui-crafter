@@ -9,6 +9,8 @@
     { id: "slot", label: "Slot", shortcut: "S" },
     { id: "texture", label: "Texture", shortcut: "T" },
     { id: "text", label: "Text", shortcut: "X" },
+    { id: "button", label: "Button", shortcut: "B" },
+    { id: "toggle_button", label: "Toggle", shortcut: "G" },
   ];
 
   function selectTool(tool: EditorTool) {
@@ -40,6 +42,8 @@
       case "s": editor.tool = "slot"; break;
       case "t": editor.tool = "texture"; break;
       case "x": editor.tool = "text"; break;
+      case "b": editor.tool = "button"; break;
+      case "g": editor.tool = "toggle_button"; break;
       case "delete":
       case "backspace":
         if (editor.selectedElementId) {
@@ -73,6 +77,8 @@
           {:else if tool.id === "slot"}◻
           {:else if tool.id === "texture"}▣
           {:else if tool.id === "text"}T
+          {:else if tool.id === "button"}▭
+          {:else if tool.id === "toggle_button"}◉
           {/if}
         </span>
         <span class="tool-label">{tool.label}</span>
@@ -92,6 +98,10 @@
       Click canvas to place texture region.
     {:else if activeTool === "text"}
       Click canvas to place text.
+    {:else if activeTool === "button"}
+      Click canvas to place button.
+    {:else if activeTool === "toggle_button"}
+      Click canvas to place toggle.
     {/if}
   </p>
 

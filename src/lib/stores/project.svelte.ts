@@ -177,6 +177,22 @@ export class ProjectStore {
       element.shadow ??= false;
     }
 
+    if (type === "button") {
+      element.width ??= 52;
+      element.height ??= 20;
+      element.asset ??= "textures/generated/button.png";
+      element.layer ??= "background";
+      element.content ??= "Button";
+    }
+
+    if (type === "toggle_button") {
+      element.width ??= 20;
+      element.height ??= 20;
+      element.asset ??= "textures/generated/button.png";
+      element.layer ??= "background";
+      element.content ??= "Toggle";
+    }
+
     const result = await api.elementAdd(element, this.activeProjectId ?? undefined);
     this.elements = [...this.elements, result];
     this.isDirty = true;

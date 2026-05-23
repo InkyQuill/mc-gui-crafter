@@ -60,10 +60,17 @@
       void element.height;
       void element.size;
       void element.asset;
+      void element.icon;
+      void element.icon_uv?.x;
+      void element.icon_uv?.y;
+      void element.icon_uv?.width;
+      void element.icon_uv?.height;
       void element.content;
       void element.font;
       void element.color;
       void element.shadow;
+      void element.tooltip;
+      void element.binding;
       void element.visible;
       void element.animation;
       void element.uv?.x;

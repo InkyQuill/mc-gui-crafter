@@ -56,6 +56,18 @@
     updateProp("uv", next);
   }
 
+  function updateIconUv(key: "x" | "y" | "width" | "height", value: string) {
+    if (!selectedEl) return;
+    const next = {
+      x: selectedEl.icon_uv?.x ?? 0,
+      y: selectedEl.icon_uv?.y ?? 0,
+      width: selectedEl.icon_uv?.width ?? 16,
+      height: selectedEl.icon_uv?.height ?? 16,
+      [key]: Math.max(key === "width" || key === "height" ? 1 : 0, numberValue(value)),
+    };
+    updateSelectedElement({ icon_uv: next });
+  }
+
   function optionalText(value: string): string | null {
     return value.trim() || null;
   }
@@ -165,7 +177,7 @@
             oninput={(e) => updateProp("size", parseInt(e.currentTarget.value) || 18)}
           />
         </div>
-      {:else if selectedEl.type === "texture" || selectedEl.type === "progress" || selectedEl.type === "fluid_tank" || selectedEl.type === "energy_bar"}
+      {:else if selectedEl.type === "texture" || selectedEl.type === "progress" || selectedEl.type === "fluid_tank" || selectedEl.type === "energy_bar" || selectedEl.type === "button" || selectedEl.type === "toggle_button"}
         <div class="prop-row">
           <label for="prop-width">Width</label>
           <input
@@ -354,7 +366,7 @@
         </div>
       {/if}
 
-      {#if selectedEl.type === "text"}
+      {#if selectedEl.type === "text" || selectedEl.type === "button" || selectedEl.type === "toggle_button"}
         <div class="prop-row">
           <label for="prop-content">Content</label>
           <input
@@ -393,6 +405,56 @@
             checked={selectedEl.shadow ?? false}
             onchange={(e) => updateProp("shadow", e.currentTarget.checked)}
           />
+        </div>
+      {/if}
+
+      {#if selectedEl.type === "button" || selectedEl.type === "toggle_button"}
+        <div class="prop-section">
+          <div class="section-title">Button</div>
+          <div class="prop-row">
+            <label for="prop-tooltip">Tooltip</label>
+            <input
+              id="prop-tooltip"
+              type="text"
+              value={selectedEl.tooltip ?? ""}
+              oninput={(e) => updateSelectedElement({ tooltip: optionalText(e.currentTarget.value) ?? undefined })}
+            />
+          </div>
+          <div class="prop-row">
+            <label for="prop-binding">Binding</label>
+            <input
+              id="prop-binding"
+              type="text"
+              value={selectedEl.binding ?? ""}
+              oninput={(e) => updateSelectedElement({ binding: optionalText(e.currentTarget.value) ?? undefined })}
+            />
+          </div>
+          <div class="prop-row">
+            <label for="prop-icon">Icon</label>
+            <select
+              id="prop-icon"
+              value={selectedEl.icon ?? ""}
+              onchange={(e) => updateSelectedElement({ icon: e.currentTarget.value || undefined, icon_uv: e.currentTarget.value ? selectedEl.icon_uv : null })}
+            >
+              <option value="">(none)</option>
+              {#each project.assets as a (a)}
+                <option value={a}>{a.replace("textures/", "").replace(".png", "")}</option>
+              {/each}
+            </select>
+          </div>
+          <div class="uv-grid">
+            <label for="prop-icon-uv-x">Icon X</label>
+            <input id="prop-icon-uv-x" type="number" min="0" value={selectedEl.icon_uv?.x ?? 0} oninput={(e) => updateIconUv("x", e.currentTarget.value)} />
+            <label for="prop-icon-uv-y">Icon Y</label>
+            <input id="prop-icon-uv-y" type="number" min="0" value={selectedEl.icon_uv?.y ?? 0} oninput={(e) => updateIconUv("y", e.currentTarget.value)} />
+            <label for="prop-icon-uv-width">Icon W</label>
+            <input id="prop-icon-uv-width" type="number" min="1" value={selectedEl.icon_uv?.width ?? 16} oninput={(e) => updateIconUv("width", e.currentTarget.value)} />
+            <label for="prop-icon-uv-height">Icon H</label>
+            <input id="prop-icon-uv-height" type="number" min="1" value={selectedEl.icon_uv?.height ?? 16} oninput={(e) => updateIconUv("height", e.currentTarget.value)} />
+          </div>
+          <button class="secondary-btn" onclick={() => updateSelectedElement({ icon_uv: null })}>
+            Clear Icon UV
+          </button>
         </div>
       {/if}
 
