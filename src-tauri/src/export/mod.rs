@@ -2090,6 +2090,94 @@ mod tests {
     }
 
     #[test]
+    fn background_export_bakes_button_texture_pixels() {
+        let output_dir = TempExportDir::new("button-baked-background");
+        let config = ExportConfig {
+            mod_id: "testmod".to_string(),
+            package: "com.example".to_string(),
+            class_name: "ButtonBakedGui".to_string(),
+            output_dir: output_dir.path().to_string_lossy().to_string(),
+            settings_override: None,
+        };
+        let mut project = sample_project(ModTarget::Forge);
+        project.elements.push(Element {
+            id: "start_button".to_string(),
+            element_type: ElementType::Button,
+            x: 40,
+            y: 60,
+            width: Some(40),
+            height: Some(20),
+            size: None,
+            asset: None,
+            direction: None,
+            content: Some("Start".to_string()),
+            font: None,
+            color: None,
+            shadow: None,
+            animation: None,
+            visible: true,
+            uv: None,
+            layer: Layer::Background,
+            slot_role: None,
+            slot_index: None,
+            inventory_group: None,
+            scroll_binding: None,
+            scroll_min: None,
+            scroll_max: None,
+            visible_rows: None,
+            total_rows: None,
+            columns: None,
+            target_group: None,
+            binding: None,
+            dock: None,
+            open_width: None,
+            open_height: None,
+        });
+        project.elements.push(Element {
+            id: "mode_toggle".to_string(),
+            element_type: ElementType::ToggleButton,
+            x: 84,
+            y: 60,
+            width: Some(40),
+            height: Some(20),
+            size: None,
+            asset: None,
+            direction: None,
+            content: Some("Mode".to_string()),
+            font: None,
+            color: None,
+            shadow: None,
+            animation: None,
+            visible: true,
+            uv: None,
+            layer: Layer::Background,
+            slot_role: None,
+            slot_index: None,
+            inventory_group: None,
+            scroll_binding: None,
+            scroll_min: None,
+            scroll_max: None,
+            visible_rows: None,
+            total_rows: None,
+            columns: None,
+            target_group: None,
+            binding: None,
+            dock: None,
+            open_width: None,
+            open_height: None,
+        });
+
+        export_project(&project, &config, "forge").unwrap();
+        let background_path = output_dir
+            .path()
+            .join("src/main/resources/assets/testmod/textures/gui/buttonbakedgui_gui.png");
+        let background = image::open(background_path).unwrap().to_rgba8();
+
+        assert_eq!(background.get_pixel(40, 60).0, [0x37, 0x37, 0x37, 0xff]);
+        assert_eq!(background.get_pixel(84, 60).0, [0x37, 0x37, 0x37, 0xff]);
+    }
+
+    #[test]
     fn mixed_progress_export_keeps_sprite_and_fill_runtime_paths() {
         let output_dir = TempExportDir::new("mixed-progress-runtime");
         let config = ExportConfig {

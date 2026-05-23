@@ -32,6 +32,9 @@ pub fn composite_atlas_for_layer(project: &Project, layer: Layer) -> Result<Vec<
             ElementType::Slot | ElementType::VirtualSlotCell => {
                 overlay_slot(&mut img, project, el)?;
             }
+            ElementType::Button | ElementType::ToggleButton => {
+                overlay_button(&mut img, project, el)?;
+            }
             ElementType::Scrollbar => {
                 let w = el.width.or(el.size).unwrap_or(12);
                 let h = el.height.or(el.size).unwrap_or(54);
@@ -55,6 +58,8 @@ fn is_baked_atlas_element(element: &Element) -> bool {
         ElementType::Texture
             | ElementType::Slot
             | ElementType::VirtualSlotCell
+            | ElementType::Button
+            | ElementType::ToggleButton
             | ElementType::Scrollbar
     )
 }
@@ -71,6 +76,20 @@ fn overlay_slot(img: &mut RgbaImage, project: &Project, element: &Element) -> Re
 
     let data = generated_slot()?;
     overlay_texture_data(img, element, &data, "generated slot")
+}
+
+fn overlay_button(img: &mut RgbaImage, project: &Project, element: &Element) -> Result<(), String> {
+    if let Some(asset_name) = element.asset.as_deref().or_else(|| {
+        project
+            .texture_data
+            .contains_key("textures/generated/button.png")
+            .then_some("textures/generated/button.png")
+    }) {
+        return overlay_asset(img, project, element, asset_name);
+    }
+
+    let data = generated_button()?;
+    overlay_texture_data(img, element, &data, "generated button")
 }
 
 fn overlay_asset(
@@ -227,6 +246,36 @@ pub fn generated_slot() -> Result<Vec<u8>, String> {
             img.put_pixel(x, y, Rgba([0x70, 0x70, 0x70, 0xff]));
         }
     }
+    encode_png(img)
+}
+
+pub fn generated_button() -> Result<Vec<u8>, String> {
+    let width = 200;
+    let height = 20;
+    let mut img = RgbaImage::from_pixel(width, height, Rgba([0x9a, 0x9a, 0x9a, 0xff]));
+
+    for x in 0..width {
+        img.put_pixel(x, 0, Rgba([0x37, 0x37, 0x37, 0xff]));
+        img.put_pixel(x, height - 1, Rgba([0x55, 0x55, 0x55, 0xff]));
+    }
+    for y in 0..height {
+        img.put_pixel(0, y, Rgba([0x37, 0x37, 0x37, 0xff]));
+        img.put_pixel(width - 1, y, Rgba([0x55, 0x55, 0x55, 0xff]));
+    }
+
+    for x in 1..width - 1 {
+        img.put_pixel(x, 1, Rgba([0xff, 0xff, 0xff, 0xff]));
+    }
+    for y in 1..height - 1 {
+        img.put_pixel(1, y, Rgba([0xff, 0xff, 0xff, 0xff]));
+    }
+    for x in 1..width - 1 {
+        img.put_pixel(x, height - 2, Rgba([0x6b, 0x6b, 0x6b, 0xff]));
+    }
+    for y in 1..height - 1 {
+        img.put_pixel(width - 2, y, Rgba([0x6b, 0x6b, 0x6b, 0xff]));
+    }
+
     encode_png(img)
 }
 
@@ -472,6 +521,82 @@ mod tests {
         let img = image::load_from_memory(&png).unwrap();
         assert_eq!(img.width(), 12);
         assert_eq!(img.height(), 54);
+    }
+
+    #[test]
+    fn background_export_bakes_default_button_pixels() {
+        let mut project = Project::new("Button", 176, 166, ModTarget::Forge);
+        project.elements.push(Element {
+            id: "button".into(),
+            element_type: ElementType::Button,
+            x: 24,
+            y: 48,
+            width: Some(40),
+            height: Some(20),
+            size: None,
+            asset: None,
+            direction: None,
+            content: Some("Start".into()),
+            font: None,
+            color: None,
+            shadow: None,
+            animation: None,
+            visible: true,
+            uv: None,
+            layer: Layer::Background,
+            slot_role: None,
+            slot_index: None,
+            inventory_group: None,
+            scroll_binding: None,
+            scroll_min: None,
+            scroll_max: None,
+            visible_rows: None,
+            total_rows: None,
+            columns: None,
+            target_group: None,
+            binding: None,
+            dock: None,
+            open_width: None,
+            open_height: None,
+        });
+        project.elements.push(Element {
+            id: "toggle".into(),
+            element_type: ElementType::ToggleButton,
+            x: 72,
+            y: 48,
+            width: Some(40),
+            height: Some(20),
+            size: None,
+            asset: None,
+            direction: None,
+            content: Some("Mode".into()),
+            font: None,
+            color: None,
+            shadow: None,
+            animation: None,
+            visible: true,
+            uv: None,
+            layer: Layer::Background,
+            slot_role: None,
+            slot_index: None,
+            inventory_group: None,
+            scroll_binding: None,
+            scroll_min: None,
+            scroll_max: None,
+            visible_rows: None,
+            total_rows: None,
+            columns: None,
+            target_group: None,
+            binding: None,
+            dock: None,
+            open_width: None,
+            open_height: None,
+        });
+
+        let png = composite_atlas_for_layer(&project, Layer::Background).unwrap();
+        let img = image::load_from_memory(&png).unwrap().to_rgba8();
+        assert_eq!(img.get_pixel(24, 48).0, [0x37, 0x37, 0x37, 0xff]);
+        assert_eq!(img.get_pixel(72, 48).0, [0x37, 0x37, 0x37, 0xff]);
     }
 
     #[test]

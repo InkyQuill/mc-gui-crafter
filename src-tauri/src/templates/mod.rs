@@ -6,6 +6,7 @@ use serde::Serialize;
 
 pub const GENERATED_GUI_PANEL: &str = "textures/generated/gui_panel.png";
 pub const GENERATED_SLOT: &str = "textures/generated/slot.png";
+pub const GENERATED_BUTTON: &str = "textures/generated/button.png";
 pub const GENERATED_PROGRESS_ARROW: &str = "textures/generated/progress_arrow.png";
 pub const GENERATED_FLUID_TANK: &str = "textures/generated/fluid_tank.png";
 pub const GENERATED_ENERGY_BAR: &str = "textures/generated/energy_bar.png";
@@ -114,6 +115,11 @@ fn add_static_generated_asset(project: &mut Project, path: &str, bytes: Vec<u8>)
 fn add_generated_template_assets(project: &mut Project) -> Result<(), String> {
     add_generated_panel_asset(project)?;
     add_static_generated_asset(project, GENERATED_SLOT, crate::texture::generated_slot()?);
+    add_static_generated_asset(
+        project,
+        GENERATED_BUTTON,
+        crate::texture::generated_button()?,
+    );
     add_static_generated_asset(
         project,
         GENERATED_PROGRESS_ARROW,
@@ -2469,7 +2475,7 @@ mod tests {
     }
 
     #[test]
-    fn applying_template_inserts_generated_background_asset() {
+    fn applying_template_inserts_generated_default_assets() {
         let mut project = Project::new("Generated", 1, 1, ModTarget::Forge);
 
         apply_template(&mut project, "furnace").expect("template applies");
@@ -2479,6 +2485,8 @@ mod tests {
             .iter()
             .any(|asset| asset == GENERATED_GUI_PANEL));
         assert!(project.texture_data.contains_key(GENERATED_GUI_PANEL));
+        assert!(project.assets.iter().any(|asset| asset == GENERATED_BUTTON));
+        assert!(project.texture_data.contains_key(GENERATED_BUTTON));
     }
 
     #[test]

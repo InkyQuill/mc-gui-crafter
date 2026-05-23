@@ -11,6 +11,7 @@ const GENERATED_TEXTURES = new Set([
   LEGACY_BACKGROUND_TEXTURE,
   "textures/generated/gui_panel.png",
   "textures/generated/slot.png",
+  "textures/generated/button.png",
   "textures/generated/progress_arrow.png",
   "textures/generated/fluid_tank.png",
   "textures/generated/energy_bar.png",
@@ -593,6 +594,9 @@ export class GuiRenderer {
         return this.drawEnergyBar(el);
       case "scrollbar":
         return this.drawScrollbar(el);
+      case "button":
+      case "toggle_button":
+        return this.drawButton(el);
       default:
         return null;
     }
@@ -682,6 +686,8 @@ export class GuiRenderer {
       g.fill({ color: 0xffffff, alpha: 0.8 });
       g.rect(el.x + w - 1, el.y, 1, h);
       g.fill({ color: 0xffffff, alpha: 0.8 });
+    } else if (el.asset === "textures/generated/button.png") {
+      this.drawButtonGraphics(g, el.x, el.y, w, h);
     } else if (el.asset === "textures/generated/scrollbar.png") {
       this.drawScrollbarGraphics(g, el.x, el.y, w, h);
     } else {
@@ -717,6 +723,78 @@ export class GuiRenderer {
       source: baseTexture.source,
       frame: new Rectangle(x, y, width, height),
     });
+  }
+
+  private drawButton(el: Element): Container {
+    const container = new Container();
+    const background = el.asset ? this.drawTexture(el) : this.drawButtonBackground(el);
+    if (background) container.addChild(background);
+
+    const label = this.drawButtonLabel(el);
+    if (label) container.addChild(label);
+    return container;
+  }
+
+  private drawButtonBackground(el: Element): Container {
+    const container = new Container();
+    const g = new Graphics();
+    const w = el.width ?? el.size ?? 40;
+    const h = el.height ?? el.size ?? 20;
+    this.drawButtonGraphics(g, el.x, el.y, w, h);
+    container.addChild(g);
+    return container;
+  }
+
+  private drawButtonGraphics(g: Graphics, x: number, y: number, w: number, h: number) {
+    g.rect(x, y, w, h);
+    g.fill({ color: 0x9a9a9a });
+    g.rect(x, y, w, 1);
+    g.fill({ color: 0x373737 });
+    g.rect(x, y, 1, h);
+    g.fill({ color: 0x373737 });
+    if (h > 1) {
+      g.rect(x, y + h - 1, w, 1);
+      g.fill({ color: 0x555555 });
+    }
+    if (w > 1) {
+      g.rect(x + w - 1, y, 1, h);
+      g.fill({ color: 0x555555 });
+    }
+    if (w > 2 && h > 2) {
+      g.rect(x + 1, y + 1, w - 2, 1);
+      g.fill({ color: 0xffffff, alpha: 0.9 });
+      g.rect(x + 1, y + 1, 1, h - 2);
+      g.fill({ color: 0xffffff, alpha: 0.9 });
+      g.rect(x + 1, y + h - 2, w - 2, 1);
+      g.fill({ color: 0x6b6b6b });
+      g.rect(x + w - 2, y + 1, 1, h - 2);
+      g.fill({ color: 0x6b6b6b });
+    }
+  }
+
+  private drawButtonLabel(el: Element): Container | null {
+    const content = el.content?.trim();
+    if (!content) return null;
+
+    const w = el.width ?? el.size ?? 40;
+    const h = el.height ?? el.size ?? 20;
+    const labelElement: Element = {
+      ...el,
+      type: "text",
+      content,
+      color: el.color ?? 0x404040,
+      shadow: el.shadow ?? false,
+    };
+    const texture = this.textTexture(labelElement);
+    if (!texture) return null;
+
+    const sprite = new Sprite(texture);
+    sprite.x = Math.floor(el.x + (w - texture.width) / 2);
+    sprite.y = Math.floor(el.y + (h - texture.height) / 2);
+
+    const container = new Container();
+    container.addChild(sprite);
+    return container;
   }
 
   private drawProgress(el: Element): Container {
