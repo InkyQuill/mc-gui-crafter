@@ -52,6 +52,10 @@ pub fn composite_atlas_for_layer(project: &Project, layer: Layer) -> Result<Vec<
     Ok(buf)
 }
 
+pub fn composite_project_preview(project: &Project) -> Result<Vec<u8>, String> {
+    composite_atlas_for_layer(project, Layer::Background)
+}
+
 fn is_baked_atlas_element(element: &Element) -> bool {
     matches!(
         element.element_type,

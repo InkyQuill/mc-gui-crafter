@@ -473,6 +473,7 @@ fn is_mutating_tool(tool_name: &str) -> bool {
             | "project_get_active"
             | "project_export_preview"
             | "project_export"
+            | "project_screenshot"
             | "element_list"
             | "group_list"
             | "animation_list"
@@ -515,6 +516,24 @@ fn get_tool_definitions() -> Vec<serde_json::Value> {
             "project_export",
             "Export generated mod files",
             export_props(),
+        ),
+        td(
+            "project_screenshot",
+            "Render the current project to a PNG screenshot and return compact metadata",
+            project_props(&[
+                (
+                    "output_path",
+                    "string",
+                    "Optional PNG path to write; temp file is used when omitted",
+                    false,
+                ),
+                (
+                    "include_data_url",
+                    "boolean",
+                    "Include data:image/png;base64 payload; defaults to false",
+                    false,
+                ),
+            ]),
         ),
         td(
             "project_summary",
@@ -915,6 +934,7 @@ fn execute_tool(
         "project_save_as" => project_save_as(&mut sessions, project_id, args),
         "project_export_preview" => project_export_preview(&sessions, project_id, args),
         "project_export" => project_export(&sessions, project_id, args),
+        "project_screenshot" => project_screenshot(&sessions, project_id, args),
         "project_summary" => project_summary(&sessions, project_id),
         "project_export_settings_update" => {
             project_export_settings_update(&mut sessions, project_id, args)
@@ -940,7 +960,7 @@ fn execute_tool(
                 .project
                 .elements
                 .iter()
-                .map(element_with_effective_layer)
+                .map(element_for_mcp)
                 .collect::<Vec<_>>();
             Ok(serde_json::json!({ "elements": elements }))
         }
@@ -1245,9 +1265,10 @@ fn element_add_many(
     let session = sessions.resolve_mut(project_id)?;
     session.project.elements.extend(elements.clone());
     sessions.mark_changed(project_id)?;
+    let returned_elements = elements.iter().map(element_for_mcp).collect::<Vec<_>>();
     Ok(serde_json::json!({
         "created_count": elements.len(),
-        "elements": elements,
+        "elements": returned_elements,
     }))
 }
 
@@ -1990,6 +2011,46 @@ fn asset_remove(
     Ok(serde_json::json!({ "removed": removed_texture || removed_asset }))
 }
 
+fn project_screenshot(
+    sessions: &ProjectSessionManager,
+    project_id: Option<&str>,
+    args: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let project = &sessions.resolve(project_id)?.project;
+    let png = crate::texture::composite_project_preview(project)?;
+    let path = optional_string(args, "output_path")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| {
+            std::env::temp_dir().join(format!(
+                "mc-gui-crafter-screenshot-{}.png",
+                uuid::Uuid::new_v4()
+            ))
+        });
+    if path.extension().and_then(|value| value.to_str()) != Some("png") {
+        return Err("output_path must end with .png".to_string());
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|error| format!("Failed to create screenshot directory: {error}"))?;
+    }
+    std::fs::write(&path, &png)
+        .map_err(|error| format!("Failed to write screenshot PNG: {error}"))?;
+
+    let image = image::load_from_memory(&png)
+        .map_err(|error| format!("Failed to inspect screenshot PNG: {error}"))?;
+    let mut metadata = compact_asset_metadata_with_dimensions(
+        path.to_string_lossy().as_ref(),
+        &png,
+        image.width(),
+        image.height(),
+    );
+    metadata["path"] = serde_json::json!(path.to_string_lossy().to_string());
+    if optional_bool(args, "include_data_url")?.unwrap_or(false) {
+        metadata["data_url"] = serde_json::json!(data_url_for_png(&png));
+    }
+    Ok(metadata)
+}
+
 fn asset_get_data_url(
     sessions: &ProjectSessionManager,
     project_id: Option<&str>,
@@ -2001,10 +2062,9 @@ fn asset_get_data_url(
         .texture_data
         .get(name)
         .ok_or(format!("Asset not found: {name}"))?;
-    use base64::Engine;
     Ok(serde_json::json!({
         "name": name,
-        "data_url": format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(data)),
+        "data_url": data_url_for_png(data),
     }))
 }
 
@@ -2079,7 +2139,7 @@ fn validate_asset_name(name: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn element_with_effective_layer(element: &Element) -> serde_json::Value {
+fn element_for_mcp(element: &Element) -> serde_json::Value {
     let mut value = serde_json::to_value(element).unwrap();
     if let Some(object) = value.as_object_mut() {
         object.insert(
@@ -2088,6 +2148,14 @@ fn element_with_effective_layer(element: &Element) -> serde_json::Value {
         );
     }
     value
+}
+
+fn data_url_for_png(data: &[u8]) -> String {
+    use base64::Engine;
+    format!(
+        "data:image/png;base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(data)
+    )
 }
 
 fn decode_png_data_url(data_url: &str) -> Result<Vec<u8>, String> {
@@ -2128,6 +2196,13 @@ fn optional_string(value: &serde_json::Value, key: &str) -> Option<String> {
         .get(key)
         .and_then(|value| value.as_str())
         .map(String::from)
+}
+
+fn optional_bool(value: &serde_json::Value, key: &str) -> Result<Option<bool>, String> {
+    value
+        .get(key)
+        .map(|value| value.as_bool().ok_or(format!("{key} must be boolean")))
+        .transpose()
 }
 
 fn required_str<'a>(value: &'a serde_json::Value, key: &str) -> Result<&'a str, String> {
@@ -2889,6 +2964,124 @@ mod tests {
         let active = sessions.active_session().unwrap();
         assert!(active.project.elements.is_empty());
         assert_eq!(active.revision, 0);
+    }
+
+    #[test]
+    fn element_add_many_response_includes_effective_layer() {
+        let state = test_state();
+        {
+            let mut sessions = state.sessions.lock().unwrap();
+            sessions.create_session(Project::new(
+                "Bulk Effective Layer",
+                176,
+                166,
+                ModTarget::Forge,
+            ));
+        }
+
+        let response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "bulk",
+                "method": "tools/call",
+                "params": {
+                    "name": "element_add_many",
+                    "arguments": {
+                        "elements": [
+                            { "id": "slot_a", "type": "slot", "x": 8, "y": 8, "size": 18 }
+                        ]
+                    }
+                }
+            }),
+            &state,
+        );
+
+        let text = response["result"]["content"][0]["text"].as_str().unwrap();
+        let value: serde_json::Value = serde_json::from_str(text).unwrap();
+        assert_eq!(value["elements"][0]["layer"], "background");
+    }
+
+    #[test]
+    fn project_screenshot_writes_compact_png_metadata() {
+        let state = test_state();
+        let project_id = {
+            let mut sessions = state.sessions.lock().unwrap();
+            let mut project = Project::new("Screenshot", 64, 32, ModTarget::Forge);
+            project.elements.push(
+                parse_element_arg(&serde_json::json!({
+                    "id": "slot_a",
+                    "type": "slot",
+                    "x": 8,
+                    "y": 8,
+                    "size": 18
+                }))
+                .unwrap(),
+            );
+            sessions.create_session(project)
+        };
+        let output_path =
+            std::env::temp_dir().join(format!("mc-gui-crafter-test-{}.png", uuid::Uuid::new_v4()));
+
+        let response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "screenshot",
+                "method": "tools/call",
+                "params": {
+                    "name": "project_screenshot",
+                    "arguments": {
+                        "project_id": project_id,
+                        "output_path": output_path,
+                    }
+                }
+            }),
+            &state,
+        );
+
+        assert!(response["error"].is_null(), "{response:#}");
+        let text = response["result"]["content"][0]["text"].as_str().unwrap();
+        let value: serde_json::Value = serde_json::from_str(text).unwrap();
+        assert_eq!(value["width"], 64);
+        assert_eq!(value["height"], 32);
+        assert!(value["bytes"].as_u64().unwrap() > 0);
+        assert_eq!(value["sha256"].as_str().unwrap().len(), 64);
+        assert!(value.get("data_url").is_none());
+        assert!(std::path::Path::new(value["path"].as_str().unwrap()).exists());
+    }
+
+    #[test]
+    fn project_screenshot_includes_data_url_only_when_requested() {
+        let state = test_state();
+        {
+            let mut sessions = state.sessions.lock().unwrap();
+            sessions.create_session(Project::new(
+                "Screenshot Data URL",
+                32,
+                24,
+                ModTarget::Forge,
+            ));
+        }
+
+        let response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "screenshot",
+                "method": "tools/call",
+                "params": {
+                    "name": "project_screenshot",
+                    "arguments": { "include_data_url": true }
+                }
+            }),
+            &state,
+        );
+
+        assert!(response["error"].is_null(), "{response:#}");
+        let text = response["result"]["content"][0]["text"].as_str().unwrap();
+        let value: serde_json::Value = serde_json::from_str(text).unwrap();
+        assert!(value["data_url"]
+            .as_str()
+            .unwrap()
+            .starts_with("data:image/png;base64,"));
     }
 
     #[test]
