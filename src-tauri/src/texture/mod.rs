@@ -85,11 +85,49 @@ fn overlay_button(img: &mut RgbaImage, project: &Project, element: &Element) -> 
             .contains_key("textures/generated/button.png")
             .then_some("textures/generated/button.png")
     }) {
-        return overlay_asset(img, project, element, asset_name);
+        overlay_asset(img, project, element, asset_name)?;
+    } else {
+        let data = generated_button()?;
+        overlay_texture_data(img, element, &data, "generated button")?;
     }
 
-    let data = generated_button()?;
-    overlay_texture_data(img, element, &data, "generated button")
+    overlay_button_icon(img, project, element)
+}
+
+fn overlay_button_icon(
+    img: &mut RgbaImage,
+    project: &Project,
+    element: &Element,
+) -> Result<(), String> {
+    let Some(icon_name) = element.icon.as_deref() else {
+        return Ok(());
+    };
+    let Some(data) = project.texture_data.get(icon_name) else {
+        return Ok(());
+    };
+    let texture = image::load_from_memory(data)
+        .map_err(|error| format!("Failed to load button icon '{}': {error}", icon_name))?
+        .to_rgba8();
+    let source = cropped_source(&texture, element.icon_uv.as_ref());
+    if source.width() == 0 || source.height() == 0 {
+        return Ok(());
+    }
+    let element_w = element.width.or(element.size).unwrap_or(20);
+    let element_h = element.height.or(element.size).unwrap_or(20);
+    let max_w = element_w.saturating_sub(4).max(1);
+    let max_h = element_h.saturating_sub(4).max(1);
+    let target_w = source.width().min(max_w);
+    let target_h = source.height().min(max_h);
+    let resized = image::imageops::resize(
+        &source,
+        target_w,
+        target_h,
+        image::imageops::FilterType::Nearest,
+    );
+    let x = element.x + ((element_w - target_w) / 2) as i32;
+    let y = element.y + ((element_h - target_h) / 2) as i32;
+    image::imageops::overlay(img, &resized, x as i64, y as i64);
+    Ok(())
 }
 
 fn overlay_asset(
@@ -117,22 +155,29 @@ fn overlay_texture_data(
     let tw = element.width.or(element.size).unwrap_or(tex.width());
     let th = element.height.or(element.size).unwrap_or(tex.height());
 
-    let source = if let Some(uv) = &element.uv {
+    let source = cropped_source(&tex, element.uv.as_ref());
+    if source.width() == 0 || source.height() == 0 {
+        return Ok(());
+    }
+
+    let resized = image::imageops::resize(&source, tw, th, image::imageops::FilterType::Nearest);
+    image::imageops::overlay(img, &resized, element.x as i64, element.y as i64);
+    Ok(())
+}
+
+fn cropped_source(tex: &RgbaImage, uv: Option<&crate::project::UvRect>) -> RgbaImage {
+    if let Some(uv) = uv {
         let x = uv.x.min(tex.width());
         let y = uv.y.min(tex.height());
         let width = uv.width.min(tex.width().saturating_sub(x));
         let height = uv.height.min(tex.height().saturating_sub(y));
         if width == 0 || height == 0 {
-            return Ok(());
+            return RgbaImage::new(0, 0);
         }
         tex.view(x, y, width, height).to_image()
     } else {
-        tex
-    };
-
-    let resized = image::imageops::resize(&source, tw, th, image::imageops::FilterType::Nearest);
-    image::imageops::overlay(img, &resized, element.x as i64, element.y as i64);
-    Ok(())
+        tex.clone()
+    }
 }
 
 pub fn composite_single_element(element: &Element, project: &Project) -> Result<Vec<u8>, String> {
@@ -144,19 +189,10 @@ pub fn composite_single_element(element: &Element, project: &Project) -> Result<
             let tex = image::load_from_memory(data)
                 .map_err(|e| format!("Failed to load texture '{}': {e}", asset_name))?
                 .to_rgba8();
-            let source = if let Some(uv) = &element.uv {
-                let x = uv.x.min(tex.width());
-                let y = uv.y.min(tex.height());
-                let width = uv.width.min(tex.width().saturating_sub(x));
-                let height = uv.height.min(tex.height().saturating_sub(y));
-                if width == 0 || height == 0 {
-                    RgbaImage::new(w, h)
-                } else {
-                    tex.view(x, y, width, height).to_image()
-                }
-            } else {
-                tex
-            };
+            let source = cropped_source(&tex, element.uv.as_ref());
+            if source.width() == 0 || source.height() == 0 {
+                return encode_png(RgbaImage::new(w, h));
+            }
             let resized =
                 image::imageops::resize(&source, w, h, image::imageops::FilterType::Nearest);
             return encode_png(resized);
@@ -364,6 +400,113 @@ mod tests {
         )
         .unwrap();
         bytes
+    }
+
+    fn test_png(width: u32, height: u32, color: Rgba<u8>) -> Vec<u8> {
+        let image = RgbaImage::from_pixel(width, height, color);
+        let mut bytes = Vec::new();
+        image
+            .write_to(
+                &mut std::io::Cursor::new(&mut bytes),
+                image::ImageFormat::Png,
+            )
+            .unwrap();
+        bytes
+    }
+
+    fn button_element(id: &str, x: i32, y: i32) -> Element {
+        Element {
+            id: id.to_string(),
+            element_type: ElementType::Button,
+            x,
+            y,
+            width: Some(20),
+            height: Some(20),
+            size: None,
+            asset: None,
+            icon: None,
+            icon_uv: None,
+            tooltip: None,
+            direction: None,
+            content: None,
+            font: None,
+            color: None,
+            shadow: None,
+            animation: None,
+            visible: true,
+            uv: None,
+            layer: Layer::Background,
+            slot_role: None,
+            slot_index: None,
+            inventory_group: None,
+            scroll_binding: None,
+            scroll_min: None,
+            scroll_max: None,
+            visible_rows: None,
+            total_rows: None,
+            columns: None,
+            target_group: None,
+            binding: None,
+            dock: None,
+            open_width: None,
+            open_height: None,
+        }
+    }
+
+    #[test]
+    fn background_export_bakes_button_standalone_icon_pixels() {
+        let mut project = Project::new("Icon Button", 64, 32, crate::project::ModTarget::Forge);
+        project.texture_data.insert(
+            "textures/gui/icons/settings.png".into(),
+            test_png(8, 8, Rgba([0x11, 0x22, 0x33, 0xff])),
+        );
+        project
+            .assets
+            .push("textures/gui/icons/settings.png".into());
+        let mut button = button_element("button", 8, 6);
+        button.icon = Some("textures/gui/icons/settings.png".into());
+        project.elements.push(button);
+
+        let atlas = composite_atlas_for_layer(&project, Layer::Background).unwrap();
+        let image = image::load_from_memory(&atlas).unwrap().to_rgba8();
+
+        assert_eq!(image.get_pixel(14, 12), &Rgba([0x11, 0x22, 0x33, 0xff]));
+    }
+
+    #[test]
+    fn background_export_bakes_button_icon_uv_pixels() {
+        let mut project = Project::new("Icon UV Button", 64, 32, crate::project::ModTarget::Forge);
+        let mut atlas = RgbaImage::from_pixel(16, 8, Rgba([0x00, 0x00, 0x00, 0xff]));
+        for x in 8..16 {
+            for y in 0..8 {
+                atlas.put_pixel(x, y, Rgba([0xaa, 0x44, 0x11, 0xff]));
+            }
+        }
+        let mut bytes = Vec::new();
+        atlas
+            .write_to(
+                &mut std::io::Cursor::new(&mut bytes),
+                image::ImageFormat::Png,
+            )
+            .unwrap();
+        project
+            .texture_data
+            .insert("textures/gui/widgets.png".into(), bytes);
+        project.assets.push("textures/gui/widgets.png".into());
+        let mut button = button_element("button", 8, 6);
+        button.icon = Some("textures/gui/widgets.png".into());
+        button.icon_uv = Some(crate::project::UvRect {
+            x: 8,
+            y: 0,
+            width: 8,
+            height: 8,
+        });
+        project.elements.push(button);
+
+        let atlas = composite_atlas_for_layer(&project, Layer::Background).unwrap();
+        let image = image::load_from_memory(&atlas).unwrap().to_rgba8();
+
+        assert_eq!(image.get_pixel(14, 12), &Rgba([0xaa, 0x44, 0x11, 0xff]));
     }
 
     #[test]

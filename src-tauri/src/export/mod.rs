@@ -2177,6 +2177,36 @@ mod tests {
     }
 
     #[test]
+    fn layout_json_preserves_button_icon_and_tooltip_metadata() {
+        let mut project = Project::new(
+            "Button Metadata",
+            176,
+            166,
+            crate::project::ModTarget::Forge,
+        );
+        let mut button = button_element("settings", ElementType::Button, 8, 8, Some("Settings"));
+        button.icon = Some("textures/gui/widgets.png".into());
+        button.icon_uv = Some(crate::project::UvRect {
+            x: 16,
+            y: 0,
+            width: 16,
+            height: 16,
+        });
+        button.tooltip = Some("Open settings".into());
+        project.elements.push(button);
+
+        let layout = layout_json_value(
+            &project,
+            serde_json::json!({ "background": "textures/gui/button_metadata_gui.png" }),
+        );
+        let element = &layout["elements"][0];
+
+        assert_eq!(element["icon"], "textures/gui/widgets.png");
+        assert_eq!(element["icon_uv"]["x"], 16);
+        assert_eq!(element["tooltip"], "Open settings");
+    }
+
+    #[test]
     fn effective_export_settings_normalizes_simple_semantic_registry_flag() {
         let mut project = Project::new("Simple", 176, 166, ModTarget::Forge);
         project.export_settings.codegen_mode = CodegenMode::Simple;

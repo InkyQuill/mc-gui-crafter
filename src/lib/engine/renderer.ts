@@ -765,8 +765,13 @@ export class GuiRenderer {
     const background = el.asset ? this.drawTexture(el) : this.drawButtonBackground(el);
     if (background) container.addChild(background);
 
-    const label = this.drawButtonLabel(el);
-    if (label) container.addChild(label);
+    const icon = this.drawButtonIcon(el);
+    if (icon) {
+      container.addChild(icon);
+    } else {
+      const label = this.drawButtonLabel(el);
+      if (label) container.addChild(label);
+    }
     return container;
   }
 
@@ -778,6 +783,41 @@ export class GuiRenderer {
     this.drawButtonGraphics(g, el.x, el.y, w, h);
     container.addChild(g);
     return container;
+  }
+
+  private drawButtonIcon(el: Element): Container | null {
+    if (!el.icon) return null;
+    const dataUrl = assetDataUrls.get(el.icon);
+    if (!dataUrl) return null;
+    const source = Texture.from(dataUrl);
+    const texture = this.textureWithIconUv(source, el);
+    if (!texture) return null;
+    const sprite = new Sprite(texture);
+    const w = el.width ?? el.size ?? 40;
+    const h = el.height ?? el.size ?? 20;
+    const maxW = Math.max(1, w - 4);
+    const maxH = Math.max(1, h - 4);
+    const scale = Math.min(1, maxW / texture.width, maxH / texture.height);
+    sprite.width = Math.max(1, Math.floor(texture.width * scale));
+    sprite.height = Math.max(1, Math.floor(texture.height * scale));
+    sprite.x = Math.floor(el.x + (w - sprite.width) / 2);
+    sprite.y = Math.floor(el.y + (h - sprite.height) / 2);
+    const container = new Container();
+    container.addChild(sprite);
+    return container;
+  }
+
+  private textureWithIconUv(baseTexture: Texture, el: Element): Texture | null {
+    const uv = el.icon_uv;
+    if (!uv || uv.width <= 0 || uv.height <= 0) return baseTexture;
+    const sourceWidth = baseTexture.source.width;
+    const sourceHeight = baseTexture.source.height;
+    const x = Math.max(0, Math.min(uv.x, sourceWidth));
+    const y = Math.max(0, Math.min(uv.y, sourceHeight));
+    const width = Math.min(uv.width, sourceWidth - x);
+    const height = Math.min(uv.height, sourceHeight - y);
+    if (width <= 0 || height <= 0) return null;
+    return new Texture({ source: baseTexture.source, frame: new Rectangle(x, y, width, height) });
   }
 
   private drawButtonGraphics(g: Graphics, x: number, y: number, w: number, h: number) {
