@@ -256,6 +256,12 @@ pub struct Element {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub asset: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub icon_uv: Option<UvRect>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tooltip: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub direction: Option<FillDirection>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content: Option<String>,
@@ -633,6 +639,9 @@ mod tests {
             height: None,
             size: None,
             asset: None,
+            icon: None,
+            icon_uv: None,
+            tooltip: None,
             direction: None,
             content: None,
             font: None,
@@ -672,6 +681,33 @@ mod tests {
             }),
             ..sample_element_defaults()
         }
+    }
+
+    #[test]
+    fn element_button_icon_tooltip_fields_round_trip() {
+        let json = serde_json::json!({
+            "id": "settings_button",
+            "type": "button",
+            "x": 12,
+            "y": 18,
+            "width": 20,
+            "height": 20,
+            "asset": "textures/generated/button.png",
+            "icon": "textures/gui/widgets.png",
+            "icon_uv": { "x": 16, "y": 0, "width": 16, "height": 16 },
+            "tooltip": "Open settings",
+            "content": "Settings"
+        });
+
+        let element: Element = serde_json::from_value(json.clone()).unwrap();
+        assert_eq!(element.icon.as_deref(), Some("textures/gui/widgets.png"));
+        assert_eq!(element.icon_uv.as_ref().unwrap().x, 16);
+        assert_eq!(element.tooltip.as_deref(), Some("Open settings"));
+
+        let serialized = serde_json::to_value(element).unwrap();
+        assert_eq!(serialized["icon"], "textures/gui/widgets.png");
+        assert_eq!(serialized["icon_uv"]["width"], 16);
+        assert_eq!(serialized["tooltip"], "Open settings");
     }
 
     #[test]
@@ -897,6 +933,9 @@ mod tests {
             height: None,
             size: Some(18),
             asset: None,
+            icon: None,
+            icon_uv: None,
+            tooltip: None,
             direction: None,
             content: None,
             font: None,

@@ -82,6 +82,9 @@ export interface Element {
   height?: number;
   size?: number;
   asset?: string;
+  icon?: string;
+  icon_uv?: UvRect | null;
+  tooltip?: string;
   direction?: FillDirection;
   content?: string;
   font?: string;
