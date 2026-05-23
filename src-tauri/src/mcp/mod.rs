@@ -681,7 +681,10 @@ fn get_tool_definitions() -> Vec<serde_json::Value> {
         td(
             "asset_import",
             "Import a PNG asset from disk",
-            project_props(&[("file_path", "string", "PNG path", true)]),
+            project_props(&[
+                ("file_path", "string", "PNG path", true),
+                ("name", "string", "Optional project asset name", false),
+            ]),
         ),
         td(
             "asset_update",
@@ -933,7 +936,13 @@ fn execute_tool(
         "element_remove" => element_remove(&mut sessions, project_id, args),
         "element_list" => {
             let session = sessions.resolve(project_id)?;
-            Ok(serde_json::json!({ "elements": session.project.elements }))
+            let elements = session
+                .project
+                .elements
+                .iter()
+                .map(element_with_effective_layer)
+                .collect::<Vec<_>>();
+            Ok(serde_json::json!({ "elements": elements }))
         }
         "group_create" => group_create(&mut sessions, project_id, args),
         "group_ungroup" => group_ungroup(&mut sessions, project_id, args),
@@ -1877,11 +1886,18 @@ fn asset_import(
     let data = std::fs::read(file_path).map_err(|error| format!("Failed to read file: {error}"))?;
     let image = image::load_from_memory(&data)
         .map_err(|error| format!("Failed to decode image: {error}"))?;
-    let name = std::path::Path::new(file_path)
-        .file_stem()
-        .and_then(|value| value.to_str())
-        .unwrap_or("texture");
-    let asset_path = format!("textures/{name}.png");
+    let asset_path = if let Some(name) = optional_string(args, "name") {
+        validate_asset_name(&name)?;
+        name
+    } else {
+        let name = std::path::Path::new(file_path)
+            .file_stem()
+            .and_then(|value| value.to_str())
+            .unwrap_or("texture");
+        let asset_path = format!("textures/{name}.png");
+        validate_asset_name(&asset_path)?;
+        asset_path
+    };
     sessions.record_history(project_id)?;
     let session = sessions.resolve_mut(project_id)?;
     session
@@ -1893,13 +1909,12 @@ fn asset_import(
     }
     sessions.mark_changed(project_id)?;
 
-    use base64::Engine;
-    Ok(serde_json::json!({
-        "name": asset_path,
-        "width": image.width(),
-        "height": image.height(),
-        "data_url": format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(data)),
-    }))
+    Ok(compact_asset_metadata_with_dimensions(
+        &asset_path,
+        &data,
+        image.width(),
+        image.height(),
+    ))
 }
 
 fn asset_update(
@@ -1995,33 +2010,71 @@ fn asset_list(
     project_id: Option<&str>,
 ) -> Result<serde_json::Value, String> {
     let project = &sessions.resolve(project_id)?.project;
-    use base64::Engine;
     let assets = project
         .assets
         .iter()
-        .map(|name| {
-            let (width, height, data_url) = if let Some(data) = project.texture_data.get(name) {
-                let image = image::load_from_memory(data).ok();
-                (
-                    image.as_ref().map(|image| image.width()).unwrap_or(16),
-                    image.as_ref().map(|image| image.height()).unwrap_or(16),
-                    format!(
-                        "data:image/png;base64,{}",
-                        base64::engine::general_purpose::STANDARD.encode(data)
-                    ),
-                )
-            } else {
-                (16, 16, String::new())
-            };
-            serde_json::json!({
-                "name": name,
-                "width": width,
-                "height": height,
-                "data_url": data_url,
-            })
-        })
+        .map(|name| compact_asset_metadata(name, project.texture_data.get(name).map(Vec::as_slice)))
         .collect::<Vec<_>>();
     Ok(serde_json::json!({ "assets": assets }))
+}
+
+fn compact_asset_metadata(name: &str, data: Option<&[u8]>) -> serde_json::Value {
+    let Some(data) = data else {
+        return compact_asset_metadata_with_dimensions(name, &[], 16, 16);
+    };
+    let image = image::load_from_memory(data).ok();
+    compact_asset_metadata_with_dimensions(
+        name,
+        data,
+        image.as_ref().map(|image| image.width()).unwrap_or(16),
+        image.as_ref().map(|image| image.height()).unwrap_or(16),
+    )
+}
+
+fn compact_asset_metadata_with_dimensions(
+    name: &str,
+    data: &[u8],
+    width: u32,
+    height: u32,
+) -> serde_json::Value {
+    use sha2::{Digest, Sha256};
+
+    serde_json::json!({
+        "name": name,
+        "width": width,
+        "height": height,
+        "bytes": data.len(),
+        "sha256": format!("{:x}", Sha256::digest(data)),
+    })
+}
+
+fn validate_asset_name(name: &str) -> Result<(), String> {
+    if name.is_empty() {
+        return Err("Asset name cannot be empty".to_string());
+    }
+    if name.contains('\\') || std::path::Path::new(name).is_absolute() {
+        return Err("Asset name must be a relative project path".to_string());
+    }
+    if name
+        .split('/')
+        .any(|component| component.is_empty() || component == "." || component == "..")
+    {
+        return Err(
+            "Asset name cannot contain empty, current, or parent path components".to_string(),
+        );
+    }
+    Ok(())
+}
+
+fn element_with_effective_layer(element: &Element) -> serde_json::Value {
+    let mut value = serde_json::to_value(element).unwrap();
+    if let Some(object) = value.as_object_mut() {
+        object.insert(
+            "layer".to_string(),
+            serde_json::to_value(&element.layer).unwrap(),
+        );
+    }
+    value
 }
 
 fn decode_png_data_url(data_url: &str) -> Result<Vec<u8>, String> {
@@ -2147,6 +2200,11 @@ mod tests {
             RpcReply::Response(response) => serde_json::to_value(response).unwrap(),
             RpcReply::Notification => panic!("expected JSON-RPC response"),
         }
+    }
+
+    fn tool_text_value(response: &serde_json::Value) -> serde_json::Value {
+        let content = response["result"]["content"][0]["text"].as_str().unwrap();
+        serde_json::from_str(content).unwrap()
     }
 
     #[test]
@@ -2362,6 +2420,124 @@ mod tests {
                 .unwrap()
                 .ends_with("FourInputProcessorScreen.java")
         }));
+    }
+
+    #[test]
+    fn asset_import_accepts_explicit_name_and_returns_compact_metadata() {
+        let state = test_state();
+        let project_id = {
+            let mut sessions = state.sessions.lock().unwrap();
+            sessions.create_session(Project::new("Asset Import", 176, 166, ModTarget::Forge))
+        };
+        let png = crate::texture::generated_gui_panel(32, 24).unwrap();
+        let path = std::env::temp_dir()
+            .join(format!(
+                "gui-crafter-mcp-asset-import-{}.png",
+                uuid::Uuid::new_v4()
+            ))
+            .to_string_lossy()
+            .into_owned();
+        std::fs::write(&path, &png).unwrap();
+
+        let response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "asset-import",
+                "method": "tools/call",
+                "params": {
+                    "name": "asset_import",
+                    "arguments": {
+                        "project_id": project_id,
+                        "file_path": path,
+                        "name": "textures/generated/custom_panel.png",
+                    }
+                }
+            }),
+            &state,
+        );
+        let _ = std::fs::remove_file(&path);
+
+        assert!(response["error"].is_null());
+        let value = tool_text_value(&response);
+        assert_eq!(value["name"], "textures/generated/custom_panel.png");
+        assert_eq!(value["width"], 32);
+        assert_eq!(value["height"], 24);
+        assert!(value["bytes"].as_u64().unwrap() > 0);
+        assert_eq!(value["sha256"].as_str().unwrap().len(), 64);
+        assert!(!value.as_object().unwrap().contains_key("data_url"));
+    }
+
+    #[test]
+    fn asset_list_is_compact_and_element_list_includes_default_layer() {
+        let state = test_state();
+        let project_id = {
+            let mut sessions = state.sessions.lock().unwrap();
+            let project_id = sessions.create_session(Project::new(
+                "Asset List Compact",
+                176,
+                166,
+                ModTarget::Forge,
+            ));
+            let project = &mut sessions.resolve_mut(Some(&project_id)).unwrap().project;
+            let asset_name = "textures/generated/gui_panel.png";
+            project.assets.push(asset_name.to_string());
+            project.texture_data.insert(
+                asset_name.to_string(),
+                crate::texture::generated_gui_panel(16, 16).unwrap(),
+            );
+            project.elements.push(
+                parse_element_arg(&serde_json::json!({
+                    "id": "slot_without_layer",
+                    "type": "slot",
+                    "x": 8,
+                    "y": 18,
+                    "size": 18
+                }))
+                .unwrap(),
+            );
+            project_id
+        };
+
+        let asset_response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "asset-list",
+                "method": "tools/call",
+                "params": {
+                    "name": "asset_list",
+                    "arguments": {
+                        "project_id": project_id,
+                    }
+                }
+            }),
+            &state,
+        );
+        let element_response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "element-list",
+                "method": "tools/call",
+                "params": {
+                    "name": "element_list",
+                    "arguments": {
+                        "project_id": project_id,
+                    }
+                }
+            }),
+            &state,
+        );
+
+        assert!(asset_response["error"].is_null());
+        let asset_value = tool_text_value(&asset_response);
+        let asset = &asset_value["assets"].as_array().unwrap()[0];
+        assert_eq!(asset["name"], "textures/generated/gui_panel.png");
+        assert_eq!(asset["sha256"].as_str().unwrap().len(), 64);
+        assert!(!asset.as_object().unwrap().contains_key("data_url"));
+
+        assert!(element_response["error"].is_null());
+        let element_value = tool_text_value(&element_response);
+        let element = &element_value["elements"].as_array().unwrap()[0];
+        assert_eq!(element["layer"], "background");
     }
 
     #[test]
