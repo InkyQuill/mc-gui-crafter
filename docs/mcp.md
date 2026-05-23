@@ -271,6 +271,33 @@ a title, progress arrow, energy bar, and button together:
 `element_add_many` is atomic: if any element payload is invalid or conflicts with
 an existing ID, no elements are added.
 
+Button and toggle-button icons can use a standalone PNG or an atlas region. Keep
+`content` as label, accessibility, and fallback metadata even when the visible
+control is icon-only:
+
+```json
+{
+  "id": "start_button",
+  "type": "button",
+  "x": 116,
+  "y": 60,
+  "width": 20,
+  "height": 20,
+  "content": "Start",
+  "tooltip": "Start processing",
+  "icon": "textures/gui/icons.png",
+  "icon_uv": {
+    "x": 0,
+    "y": 0,
+    "width": 16,
+    "height": 16
+  },
+  "asset": "textures/generated/button.png"
+}
+```
+
+For standalone icon PNGs, set `icon` to that PNG and omit `icon_uv`.
+
 ### Simple And Modular Codegen
 
 Projects default to simple code generation. Simple mode keeps the generated
@@ -417,6 +444,23 @@ Button and toggle-button elements using the generated button texture are visible
 in the editor and baked into the exported GUI texture. Their `content` labels are
 rendered by the generated Java screen classes.
 
+### Screenshots
+
+Use `project_screenshot` after major layout changes when visual inspection is
+available. The default response is compact metadata: `path`, `width`, `height`,
+`bytes`, and `sha256`. Request `include_data_url` only when the client cannot open
+local files.
+
+```json
+{
+  "name": "project_screenshot",
+  "arguments": {
+    "output_path": "/tmp/mcgui-preview.png",
+    "include_data_url": false
+  }
+}
+```
+
 ### Asset Payloads
 
 `asset_import` and `asset_list` return compact asset metadata instead of large
@@ -463,6 +507,11 @@ one-off override fields to preview/export. `class_name` is sanitized for Java;
 the generated screen class appends `Screen` only when the sanitized name does not
 already end with `Screen`.
 
+During repeated exports to the same generated directory, pass `overwrite: true`
+to `project_export_preview` and `project_export` to suppress existing-file
+warnings. This does not suppress semantic, progress, or control validation
+warnings.
+
 ## Protocol Notes
 
 - `POST /mcp` accepts JSON-RPC 2.0 requests with `Content-Type: application/json`.
@@ -491,6 +540,7 @@ as UI-driven edits.
 | `project_save_as` | Save a new or existing project session to a `.mcgui` path |
 | `project_export_preview` | Preview generated export files, warnings, and validation errors |
 | `project_export` | Write generated mod files to disk |
+| `project_screenshot` | Render a compact PNG preview of the project |
 | `project_summary` | Get project metadata and session summary |
 | `project_export_settings_update` | Update default simple/modular codegen settings |
 | `project_semantic_groups_update` | Replace project semantic group definitions |

@@ -80,6 +80,8 @@ exporting a project.
 7. Verify after each major step:
    - Call `element_list` after adding/moving elements.
    - Call `animation_list` after creating and binding animations.
+   - Call `project_screenshot` after major layout changes when visual inspection
+     is available.
    - Call `project_export_preview` before export.
    - Treat preview warnings as actionable. Fix semantic slot-count mismatches by
      aligning `slot_count`, slot roles, and `inventory_group`; fix scrollbar
@@ -104,6 +106,9 @@ exporting a project.
   compute positions from slot size and GUI dimensions before adding elements.
 - Generated button assets use `textures/generated/button.png`. Button labels are
   visible in the editor and rendered by exported Java from the element `content`.
+- For icon buttons, use `icon` plus `icon_uv` for atlas-backed icons, or `icon`
+  alone for a standalone PNG. Keep `content` as label/accessibility/fallback
+  metadata.
 - Do not leave generated output unverified. A successful MCP tool call only
   proves the command ran; it does not prove the GUI is useful.
 
@@ -141,6 +146,8 @@ Complex modular GUI:
   again.
 - If a visual element does not appear in export, inspect whether it is on the
   intended layer and whether the element has an asset or generated texture.
+- Use `overwrite: true` while iterating on exports to the same generated
+  directory; still fix semantic, progress, and control validation warnings.
 - `asset_import` and `asset_list` return compact metadata (`name`, `width`,
-  `height`, `bytes`, `sha256`). Call `asset_get_data_url` only when the full PNG
-  data URL is needed.
+  `height`, `bytes`, `sha256`). Call `asset_get_data_url` only for explicit
+  binary inspection.

@@ -107,6 +107,7 @@
 - [x] Scrollable inventory machine template with baked visible slots, scrollbar preview, and virtual slot grid metadata
 - [x] Configurable simple vs modular code generation, including MCP and export-dialog overrides
 - [x] MCP alpha ergonomics: bulk element/grid creation, compact asset metadata, default player inventory/hotbar grids, generated button visuals, and semantic preview warnings
+- [x] MCP/UI polish v2: screenshot previews, button/toggle authoring, icon/tooltip metadata, overwrite previews, and validation polish
 - [x] Parameterized custom grid generation through MCP `slot_grid_add`
 - [ ] Expression support in animation bindings (`cook_time / total_cook_time`)
 - [ ] Full runtime container/menu code generation for semantic inventories and virtual storage grids

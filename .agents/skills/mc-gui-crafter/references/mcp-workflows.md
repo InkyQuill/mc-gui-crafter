@@ -90,9 +90,17 @@ pixels apart with no extra gap; the slot border creates the visible separation.
         "type": "button",
         "x": 116,
         "y": 60,
-        "width": 46,
+        "width": 20,
         "height": 20,
         "content": "Start",
+        "tooltip": "Start processing",
+        "icon": "textures/gui/icons.png",
+        "icon_uv": {
+          "x": 0,
+          "y": 0,
+          "width": 16,
+          "height": 16
+        },
         "asset": "textures/generated/button.png",
         "layer": "background"
       }
@@ -102,7 +110,9 @@ pixels apart with no extra gap; the slot border creates the visible separation.
 ```
 
 Generated button textures are visible in the editor and baked into exported
-textures. Button and toggle-button `content` labels render in generated Java.
+textures. Use `icon` plus `icon_uv` for atlas-backed icons, or `icon` alone for a
+standalone PNG. Keep `content` even for icon buttons as label, accessibility, and
+fallback metadata.
 
 5. Create and bind the progress animation.
 
@@ -143,6 +153,23 @@ textures. Button and toggle-button `content` labels render in generated Java.
   "arguments": {}
 }
 ```
+
+When visual inspection is available, capture a screenshot after major layout
+changes:
+
+```json
+{
+  "name": "project_screenshot",
+  "arguments": {
+    "output_path": "/tmp/alloy-smelter-preview.png",
+    "include_data_url": false
+  }
+}
+```
+
+`project_screenshot` returns compact metadata by default: `path`, `width`,
+`height`, `bytes`, and `sha256`. Set `include_data_url` only if the client cannot
+open local files.
 
 7. Save the project if the user asked for a `.mcgui` artifact. New MCP-created
 projects need `project_save_as` because they do not have a path yet.
@@ -338,7 +365,7 @@ MCP `asset_import` and `asset_list` return compact metadata:
 }
 ```
 
-Fetch the full base64 payload only when needed:
+Fetch the full base64 payload only for explicit binary inspection:
 
 ```json
 {
@@ -377,7 +404,8 @@ Preview before writing files:
     "output_dir": "/tmp/mcgui-export",
     "codegen_mode": "modular",
     "generate_runtime_helpers": true,
-    "generate_semantic_registry": true
+    "generate_semantic_registry": true,
+    "overwrite": true
   }
 }
 ```
@@ -409,10 +437,15 @@ Then export:
     "output_dir": "/tmp/mcgui-export",
     "codegen_mode": "modular",
     "generate_runtime_helpers": true,
-    "generate_semantic_registry": true
+    "generate_semantic_registry": true,
+    "overwrite": true
   }
 }
 ```
+
+Use `overwrite: true` during iteration when re-exporting to the same generated
+directory. It suppresses existing-file warnings only; semantic, progress, and
+control validation warnings still need fixes.
 
 After export, check that layout JSON includes `semantic_groups` and
 `export_settings`, modular exports include `GuiSemanticRegistry.java`, baked slot
