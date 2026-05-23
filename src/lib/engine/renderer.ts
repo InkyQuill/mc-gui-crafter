@@ -782,9 +782,22 @@ export class GuiRenderer {
       ...el,
       type: "text",
       content,
+      x: 0,
+      y: 0,
       color: el.color ?? 0x404040,
       shadow: el.shadow ?? false,
     };
+
+    const glyphMetrics = this.glyphTextMetrics(labelElement);
+    if (glyphMetrics) {
+      const glyphLabel = this.drawGlyphText({
+        ...labelElement,
+        x: Math.floor(el.x + (w - glyphMetrics.width) / 2 - glyphMetrics.minX),
+        y: Math.floor(el.y + (h - glyphMetrics.height) / 2 - glyphMetrics.minY),
+      });
+      if (glyphLabel) return glyphLabel;
+    }
+
     const texture = this.textTexture(labelElement);
     if (!texture) return null;
 
@@ -795,6 +808,49 @@ export class GuiRenderer {
     const container = new Container();
     container.addChild(sprite);
     return container;
+  }
+
+  private glyphTextMetrics(el: Element): { minX: number; minY: number; width: number; height: number } | null {
+    const fontId = el.font ?? "minecraft:default";
+    const renderData = project.fontRenderData.get(fontId);
+    if (!renderData || !renderData.glyph_map) return null;
+
+    const text = el.content ?? "{text}";
+    const glyphs = renderData.glyph_map;
+    const lineAscent = this.textLineAscent(renderData, text);
+    let cursorX = 0;
+    let minX = Number.POSITIVE_INFINITY;
+    let minY = Number.POSITIVE_INFINITY;
+    let maxX = Number.NEGATIVE_INFINITY;
+    let maxY = Number.NEGATIVE_INFINITY;
+
+    for (const ch of Array.from(text)) {
+      const glyph = glyphs[ch];
+      if (!glyph) return null;
+
+      const advance = this.glyphAdvance(glyph);
+      if (glyph.width > 0 && glyph.height > 0) {
+        const x = cursorX + (glyph.bearing_x ?? 0);
+        const y = this.glyphYOffset(renderData, glyph, lineAscent);
+        minX = Math.min(minX, x);
+        minY = Math.min(minY, y);
+        maxX = Math.max(maxX, x + glyph.width);
+        maxY = Math.max(maxY, y + glyph.height);
+      }
+      cursorX += advance;
+    }
+
+    if (!Number.isFinite(minX) || !Number.isFinite(minY)) {
+      return { minX: 0, minY: 0, width: Math.max(1, cursorX), height: 8 };
+    }
+
+    const shadowOffset = el.shadow ? 1 : 0;
+    return {
+      minX,
+      minY,
+      width: Math.max(1, maxX - minX + shadowOffset),
+      height: Math.max(1, maxY - minY + shadowOffset),
+    };
   }
 
   private drawProgress(el: Element): Container {

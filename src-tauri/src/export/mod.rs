@@ -912,6 +912,7 @@ public final class GuiLayout {{
             int y = top + element.y;
             switch (element.type) {{
                 case "text" -> graphics.drawString(font, element.contentOrEmpty(), x, y, element.colorOrDefault(), element.shadowOrDefault());
+                case "button", "toggle_button" -> renderButtonLabel(graphics, font, element, x, y);
                 case "fluid_tank", "energy_bar" -> renderMeterShell(graphics, x, y, element.widthOrDefault(16), element.heightOrDefault(48));
                 default -> {{ }}
             }}
@@ -938,6 +939,18 @@ public final class GuiLayout {{
     private static void renderMeterShell(GuiGraphics graphics, int x, int y, int width, int height) {{
         graphics.fill(x, y, x + width, y + height, 0xAA000000);
         graphics.fill(x + 1, y + 1, x + width - 1, y + height - 1, 0x55333333);
+    }}
+
+    private static void renderButtonLabel(GuiGraphics graphics, Font font, Element element, int x, int y) {{
+        String label = element.contentOrEmpty();
+        if (label.isEmpty()) {{
+            return;
+        }}
+        int width = element.widthOrDefault(40);
+        int height = element.heightOrDefault(20);
+        int labelX = x + (width - font.width(label)) / 2;
+        int labelY = y + (height - 8) / 2;
+        graphics.drawString(font, label, labelX, labelY, element.colorOrDefault(), element.shadowOrDefault());
     }}
 
     private static final class LayoutData {{
@@ -1138,6 +1151,7 @@ public final class GuiLayout {{
             int y = top + element.y;
             switch (element.type) {{
                 case "text" -> context.drawText(textRenderer, element.contentOrEmpty(), x, y, element.colorOrDefault(), element.shadowOrDefault());
+                case "button", "toggle_button" -> renderButtonLabel(context, textRenderer, element, x, y);
                 case "fluid_tank", "energy_bar" -> renderMeterShell(context, x, y, element.widthOrDefault(16), element.heightOrDefault(48));
                 default -> {{ }}
             }}
@@ -1164,6 +1178,18 @@ public final class GuiLayout {{
     private static void renderMeterShell(DrawContext context, int x, int y, int width, int height) {{
         context.fill(x, y, x + width, y + height, 0xAA000000);
         context.fill(x + 1, y + 1, x + width - 1, y + height - 1, 0x55333333);
+    }}
+
+    private static void renderButtonLabel(DrawContext context, TextRenderer textRenderer, Element element, int x, int y) {{
+        String label = element.contentOrEmpty();
+        if (label.isEmpty()) {{
+            return;
+        }}
+        int width = element.widthOrDefault(40);
+        int height = element.heightOrDefault(20);
+        int labelX = x + (width - textRenderer.getWidth(label)) / 2;
+        int labelY = y + (height - 8) / 2;
+        context.drawText(textRenderer, label, labelX, labelY, element.colorOrDefault(), element.shadowOrDefault());
     }}
 
     private static final class LayoutData {{
@@ -1865,6 +1891,48 @@ mod tests {
         })
     }
 
+    fn button_element(
+        id: &str,
+        element_type: ElementType,
+        x: i32,
+        y: i32,
+        content: Option<&str>,
+    ) -> Element {
+        Element {
+            id: id.to_string(),
+            element_type,
+            x,
+            y,
+            width: Some(40),
+            height: Some(20),
+            size: None,
+            asset: None,
+            direction: None,
+            content: content.map(str::to_string),
+            font: None,
+            color: None,
+            shadow: None,
+            animation: None,
+            visible: true,
+            uv: None,
+            layer: Layer::Background,
+            slot_role: None,
+            slot_index: None,
+            inventory_group: None,
+            scroll_binding: None,
+            scroll_min: None,
+            scroll_max: None,
+            visible_rows: None,
+            total_rows: None,
+            columns: None,
+            target_group: None,
+            binding: None,
+            dock: None,
+            open_width: None,
+            open_height: None,
+        }
+    }
+
     #[test]
     fn layout_json_contains_semantic_groups_and_export_settings() {
         let mut project = Project::new("Scrollable", 176, 166, ModTarget::Forge);
@@ -2100,72 +2168,20 @@ mod tests {
             settings_override: None,
         };
         let mut project = sample_project(ModTarget::Forge);
-        project.elements.push(Element {
-            id: "start_button".to_string(),
-            element_type: ElementType::Button,
-            x: 40,
-            y: 60,
-            width: Some(40),
-            height: Some(20),
-            size: None,
-            asset: None,
-            direction: None,
-            content: Some("Start".to_string()),
-            font: None,
-            color: None,
-            shadow: None,
-            animation: None,
-            visible: true,
-            uv: None,
-            layer: Layer::Background,
-            slot_role: None,
-            slot_index: None,
-            inventory_group: None,
-            scroll_binding: None,
-            scroll_min: None,
-            scroll_max: None,
-            visible_rows: None,
-            total_rows: None,
-            columns: None,
-            target_group: None,
-            binding: None,
-            dock: None,
-            open_width: None,
-            open_height: None,
-        });
-        project.elements.push(Element {
-            id: "mode_toggle".to_string(),
-            element_type: ElementType::ToggleButton,
-            x: 84,
-            y: 60,
-            width: Some(40),
-            height: Some(20),
-            size: None,
-            asset: None,
-            direction: None,
-            content: Some("Mode".to_string()),
-            font: None,
-            color: None,
-            shadow: None,
-            animation: None,
-            visible: true,
-            uv: None,
-            layer: Layer::Background,
-            slot_role: None,
-            slot_index: None,
-            inventory_group: None,
-            scroll_binding: None,
-            scroll_min: None,
-            scroll_max: None,
-            visible_rows: None,
-            total_rows: None,
-            columns: None,
-            target_group: None,
-            binding: None,
-            dock: None,
-            open_width: None,
-            open_height: None,
-        });
+        project.elements.push(button_element(
+            "start_button",
+            ElementType::Button,
+            40,
+            60,
+            Some("Start"),
+        ));
+        project.elements.push(button_element(
+            "mode_toggle",
+            ElementType::ToggleButton,
+            84,
+            60,
+            Some("Mode"),
+        ));
 
         export_project(&project, &config, "forge").unwrap();
         let background_path = output_dir
@@ -2175,6 +2191,129 @@ mod tests {
 
         assert_eq!(background.get_pixel(40, 60).0, [0x37, 0x37, 0x37, 0xff]);
         assert_eq!(background.get_pixel(84, 60).0, [0x37, 0x37, 0x37, 0xff]);
+    }
+
+    #[test]
+    fn forge_like_export_renders_centered_button_and_toggle_labels() {
+        for (target, project_target, resource_factory) in [
+            (
+                "forge",
+                ModTarget::Forge,
+                "new ResourceLocation(namespace, path)",
+            ),
+            (
+                "neoforge",
+                ModTarget::NeoForge,
+                "ResourceLocation.fromNamespaceAndPath(namespace, path)",
+            ),
+        ] {
+            let output_dir = TempExportDir::new(&format!("{target}-button-labels"));
+            let config = ExportConfig {
+                mod_id: "testmod".to_string(),
+                package: "com.example".to_string(),
+                class_name: "ButtonLabelsGui".to_string(),
+                output_dir: output_dir.path().to_string_lossy().to_string(),
+                settings_override: None,
+            };
+            let mut project = sample_project(project_target);
+            project.elements.push(button_element(
+                "start_button",
+                ElementType::Button,
+                40,
+                60,
+                Some("Start"),
+            ));
+            project.elements.push(button_element(
+                "mode_toggle",
+                ElementType::ToggleButton,
+                84,
+                60,
+                Some("Mode"),
+            ));
+            project.elements.push(button_element(
+                "empty_button",
+                ElementType::Button,
+                128,
+                60,
+                Some(""),
+            ));
+
+            export_project(&project, &config, target).unwrap();
+            let layout = read(
+                &output_dir
+                    .path()
+                    .join("src/main/java/com/example/GuiLayout.java"),
+            );
+            let layout_json = read(
+                &output_dir
+                    .path()
+                    .join("src/main/resources/assets/testmod/gui/buttonlabelsgui_layout.json"),
+            );
+
+            assert!(layout.contains(resource_factory));
+            assert!(layout.contains(
+                "case \"button\", \"toggle_button\" -> renderButtonLabel(graphics, font, element, x, y);"
+            ));
+            assert!(layout.contains("if (label.isEmpty()) {"));
+            assert!(layout.contains("int labelX = x + (width - font.width(label)) / 2;"));
+            assert!(layout.contains("int labelY = y + (height - 8) / 2;"));
+            assert!(layout.contains(
+                "graphics.drawString(font, label, labelX, labelY, element.colorOrDefault(), element.shadowOrDefault());"
+            ));
+            assert!(layout_json.contains(r#""content": "Start""#));
+            assert!(layout_json.contains(r#""content": "Mode""#));
+        }
+    }
+
+    #[test]
+    fn fabric_export_renders_centered_button_and_toggle_labels() {
+        let output_dir = TempExportDir::new("fabric-button-labels");
+        let config = ExportConfig {
+            mod_id: "testmod".to_string(),
+            package: "com.example".to_string(),
+            class_name: "ButtonLabelsGui".to_string(),
+            output_dir: output_dir.path().to_string_lossy().to_string(),
+            settings_override: None,
+        };
+        let mut project = sample_project(ModTarget::Fabric);
+        project.elements.push(button_element(
+            "start_button",
+            ElementType::Button,
+            40,
+            60,
+            Some("Start"),
+        ));
+        project.elements.push(button_element(
+            "mode_toggle",
+            ElementType::ToggleButton,
+            84,
+            60,
+            Some("Mode"),
+        ));
+
+        export_project(&project, &config, "fabric").unwrap();
+        let layout = read(
+            &output_dir
+                .path()
+                .join("src/main/java/com/example/GuiLayout.java"),
+        );
+        let layout_json = read(
+            &output_dir
+                .path()
+                .join("src/main/resources/assets/testmod/gui/buttonlabelsgui_layout.json"),
+        );
+
+        assert!(layout.contains(
+            "case \"button\", \"toggle_button\" -> renderButtonLabel(context, textRenderer, element, x, y);"
+        ));
+        assert!(layout.contains("if (label.isEmpty()) {"));
+        assert!(layout.contains("int labelX = x + (width - textRenderer.getWidth(label)) / 2;"));
+        assert!(layout.contains("int labelY = y + (height - 8) / 2;"));
+        assert!(layout.contains(
+            "context.drawText(textRenderer, label, labelX, labelY, element.colorOrDefault(), element.shadowOrDefault());"
+        ));
+        assert!(layout_json.contains(r#""content": "Start""#));
+        assert!(layout_json.contains(r#""content": "Mode""#));
     }
 
     #[test]
