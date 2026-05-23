@@ -13,6 +13,7 @@ pub struct ExportConfig {
     pub class_name: String,
     pub output_dir: String,
     pub settings_override: Option<ProjectExportSettings>,
+    pub overwrite: bool,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -150,8 +151,13 @@ pub fn preview_export(
 ) -> Result<ExportPreview, String> {
     let settings = effective_export_settings(project, config);
     let plan = plan_export(project, config, target)?;
-    let mut warnings = existing_file_warnings(&plan.files);
+    let mut warnings = if config.overwrite {
+        Vec::new()
+    } else {
+        existing_file_warnings(&plan.files)
+    };
     warnings.extend(semantic_warnings(project, &settings));
+    warnings.extend(progress_texture_warnings(project));
     Ok(ExportPreview {
         target: plan.target.loader_id().to_string(),
         mod_id: plan.export.mod_id,
@@ -185,21 +191,21 @@ fn plan_export(
     plan_file(
         &mut files,
         settings_path,
-        generate_settings_gradle(&export, target).into_bytes(),
+        generated_text(generate_settings_gradle(&export, target)),
     )?;
 
     let gradle_path = export.output_dir.join("build.gradle");
     plan_file(
         &mut files,
         gradle_path,
-        generate_build_gradle(&export, target).into_bytes(),
+        generated_text(generate_build_gradle(&export, target)),
     )?;
 
     let properties_path = export.output_dir.join("gradle.properties");
     plan_file(
         &mut files,
         properties_path,
-        generate_gradle_properties(&export, target).into_bytes(),
+        generated_text(generate_gradle_properties(&export, target)),
     )?;
 
     // Background atlas
@@ -258,7 +264,7 @@ fn plan_export(
     plan_file(
         &mut files,
         layout_java_path,
-        generate_gui_layout_java(&export, target, project).into_bytes(),
+        generated_text(generate_gui_layout_java(&export, target, project)),
     )?;
 
     if settings.codegen_mode == CodegenMode::Modular && settings.generate_semantic_registry {
@@ -266,7 +272,7 @@ fn plan_export(
         plan_file(
             &mut files,
             registry_path,
-            generate_semantic_registry_java(&export, project).into_bytes(),
+            generated_text(generate_semantic_registry_java(&export, project)),
         )?;
     }
 
@@ -278,7 +284,7 @@ fn plan_export(
         ExportTarget::Fabric => generate_fabric_screen(&export, project),
         ExportTarget::NeoForge => generate_neoforge_screen(&export, project),
     };
-    plan_file(&mut files, screen_path, screen_code.into_bytes())?;
+    plan_file(&mut files, screen_path, generated_text(screen_code))?;
 
     let mod_entry_path = export
         .java_dir()
@@ -286,21 +292,21 @@ fn plan_export(
     plan_file(
         &mut files,
         mod_entry_path,
-        generate_client_entrypoint(&export, target).into_bytes(),
+        generated_text(generate_client_entrypoint(&export, target)),
     )?;
 
     let metadata_path = loader_metadata_path(&export, target);
     plan_file(
         &mut files,
         metadata_path,
-        generate_loader_metadata(&export, target).into_bytes(),
+        generated_text(generate_loader_metadata(&export, target)),
     )?;
 
     let readme_path = export.output_dir.join("README.txt");
     plan_file(
         &mut files,
         readme_path,
-        generate_readme(&export, target, project).into_bytes(),
+        generated_text(generate_readme(&export, target, project)),
     )?;
 
     Ok(ExportPlan {
@@ -317,6 +323,15 @@ fn plan_file(files: &mut Vec<PlannedFile>, path: PathBuf, data: Vec<u8>) -> Resu
     }
     files.push(PlannedFile { path, data });
     Ok(())
+}
+
+fn generated_text(text: String) -> Vec<u8> {
+    let mut output = String::new();
+    for line in text.lines() {
+        output.push_str(line.trim_end());
+        output.push('\n');
+    }
+    output.into_bytes()
 }
 
 fn effective_export_settings(project: &Project, config: &ExportConfig) -> ProjectExportSettings {
@@ -401,6 +416,32 @@ fn existing_file_warnings(files: &[PlannedFile]) -> Vec<String> {
         .collect()
 }
 
+fn progress_texture_warnings(project: &Project) -> Vec<String> {
+    project
+        .elements
+        .iter()
+        .filter(|element| element.element_type == ElementType::Progress)
+        .filter_map(|element| {
+            let asset = element.asset.as_deref()?;
+            let data = project.texture_data.get(asset)?;
+            let image = image::load_from_memory(data).ok()?;
+            let width = element.width.unwrap_or(image.width());
+            let height = element.height.unwrap_or(image.height());
+            ((width, height) != (image.width(), image.height())).then(|| {
+                format!(
+                    "Progress element '{}' is stretched from texture '{}' ({}x{}) to {}x{}; this is allowed but may be accidental for pixel-art GUI work.",
+                    element.id,
+                    asset,
+                    image.width(),
+                    image.height(),
+                    width,
+                    height
+                )
+            })
+        })
+        .collect()
+}
+
 fn semantic_warnings(project: &Project, settings: &ProjectExportSettings) -> Vec<String> {
     if settings.codegen_mode != CodegenMode::Modular {
         return Vec::new();
@@ -464,9 +505,44 @@ fn semantic_integrity_warnings(project: &Project) -> Vec<String> {
                 }
             }
         }
+
+        warnings.extend(control_button_warnings(project, group));
     }
 
     warnings
+}
+
+fn control_button_warnings(project: &Project, group: &SemanticGroup) -> Vec<String> {
+    if group.kind != SemanticGroupKind::ControlButtons {
+        return Vec::new();
+    }
+    if group.slot_count.is_none() && group.data_source.is_none() {
+        return Vec::new();
+    }
+    let expected = group.slot_count.unwrap_or(1) as usize;
+    let matching = project
+        .elements
+        .iter()
+        .filter(|element| {
+            matches!(
+                element.element_type,
+                ElementType::Button | ElementType::ToggleButton
+            )
+        })
+        .filter(|element| {
+            element.inventory_group.as_deref() == Some(group.id.as_str())
+                || element.binding.as_deref() == group.data_source.as_deref()
+                || element.target_group.as_deref() == Some(group.id.as_str())
+        })
+        .count();
+    if matching < expected {
+        vec![format!(
+            "Semantic group '{}' declares control buttons but only {} matching button elements were found.",
+            group.id, matching
+        )]
+    } else {
+        Vec::new()
+    }
 }
 
 fn slot_count_requirement(group: &SemanticGroup) -> Option<u32> {
@@ -2029,6 +2105,7 @@ mod tests {
             class_name: "123 Furnace GUI".to_string(),
             output_dir: output_dir.to_string_lossy().to_string(),
             settings_override: None,
+            overwrite: false,
         };
         let files = export_project(&sample_project(project_target), &config, target).unwrap();
         (output_dir, files)
@@ -2229,6 +2306,7 @@ mod tests {
             class_name: "SimpleGui".into(),
             output_dir: "/tmp/gui-crafter-export-normalized".into(),
             settings_override: None,
+            overwrite: false,
         };
 
         let settings = effective_export_settings(&project, &config);
@@ -2299,6 +2377,7 @@ mod tests {
             class_name: "SemanticGui".to_string(),
             output_dir: output_dir.path().to_string_lossy().to_string(),
             settings_override: None,
+            overwrite: false,
         };
         let preview = preview_export(&project, &config, "forge").unwrap();
 
@@ -2350,6 +2429,7 @@ mod tests {
             class_name: "SemanticGui".to_string(),
             output_dir: output_dir.path().to_string_lossy().to_string(),
             settings_override: None,
+            overwrite: false,
         };
         let preview = preview_export(&project, &config, "forge").unwrap();
 
@@ -2450,6 +2530,30 @@ mod tests {
     }
 
     #[test]
+    fn preview_warns_for_specific_control_buttons_group_without_buttons() {
+        let mut project = Project::new("Control Buttons", 176, 166, ModTarget::Forge);
+        project.export_settings.codegen_mode = CodegenMode::Modular;
+        project.semantic_groups.push(SemanticGroup {
+            id: "settings".into(),
+            kind: SemanticGroupKind::ControlButtons,
+            columns: None,
+            visible_rows: None,
+            total_rows: None,
+            slot_count: Some(1),
+            data_source: Some("settings".into()),
+            scroll_binding: None,
+            dynamic_height: false,
+        });
+        let settings = project.export_settings.clone().normalized();
+
+        let warnings = semantic_warnings(&project, &settings);
+
+        assert!(warnings
+            .iter()
+            .any(|warning| warning.contains("settings") && warning.contains("button")));
+    }
+
+    #[test]
     fn modular_export_plans_semantic_registry() {
         let output_dir = TempExportDir::new("modular-semantic-registry");
         let mut project = Project::new("Scrollable", 176, 166, ModTarget::Forge);
@@ -2462,6 +2566,7 @@ mod tests {
             class_name: "ScrollableGui".into(),
             output_dir: output_dir.path().to_string_lossy().to_string(),
             settings_override: None,
+            overwrite: false,
         };
 
         let preview = preview_export(&project, &config, "forge").unwrap();
@@ -2490,6 +2595,7 @@ mod tests {
                     class_name: class_name.to_string(),
                     output_dir: output_dir.path().to_string_lossy().to_string(),
                     settings_override: None,
+                    overwrite: false,
                 };
 
                 let plan =
@@ -2561,6 +2667,7 @@ mod tests {
             class_name: "LayeredGui".to_string(),
             output_dir: output_dir.path().to_string_lossy().to_string(),
             settings_override: None,
+            overwrite: false,
         };
 
         let files = export_project(&layered_project(ModTarget::Fabric), &config, "fabric").unwrap();
@@ -2594,6 +2701,7 @@ mod tests {
             class_name: "LayeredGui".to_string(),
             output_dir: output_dir.path().to_string_lossy().to_string(),
             settings_override: None,
+            overwrite: false,
         };
 
         let preview = preview_export(&layered_project(ModTarget::Forge), &config, "forge").unwrap();
@@ -2625,6 +2733,7 @@ mod tests {
             class_name: "LayeredGui".to_string(),
             output_dir: output_dir.path().to_string_lossy().to_string(),
             settings_override: None,
+            overwrite: false,
         };
 
         export_project(&layered_project(ModTarget::Forge), &config, "forge").unwrap();
@@ -2646,6 +2755,7 @@ mod tests {
             class_name: "SlotBakedGui".to_string(),
             output_dir: output_dir.path().to_string_lossy().to_string(),
             settings_override: None,
+            overwrite: false,
         };
 
         export_project(&sample_project(ModTarget::Forge), &config, "forge").unwrap();
@@ -2672,6 +2782,7 @@ mod tests {
             class_name: "ButtonBakedGui".to_string(),
             output_dir: output_dir.path().to_string_lossy().to_string(),
             settings_override: None,
+            overwrite: false,
         };
         let mut project = sample_project(ModTarget::Forge);
         project.elements.push(button_element(
@@ -2720,6 +2831,7 @@ mod tests {
                 class_name: "ButtonLabelsGui".to_string(),
                 output_dir: output_dir.path().to_string_lossy().to_string(),
                 settings_override: None,
+                overwrite: false,
             };
             let mut project = sample_project(project_target);
             project.elements.push(button_element(
@@ -2780,6 +2892,7 @@ mod tests {
             class_name: "ButtonLabelsGui".to_string(),
             output_dir: output_dir.path().to_string_lossy().to_string(),
             settings_override: None,
+            overwrite: false,
         };
         let mut project = sample_project(ModTarget::Fabric);
         project.elements.push(button_element(
@@ -2835,6 +2948,7 @@ mod tests {
                 class_name: "IconButtonLabelsGui".to_string(),
                 output_dir: output_dir.path().to_string_lossy().to_string(),
                 settings_override: None,
+                overwrite: false,
             };
             let mut project = sample_project(project_target);
             project.texture_data.insert(
@@ -2894,6 +3008,7 @@ mod tests {
             class_name: "IconButtonLabelsGui".to_string(),
             output_dir: output_dir.path().to_string_lossy().to_string(),
             settings_override: None,
+            overwrite: false,
         };
         let mut project = sample_project(ModTarget::Fabric);
         project.texture_data.insert(
@@ -2950,6 +3065,7 @@ mod tests {
             class_name: "LayeredGui".to_string(),
             output_dir: output_dir.path().to_string_lossy().to_string(),
             settings_override: None,
+            overwrite: false,
         };
         let mut project = layered_project(ModTarget::Forge);
         project.elements.push(Element {
@@ -3068,6 +3184,7 @@ mod tests {
             class_name: "TestGui".to_string(),
             output_dir: output_dir.to_string_lossy().to_string(),
             settings_override: None,
+            overwrite: false,
         };
 
         let error = export_project(&project, &config, "forge").unwrap_err();
@@ -3090,6 +3207,7 @@ mod tests {
             class_name: "TestGui".to_string(),
             output_dir: output_dir.to_string_lossy().to_string(),
             settings_override: None,
+            overwrite: false,
         };
 
         let error = export_project(&project, &config, "forge").unwrap_err();
@@ -3116,6 +3234,7 @@ mod tests {
             class_name: "TestGui".to_string(),
             output_dir: output_dir.to_string_lossy().to_string(),
             settings_override: None,
+            overwrite: false,
         };
 
         let preview = preview_export(&project, &config, "forge").unwrap();
@@ -3135,6 +3254,7 @@ mod tests {
             class_name: "123 Furnace GUI".to_string(),
             output_dir: output_dir.to_string_lossy().to_string(),
             settings_override: None,
+            overwrite: false,
         };
 
         let preview = preview_export(&sample_project(ModTarget::Forge), &config, "forge").unwrap();
@@ -3176,6 +3296,7 @@ mod tests {
             class_name: "TestGui".to_string(),
             output_dir: output_dir.to_string_lossy().to_string(),
             settings_override: None,
+            overwrite: false,
         };
 
         let preview = preview_export(&project, &config, "forge").unwrap();
@@ -3201,6 +3322,7 @@ mod tests {
             class_name: "TestGui".to_string(),
             output_dir: output_dir.to_string_lossy().to_string(),
             settings_override: None,
+            overwrite: false,
         };
 
         let preview = preview_export(&sample_project(ModTarget::Forge), &config, "forge").unwrap();
@@ -3212,5 +3334,108 @@ mod tests {
         assert!(!output_dir.join("src").exists());
 
         let _ = fs::remove_dir_all(output_dir);
+    }
+
+    #[test]
+    fn preview_overwrite_suppresses_existing_target_warnings() {
+        let output_dir = TempExportDir::new("preview-overwrite-existing");
+        let project = Project::new("Overwrite", 176, 166, ModTarget::Forge);
+        let config = ExportConfig {
+            mod_id: "overwrite_test".into(),
+            package: "net.inkyquill.overwrite".into(),
+            class_name: "OverwriteScreen".into(),
+            output_dir: output_dir.path().to_string_lossy().into_owned(),
+            settings_override: None,
+            overwrite: false,
+        };
+        let first = preview_export(&project, &config, "forge").unwrap();
+        fs::create_dir_all(Path::new(&first.files[0]).parent().unwrap()).unwrap();
+        fs::write(&first.files[0], "existing").unwrap();
+
+        let warning_preview = preview_export(&project, &config, "forge").unwrap();
+        assert!(warning_preview
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("already exists")));
+
+        let overwrite_preview = preview_export(
+            &project,
+            &ExportConfig {
+                overwrite: true,
+                ..config
+            },
+            "forge",
+        )
+        .unwrap();
+        assert!(!overwrite_preview
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("already exists")));
+    }
+
+    #[test]
+    fn generated_java_files_have_no_trailing_whitespace() {
+        let output_dir = TempExportDir::new("java-whitespace");
+        let project = Project::new("Whitespace", 176, 166, ModTarget::Forge);
+        let config = ExportConfig {
+            mod_id: "whitespace_test".into(),
+            package: "net.inkyquill.whitespace".into(),
+            class_name: "WhitespaceScreen".into(),
+            output_dir: output_dir.path().to_string_lossy().into_owned(),
+            settings_override: None,
+            overwrite: false,
+        };
+        let plan = plan_export(&project, &config, "forge").unwrap();
+
+        for file in plan.files {
+            if file
+                .path
+                .extension()
+                .and_then(|extension| extension.to_str())
+                != Some("java")
+            {
+                continue;
+            }
+            let text = String::from_utf8(file.data).unwrap();
+            for (index, line) in text.lines().enumerate() {
+                assert_eq!(
+                    line.trim_end(),
+                    line,
+                    "{}:{} has trailing whitespace",
+                    file.path.display(),
+                    index + 1
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn preview_warns_when_progress_element_stretches_referenced_texture() {
+        let output_dir = TempExportDir::new("progress-stretch-preview");
+        let mut project = sample_project(ModTarget::Forge);
+        let progress = project
+            .elements
+            .iter_mut()
+            .find(|element| element.id == "progress_arrow")
+            .unwrap();
+        progress.asset = Some("textures/widgets/progress.png".into());
+        progress.width = Some(40);
+        progress.height = Some(20);
+        project.export_settings.codegen_mode = CodegenMode::Simple;
+        let config = ExportConfig {
+            mod_id: "progress_stretch".into(),
+            package: "net.inkyquill.progress".into(),
+            class_name: "ProgressStretchScreen".into(),
+            output_dir: output_dir.path().to_string_lossy().into_owned(),
+            settings_override: None,
+            overwrite: false,
+        };
+
+        let preview = preview_export(&project, &config, "forge").unwrap();
+
+        assert!(preview
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("progress_arrow") && warning.contains("stretched")));
     }
 }

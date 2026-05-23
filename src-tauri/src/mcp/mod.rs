@@ -768,6 +768,12 @@ fn export_props() -> serde_json::Value {
             "Generate semantic registry in modular mode",
             false,
         ),
+        (
+            "overwrite",
+            "boolean",
+            "Allow overwriting planned generated files without existing-file warnings",
+            false,
+        ),
     ])
 }
 
@@ -1103,6 +1109,7 @@ fn export_request<'a>(
         class_name: required_str(args, "class_name")?.to_string(),
         output_dir: required_str(args, "output_dir")?.to_string(),
         settings_override: export_settings_override(project, args)?,
+        overwrite: optional_bool(args, "overwrite")?.unwrap_or(false),
     };
     Ok((project, config, target))
 }
@@ -2451,6 +2458,7 @@ mod tests {
         assert!(properties.contains_key("codegen_mode"));
         assert!(properties.contains_key("generate_runtime_helpers"));
         assert!(properties.contains_key("generate_semantic_registry"));
+        assert!(properties.contains_key("overwrite"));
     }
 
     #[test]
@@ -3856,6 +3864,37 @@ mod tests {
         };
 
         assert_eq!(error, "codegen_mode must be \"simple\" or \"modular\"");
+    }
+
+    #[test]
+    fn export_request_rejects_wrong_typed_overwrite() {
+        let state = test_state();
+        {
+            let mut sessions = state.sessions.lock().unwrap();
+            sessions.create_session(Project::new("Overwrite Type", 176, 166, ModTarget::Forge));
+        }
+
+        let response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "preview",
+                "method": "tools/call",
+                "params": {
+                    "name": "project_export_preview",
+                    "arguments": {
+                        "target": "forge",
+                        "mod_id": "overwrite_type",
+                        "package": "net.inkyquill.overwrite",
+                        "class_name": "OverwriteType",
+                        "output_dir": "/tmp/mcgui-overwrite-type",
+                        "overwrite": "true"
+                    }
+                }
+            }),
+            &state,
+        );
+
+        assert_eq!(response["error"]["message"], "overwrite must be boolean");
     }
 
     #[test]

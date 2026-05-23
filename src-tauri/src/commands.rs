@@ -489,6 +489,7 @@ pub fn project_export_preview(
         class_name,
         output_dir,
         settings_override,
+        overwrite: false,
     };
 
     crate::export::preview_export(project, &config, &target)
@@ -522,6 +523,7 @@ pub fn project_export(
         class_name,
         output_dir,
         settings_override,
+        overwrite: false,
     };
 
     crate::export::export_project(project, &config, &target)
