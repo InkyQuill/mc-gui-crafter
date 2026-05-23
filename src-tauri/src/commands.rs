@@ -473,6 +473,7 @@ pub fn project_export_preview(
     codegen_mode: Option<String>,
     generate_runtime_helpers: Option<bool>,
     generate_semantic_registry: Option<bool>,
+    overwrite: Option<bool>,
 ) -> Result<crate::export::ExportPreview, String> {
     let sessions = state.sessions.lock().unwrap();
     let project = &sessions.resolve(project_id.as_deref())?.project;
@@ -489,7 +490,7 @@ pub fn project_export_preview(
         class_name,
         output_dir,
         settings_override,
-        overwrite: false,
+        overwrite: overwrite.unwrap_or(false),
     };
 
     crate::export::preview_export(project, &config, &target)
@@ -507,6 +508,7 @@ pub fn project_export(
     codegen_mode: Option<String>,
     generate_runtime_helpers: Option<bool>,
     generate_semantic_registry: Option<bool>,
+    overwrite: Option<bool>,
 ) -> Result<Vec<String>, String> {
     let sessions = state.sessions.lock().unwrap();
     let project = &sessions.resolve(project_id.as_deref())?.project;
@@ -523,7 +525,7 @@ pub fn project_export(
         class_name,
         output_dir,
         settings_override,
-        overwrite: false,
+        overwrite: overwrite.unwrap_or(false),
     };
 
     crate::export::export_project(project, &config, &target)

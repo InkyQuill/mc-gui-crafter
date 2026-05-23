@@ -297,9 +297,11 @@ function mockExportPreview(args?: Record<string, unknown>): ExportPreview {
     class_name: className,
     output_dir: outputDir,
     files,
-    warnings: files
-      .filter(path => mockExistingExportFiles.has(path))
-      .map(path => `Target file already exists and will be overwritten: ${path}`),
+    warnings: args?.overwrite === true
+      ? []
+      : files
+        .filter(path => mockExistingExportFiles.has(path))
+        .map(path => `Target file already exists and will be overwritten: ${path}`),
     errors,
   };
 }
@@ -940,6 +942,7 @@ export interface ExportSettingsOverride {
   codegen_mode: CodegenMode;
   generate_runtime_helpers: boolean;
   generate_semantic_registry: boolean;
+  overwrite?: boolean;
 }
 
 export async function assetImport(filePath: string, projectId?: string, dataUrl?: string): Promise<AssetImportResult> {

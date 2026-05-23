@@ -13,6 +13,7 @@
   let codegenMode = $state<CodegenMode>(project.exportSettings.codegen_mode);
   let generateRuntimeHelpers = $state(project.exportSettings.generate_runtime_helpers);
   let generateSemanticRegistry = $derived(codegenMode === "modular");
+  let overwriteExisting = $state(false);
   let outputDir = $state("");
   let exporting = $state(false);
   let resultFiles = $state<string[]>([]);
@@ -42,6 +43,7 @@
       codegenMode,
       generateRuntimeHelpers,
       generateSemanticRegistry,
+      overwriteExisting,
     };
 
     resultFiles = [];
@@ -69,6 +71,7 @@
             codegen_mode: request.codegenMode,
             generate_runtime_helpers: request.generateRuntimeHelpers,
             generate_semantic_registry: request.generateSemanticRegistry,
+            overwrite: request.overwriteExisting,
           },
         );
         if (requestId === previewRequestId) {
@@ -123,6 +126,7 @@
           codegen_mode: codegenMode,
           generate_runtime_helpers: generateRuntimeHelpers,
           generate_semantic_registry: generateSemanticRegistry,
+          overwrite: overwriteExisting,
         },
       );
       resultFiles = files;
@@ -196,6 +200,11 @@
       <label class="check-row">
         <input type="checkbox" bind:checked={generateRuntimeHelpers} />
         <span>Generate runtime helpers</span>
+      </label>
+
+      <label class="check-row">
+        <input type="checkbox" bind:checked={overwriteExisting} />
+        <span>Overwrite existing files</span>
       </label>
 
       {#if codegenMode === "modular" && project.semanticGroups.length === 0}
