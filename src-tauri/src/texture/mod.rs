@@ -114,18 +114,24 @@ fn overlay_button_icon(
     }
     let element_w = element.width.or(element.size).unwrap_or(20);
     let element_h = element.height.or(element.size).unwrap_or(20);
+    if element_w == 0 || element_h == 0 {
+        return Ok(());
+    }
     let max_w = element_w.saturating_sub(4).max(1);
     let max_h = element_h.saturating_sub(4).max(1);
-    let target_w = source.width().min(max_w);
-    let target_h = source.height().min(max_h);
+    let scale = 1.0_f64
+        .min(max_w as f64 / source.width() as f64)
+        .min(max_h as f64 / source.height() as f64);
+    let target_w = ((source.width() as f64 * scale).floor() as u32).max(1);
+    let target_h = ((source.height() as f64 * scale).floor() as u32).max(1);
     let resized = image::imageops::resize(
         &source,
         target_w,
         target_h,
         image::imageops::FilterType::Nearest,
     );
-    let x = element.x + ((element_w - target_w) / 2) as i32;
-    let y = element.y + ((element_h - target_h) / 2) as i32;
+    let x = element.x + (element_w.saturating_sub(target_w) / 2) as i32;
+    let y = element.y + (element_h.saturating_sub(target_h) / 2) as i32;
     image::imageops::overlay(img, &resized, x as i64, y as i64);
     Ok(())
 }
@@ -507,6 +513,30 @@ mod tests {
         let image = image::load_from_memory(&atlas).unwrap().to_rgba8();
 
         assert_eq!(image.get_pixel(14, 12), &Rgba([0xaa, 0x44, 0x11, 0xff]));
+    }
+
+    #[test]
+    fn background_export_preserves_rectangular_button_icon_aspect_ratio() {
+        let mut project = Project::new(
+            "Rectangular Icon Button",
+            64,
+            32,
+            crate::project::ModTarget::Forge,
+        );
+        project.texture_data.insert(
+            "textures/gui/icons/wide.png".into(),
+            test_png(32, 24, Rgba([0x11, 0xaa, 0xee, 0xff])),
+        );
+        project.assets.push("textures/gui/icons/wide.png".into());
+        let mut button = button_element("button", 8, 6);
+        button.icon = Some("textures/gui/icons/wide.png".into());
+        project.elements.push(button);
+
+        let atlas = composite_atlas_for_layer(&project, Layer::Background).unwrap();
+        let image = image::load_from_memory(&atlas).unwrap().to_rgba8();
+
+        assert_eq!(image.get_pixel(12, 11), &Rgba([0x11, 0xaa, 0xee, 0xff]));
+        assert_ne!(image.get_pixel(12, 9), &Rgba([0x11, 0xaa, 0xee, 0xff]));
     }
 
     #[test]
