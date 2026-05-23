@@ -2203,6 +2203,9 @@ mod tests {
 
         assert_eq!(element["icon"], "textures/gui/widgets.png");
         assert_eq!(element["icon_uv"]["x"], 16);
+        assert_eq!(element["icon_uv"]["y"], 0);
+        assert_eq!(element["icon_uv"]["width"], 16);
+        assert_eq!(element["icon_uv"]["height"], 16);
         assert_eq!(element["tooltip"], "Open settings");
     }
 

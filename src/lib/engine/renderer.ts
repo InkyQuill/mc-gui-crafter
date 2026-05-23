@@ -790,9 +790,10 @@ export class GuiRenderer {
     const dataUrl = assetDataUrls.get(el.icon);
     if (!dataUrl) return null;
     const source = Texture.from(dataUrl);
+    source.source.scaleMode = "nearest";
     const texture = this.textureWithIconUv(source, el);
     if (!texture) return null;
-    const sprite = new Sprite(texture);
+    const sprite = new Sprite({ texture, roundPixels: true });
     const w = el.width ?? el.size ?? 40;
     const h = el.height ?? el.size ?? 20;
     const maxW = Math.max(1, w - 4);
