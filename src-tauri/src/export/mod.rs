@@ -550,6 +550,11 @@ fn referenced_texture_assets(project: &Project) -> Vec<Cow<'_, str>> {
                 assets.push(Cow::Borrowed(asset));
             }
         }
+        if let Some(icon) = element.icon.as_deref() {
+            if !assets.iter().any(|known: &Cow<'_, str>| known == icon) {
+                assets.push(Cow::Borrowed(icon));
+            }
+        }
     }
     for animation in &project.animations {
         if let Some(asset) = animation.texture.as_deref() {
@@ -2832,6 +2837,10 @@ mod tests {
                 settings_override: None,
             };
             let mut project = sample_project(project_target);
+            project.texture_data.insert(
+                "textures/gui/settings_icon.png".to_string(),
+                png_bytes([80, 120, 220, 255]),
+            );
             let mut icon_button = button_element(
                 "settings_button",
                 ElementType::Button,
@@ -2887,6 +2896,10 @@ mod tests {
             settings_override: None,
         };
         let mut project = sample_project(ModTarget::Fabric);
+        project.texture_data.insert(
+            "textures/gui/settings_icon.png".to_string(),
+            png_bytes([80, 120, 220, 255]),
+        );
         let mut icon_toggle = button_element(
             "settings_toggle",
             ElementType::ToggleButton,
@@ -3060,6 +3073,56 @@ mod tests {
         let error = export_project(&project, &config, "forge").unwrap_err();
 
         assert!(error.contains("textures/widgets/panel.png"));
+        let _ = fs::remove_dir_all(output_dir);
+    }
+
+    #[test]
+    fn export_rejects_missing_button_icon_texture() {
+        let output_dir = temp_export_dir("missing-icon");
+        let mut project = sample_project(ModTarget::Forge);
+        project.elements.push(Element {
+            icon: Some("textures/icons/start.png".to_string()),
+            ..button_element("start_button", ElementType::Button, 12, 42, Some("Start"))
+        });
+        let config = ExportConfig {
+            mod_id: "testmod".to_string(),
+            package: "com.example".to_string(),
+            class_name: "TestGui".to_string(),
+            output_dir: output_dir.to_string_lossy().to_string(),
+            settings_override: None,
+        };
+
+        let error = export_project(&project, &config, "forge").unwrap_err();
+
+        assert!(error.contains("textures/icons/start.png"));
+        let _ = fs::remove_dir_all(output_dir);
+    }
+
+    #[test]
+    fn preview_includes_button_icon_texture_in_planned_files() {
+        let output_dir = temp_export_dir("preview-icon");
+        let icon_asset = "textures/icons/start.png".to_string();
+        let mut project = sample_project(ModTarget::Forge);
+        project
+            .texture_data
+            .insert(icon_asset.clone(), png_bytes([20, 200, 80, 255]));
+        project.elements.push(Element {
+            icon: Some(icon_asset),
+            ..button_element("start_button", ElementType::Button, 12, 42, Some("Start"))
+        });
+        let config = ExportConfig {
+            mod_id: "testmod".to_string(),
+            package: "com.example".to_string(),
+            class_name: "TestGui".to_string(),
+            output_dir: output_dir.to_string_lossy().to_string(),
+            settings_override: None,
+        };
+
+        let preview = preview_export(&project, &config, "forge").unwrap();
+
+        assert!(preview.files.iter().any(|path| {
+            path.ends_with("src/main/resources/assets/testmod/textures/icons/start.png")
+        }));
         let _ = fs::remove_dir_all(output_dir);
     }
 
