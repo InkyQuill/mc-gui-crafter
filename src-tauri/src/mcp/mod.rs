@@ -2055,6 +2055,16 @@ fn validate_asset_name(name: &str) -> Result<(), String> {
     if name.contains('\\') || std::path::Path::new(name).is_absolute() {
         return Err("Asset name must be a relative project path".to_string());
     }
+    if !name.starts_with("textures/") || !name.ends_with(".png") {
+        return Err("Asset name must start with textures/ and end with .png".to_string());
+    }
+    let texture_name = name
+        .strip_prefix("textures/")
+        .and_then(|name| name.strip_suffix(".png"))
+        .unwrap_or_default();
+    if texture_name.is_empty() || texture_name.ends_with('/') {
+        return Err("Asset name must include a texture filename".to_string());
+    }
     if name
         .split('/')
         .any(|component| component.is_empty() || component == "." || component == "..")
@@ -2465,6 +2475,138 @@ mod tests {
         assert!(value["bytes"].as_u64().unwrap() > 0);
         assert_eq!(value["sha256"].as_str().unwrap().len(), 64);
         assert!(!value.as_object().unwrap().contains_key("data_url"));
+
+        let sessions = state.sessions.lock().unwrap();
+        let project = &sessions.resolve(Some(&project_id)).unwrap().project;
+        assert_eq!(
+            project
+                .texture_data
+                .get("textures/generated/custom_panel.png"),
+            Some(&png)
+        );
+    }
+
+    #[test]
+    fn asset_import_rejects_explicit_names_that_cannot_round_trip() {
+        let state = test_state();
+        let png = crate::texture::generated_gui_panel(16, 16).unwrap();
+        let path = std::env::temp_dir()
+            .join(format!(
+                "gui-crafter-mcp-invalid-asset-import-{}.png",
+                uuid::Uuid::new_v4()
+            ))
+            .to_string_lossy()
+            .into_owned();
+        std::fs::write(&path, &png).unwrap();
+
+        for name in [
+            "custom.png",
+            "textures/custom",
+            "../textures/custom.png",
+            "/tmp/custom.png",
+            "textures/",
+            "textures\\custom.png",
+        ] {
+            let project_id = {
+                let mut sessions = state.sessions.lock().unwrap();
+                sessions.create_session(Project::new(
+                    "Invalid Asset Import",
+                    176,
+                    166,
+                    ModTarget::Forge,
+                ))
+            };
+            let response = response_for(
+                serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": format!("asset-import-{name}"),
+                    "method": "tools/call",
+                    "params": {
+                        "name": "asset_import",
+                        "arguments": {
+                            "project_id": project_id,
+                            "file_path": path,
+                            "name": name,
+                        }
+                    }
+                }),
+                &state,
+            );
+
+            assert!(
+                !response["error"].is_null(),
+                "expected asset name {name:?} to be rejected"
+            );
+        }
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn asset_import_with_explicit_name_survives_save_and_reopen() {
+        let state = test_state();
+        let project_id = {
+            let mut sessions = state.sessions.lock().unwrap();
+            sessions.create_session(Project::new("Asset Round Trip", 176, 166, ModTarget::Forge))
+        };
+        let asset_name = "textures/generated/custom_panel.png";
+        let png = crate::texture::generated_gui_panel(32, 24).unwrap();
+        let asset_path = std::env::temp_dir()
+            .join(format!(
+                "gui-crafter-mcp-round-trip-asset-{}.png",
+                uuid::Uuid::new_v4()
+            ))
+            .to_string_lossy()
+            .into_owned();
+        let project_path = std::env::temp_dir()
+            .join(format!(
+                "gui-crafter-mcp-round-trip-project-{}.mcgui",
+                uuid::Uuid::new_v4()
+            ))
+            .to_string_lossy()
+            .into_owned();
+        std::fs::write(&asset_path, &png).unwrap();
+
+        let import_response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "asset-import-round-trip",
+                "method": "tools/call",
+                "params": {
+                    "name": "asset_import",
+                    "arguments": {
+                        "project_id": project_id,
+                        "file_path": asset_path,
+                        "name": asset_name,
+                    }
+                }
+            }),
+            &state,
+        );
+        assert!(import_response["error"].is_null());
+
+        let save_response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "asset-import-save",
+                "method": "tools/call",
+                "params": {
+                    "name": "project_save_as",
+                    "arguments": {
+                        "project_id": project_id,
+                        "path": project_path,
+                    }
+                }
+            }),
+            &state,
+        );
+        assert!(save_response["error"].is_null());
+
+        let loaded = crate::format::load_from_mcgui(&project_path).unwrap();
+        let _ = std::fs::remove_file(&asset_path);
+        let _ = std::fs::remove_file(&project_path);
+
+        assert_eq!(loaded.texture_data.get(asset_name), Some(&png));
     }
 
     #[test]
