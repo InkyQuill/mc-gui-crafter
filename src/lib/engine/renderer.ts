@@ -240,21 +240,23 @@ export class GuiRenderer {
       if (editor.isDragging && editor.dragElementId) {
         const dx = (pointer.x - editor.dragStartX) / editor.zoom;
         const dy = (pointer.y - editor.dragStartY) / editor.zoom;
+        const newDragX = editor.snapCoordinate(editor.dragOrigX + dx);
+        const newDragY = editor.snapCoordinate(editor.dragOrigY + dy);
+        const snappedDx = newDragX - editor.dragOrigX;
+        const snappedDy = newDragY - editor.dragOrigY;
 
-        if (editor.selectedIds.size > 1) {
-          // Multi-drag: move all selected elements by the delta
-          for (const id of editor.selectedIds) {
-            const start = this.dragStartPositions.get(id);
-            if (start) {
-              const newX = editor.snapCoordinate(start.x + dx);
-              const newY = editor.snapCoordinate(start.y + dy);
-              project.moveElement(id, newX, newY, false);
-            }
-          }
+        if (this.dragStartPositions.size > 1) {
+          const moves = [...this.dragStartPositions].map(([id, start]) => ({
+            id,
+            x: start.x + snappedDx,
+            y: start.y + snappedDy,
+          }));
+          project.moveElements(moves, false);
         } else {
-          const newX = editor.snapCoordinate(editor.dragOrigX + dx);
-          const newY = editor.snapCoordinate(editor.dragOrigY + dy);
-          project.moveElement(editor.dragElementId, newX, newY, false);
+          const start = this.dragStartPositions.get(editor.dragElementId);
+          if (start) {
+            project.moveElement(editor.dragElementId, start.x + snappedDx, start.y + snappedDy, false);
+          }
         }
       }
     };
@@ -270,14 +272,7 @@ export class GuiRenderer {
         }
       }
       if (editor.isDragging && editor.dragElementId) {
-        if (editor.selectedIds.size > 1) {
-          project.commitMovedElements(editor.selectedIds);
-        } else {
-          const el = project.elementById(editor.dragElementId);
-          if (el) {
-            project.moveElement(editor.dragElementId, el.x, el.y, true);
-          }
-        }
+        project.commitMovedElements(this.dragStartPositions.keys());
       }
       this.dragStartPositions.clear();
       editor.isDragging = false;
@@ -330,8 +325,11 @@ export class GuiRenderer {
         if (!keepMultiSelection) {
           editor.selectElement(clicked.id, shiftHeld);
         }
+        const dragElementIds = editor.selectedIds.size > 1
+          ? project.movementIdsForElements(editor.selectedIds)
+          : project.movementIdsForElement(clicked.id);
         this.dragStartPositions = new Map(
-          [...editor.selectedIds].map(id => {
+          dragElementIds.map(id => {
             const el = project.elementById(id);
             return [id, { x: el?.x ?? 0, y: el?.y ?? 0 }];
           }),

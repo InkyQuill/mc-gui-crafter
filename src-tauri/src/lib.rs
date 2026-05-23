@@ -84,6 +84,7 @@ pub fn run() {
             commands::project_export,
             commands::element_add,
             commands::element_move,
+            commands::element_move_many,
             commands::element_update,
             commands::element_resize,
             commands::element_reorder,

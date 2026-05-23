@@ -10,6 +10,13 @@ use tauri::State;
 
 const MAX_FONT_FILE_SIZE: u64 = 16 * 1024 * 1024;
 
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct ElementMove {
+    id: String,
+    x: i32,
+    y: i32,
+}
+
 #[tauri::command(rename_all = "snake_case")]
 pub fn template_list() -> Vec<TemplateInfo> {
     crate::templates::list_template_info()
@@ -166,6 +173,16 @@ pub fn element_move(
 ) -> Result<Element, String> {
     let mut sessions = state.sessions.lock().unwrap();
     move_element_in_session(&mut sessions, project_id.as_deref(), &id, x, y)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub fn element_move_many(
+    state: State<AppState>,
+    moves: Vec<ElementMove>,
+    project_id: Option<String>,
+) -> Result<Vec<Element>, String> {
+    let mut sessions = state.sessions.lock().unwrap();
+    move_elements_in_session(&mut sessions, project_id.as_deref(), moves)
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -842,16 +859,110 @@ fn move_element_in_session(
 
     sessions.record_history(project_id)?;
     let session = sessions.resolve_mut(project_id)?;
-    let element = session
-        .project
-        .find_element_mut(id)
-        .ok_or("Element not found")?;
-    element.x = x;
-    element.y = y;
-    let element = element.clone();
+    let element = {
+        let element = session
+            .project
+            .find_element_mut(id)
+            .ok_or("Element not found")?;
+        element.x = x;
+        element.y = y;
+        element.clone()
+    };
+    refresh_group_positions_for_elements(&mut session.project, &[id.to_string()]);
     sessions.mark_changed(project_id)?;
 
     Ok(element)
+}
+
+fn move_elements_in_session(
+    sessions: &mut crate::project::ProjectSessionManager,
+    project_id: Option<&str>,
+    moves: Vec<ElementMove>,
+) -> Result<Vec<Element>, String> {
+    if moves.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let project = &sessions.resolve(project_id)?.project;
+    let mut ids = Vec::with_capacity(moves.len());
+    let mut changed = false;
+    for element_move in &moves {
+        if ids.contains(&element_move.id.as_str()) {
+            return Err(format!("Duplicate element move: {}", element_move.id));
+        }
+        ids.push(element_move.id.as_str());
+
+        let current = project
+            .find_element(&element_move.id)
+            .ok_or_else(|| format!("Element not found: {}", element_move.id))?;
+        changed |= current.x != element_move.x || current.y != element_move.y;
+    }
+
+    if !changed {
+        return moves
+            .iter()
+            .map(|element_move| {
+                project
+                    .find_element(&element_move.id)
+                    .cloned()
+                    .ok_or_else(|| format!("Element not found: {}", element_move.id))
+            })
+            .collect();
+    }
+
+    let move_ids = moves
+        .iter()
+        .map(|element_move| element_move.id.clone())
+        .collect::<Vec<_>>();
+
+    sessions.record_history(project_id)?;
+    let session = sessions.resolve_mut(project_id)?;
+    let mut moved = Vec::with_capacity(moves.len());
+    for element_move in moves {
+        let element = session
+            .project
+            .find_element_mut(&element_move.id)
+            .ok_or_else(|| format!("Element not found: {}", element_move.id))?;
+        element.x = element_move.x;
+        element.y = element_move.y;
+        moved.push(element.clone());
+    }
+    refresh_group_positions_for_elements(&mut session.project, &move_ids);
+    sessions.mark_changed(project_id)?;
+
+    Ok(moved)
+}
+
+fn refresh_group_positions_for_elements(project: &mut Project, moved_ids: &[String]) {
+    if moved_ids.is_empty() {
+        return;
+    }
+
+    let elements = &project.elements;
+    for group in &mut project.groups {
+        if !group
+            .elements
+            .iter()
+            .any(|element_id| moved_ids.iter().any(|moved_id| moved_id == element_id))
+        {
+            continue;
+        }
+
+        let mut positions = group.elements.iter().filter_map(|element_id| {
+            elements
+                .iter()
+                .find(|element| element.id == *element_id)
+                .map(|element| (element.x, element.y))
+        });
+        if let Some((mut min_x, mut min_y)) = positions.next() {
+            for (x, y) in positions {
+                min_x = min_x.min(x);
+                min_y = min_y.min(y);
+            }
+            group.x = min_x;
+            group.y = min_y;
+        }
+    }
 }
 
 fn remove_element_from_session(
@@ -1902,6 +2013,70 @@ mod tests {
         assert_eq!((moved.x, moved.y), (10, 20));
         assert!(summary.can_undo);
         assert!(!summary.can_redo);
+    }
+
+    #[test]
+    fn element_move_many_records_one_history_entry_for_multiple_moves() {
+        let mut sessions = ProjectSessionManager::default();
+        let project_id =
+            sessions.create_session(Project::new("History", 176, 166, ModTarget::Forge));
+        {
+            let project = &mut sessions.resolve_mut(Some(&project_id)).unwrap().project;
+            project.add_element(sample_element("slot_1", 8, 18));
+            project.add_element(sample_element("slot_2", 26, 18));
+            project.groups.push(Group {
+                id: "group_player_inventory".to_string(),
+                x: 8,
+                y: 18,
+                elements: vec!["slot_1".to_string(), "slot_2".to_string()],
+            });
+        }
+
+        let moved = move_elements_in_session(
+            &mut sessions,
+            Some(&project_id),
+            vec![
+                ElementMove {
+                    id: "slot_1".to_string(),
+                    x: 10,
+                    y: 20,
+                },
+                ElementMove {
+                    id: "slot_2".to_string(),
+                    x: 28,
+                    y: 20,
+                },
+            ],
+        )
+        .unwrap();
+
+        assert_eq!(
+            moved
+                .iter()
+                .map(|el| (el.id.as_str(), el.x, el.y))
+                .collect::<Vec<_>>(),
+            vec![("slot_1", 10, 20), ("slot_2", 28, 20)]
+        );
+        assert_eq!(
+            sessions.resolve(Some(&project_id)).unwrap().project.groups[0].x,
+            10
+        );
+        assert_eq!(
+            sessions.resolve(Some(&project_id)).unwrap().project.groups[0].y,
+            20
+        );
+        sessions.undo(Some(&project_id)).unwrap();
+        let project = &sessions.resolve(Some(&project_id)).unwrap().project;
+        assert_eq!(
+            project
+                .elements
+                .iter()
+                .map(|el| (el.id.as_str(), el.x, el.y))
+                .collect::<Vec<_>>(),
+            vec![("slot_1", 8, 18), ("slot_2", 26, 18)]
+        );
+        assert_eq!((project.groups[0].x, project.groups[0].y), (8, 18));
+        assert!(!session_summary(&sessions, &project_id).unwrap().can_undo);
     }
 
     #[test]

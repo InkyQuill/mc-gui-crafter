@@ -85,6 +85,22 @@ export class ProjectStore {
     return this.groups.find(group => group.elements.includes(id));
   }
 
+  movementIdsForElement(id: string): string[] {
+    const group = this.groupForElement(id);
+    const ids = group ? group.elements : [id];
+    return ids.filter((elementId, index) => ids.indexOf(elementId) === index && this.elementById(elementId));
+  }
+
+  movementIdsForElements(ids: Iterable<string>): string[] {
+    const movementIds: string[] = [];
+    for (const id of ids) {
+      for (const movementId of this.movementIdsForElement(id)) {
+        if (!movementIds.includes(movementId)) movementIds.push(movementId);
+      }
+    }
+    return movementIds;
+  }
+
   async newProject(name: string, width: number, height: number, target: ModTarget, template?: string) {
     const summary = await api.projectNew(name, width, height, target, template);
     this.activeProjectId = summary.project_id;
@@ -186,6 +202,46 @@ export class ProjectStore {
     }
   }
 
+  async moveElementOrGroup(id: string, x: number, y: number, recordUndo = true) {
+    const old = this.elementById(id);
+    if (!old) return;
+    await this.moveElementByDeltaForGroup(id, x - old.x, y - old.y, recordUndo);
+  }
+
+  async moveElementByDeltaForGroup(id: string, dx: number, dy: number, recordUndo = true) {
+    const moves = this.movementIdsForElement(id)
+      .map(elementId => {
+        const el = this.elementById(elementId);
+        return el ? { id: elementId, x: el.x + dx, y: el.y + dy } : null;
+      })
+      .filter(move => move !== null);
+
+    await this.moveElements(moves, recordUndo);
+  }
+
+  async moveElements(moves: api.ElementMoveRequest[], recordUndo = true) {
+    const uniqueMoves = new Map<string, api.ElementMoveRequest>();
+    for (const move of moves) {
+      if (this.elementById(move.id)) uniqueMoves.set(move.id, move);
+    }
+
+    const changed = [...uniqueMoves.values()].filter(move => {
+      const el = this.elementById(move.id);
+      return el && (el.x !== move.x || el.y !== move.y);
+    });
+    if (changed.length === 0) return;
+
+    for (const move of changed) {
+      this._moveLocal(move.id, move.x, move.y);
+    }
+    this.isDirty = true;
+    this.bumpRenderVersion();
+
+    if (recordUndo) {
+      await this.commitElementMoves(changed);
+    }
+  }
+
   async commitMovedElements(ids: Iterable<string>) {
     const moves = [...ids]
       .map(id => {
@@ -194,10 +250,17 @@ export class ProjectStore {
       })
       .filter(move => move !== null);
 
+    await this.commitElementMoves(moves);
+  }
+
+  private async commitElementMoves(moves: api.ElementMoveRequest[]) {
     if (moves.length === 0) return;
 
-    for (const move of moves) {
+    if (moves.length === 1) {
+      const [move] = moves;
       await api.elementMove(move.id, move.x, move.y, this.activeProjectId ?? undefined);
+    } else {
+      await api.elementMoveMany(moves, this.activeProjectId ?? undefined);
     }
 
     await this.refreshSessions();
@@ -206,7 +269,28 @@ export class ProjectStore {
 
   private _moveLocal(id: string, x: number, y: number) {
     const el = this.elements.find(e => e.id === id);
-    if (el) { el.x = x; el.y = y; }
+    if (el) {
+      el.x = x;
+      el.y = y;
+      this.refreshGroupPositionsForElements([id]);
+    }
+  }
+
+  private refreshGroupPositionsForElements(ids: Iterable<string>) {
+    const moved = new Set(ids);
+    if (moved.size === 0) return;
+
+    for (const group of this.groups) {
+      if (!group.elements.some(id => moved.has(id))) continue;
+
+      const elements = group.elements
+        .map(id => this.elementById(id))
+        .filter(element => element !== undefined);
+      if (elements.length === 0) continue;
+
+      group.x = Math.min(...elements.map(element => element.x));
+      group.y = Math.min(...elements.map(element => element.y));
+    }
   }
 
   async removeElement(id: string) {

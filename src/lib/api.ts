@@ -50,6 +50,12 @@ interface MockSession {
   redoStack: ProjectData[];
 }
 
+export interface ElementMoveRequest {
+  id: string;
+  x: number;
+  y: number;
+}
+
 const mockSessions: MockSession[] = [];
 const mockAssetDataUrls = new Map<string, Map<string, string>>();
 const mockExistingExportFiles = new Set<string>();
@@ -128,6 +134,23 @@ function markMockChanged(session: MockSession, previous: ProjectData) {
   session.project.is_dirty = true;
   session.revision += 1;
   updateMockHistoryFlags(session);
+}
+
+function refreshMockGroupPositions(session: MockSession, movedIds: Iterable<string>) {
+  const moved = new Set(movedIds);
+  if (moved.size === 0) return;
+
+  for (const group of session.project.groups) {
+    if (!group.elements.some(id => moved.has(id))) continue;
+
+    const elements = group.elements
+      .map(id => session.project.elements.find(element => element.id === id))
+      .filter(element => element !== undefined);
+    if (elements.length === 0) continue;
+
+    group.x = Math.min(...elements.map(element => element.x));
+    group.y = Math.min(...elements.map(element => element.y));
+  }
 }
 
 function mockAssetsForSession(session: MockSession): Map<string, string> {
@@ -427,9 +450,40 @@ async function mockInvoke(cmd: string, args?: Record<string, unknown>): Promise<
         const previous = clone(session.project);
         el.x = x;
         el.y = y;
+        refreshMockGroupPositions(session, [el.id]);
         markMockChanged(session, previous);
       }
       return clone(el);
+    }
+    case "element_move_many": {
+      const session = mockSession(args?.project_id);
+      const moves = ((args?.moves as ElementMoveRequest[] | undefined) ?? []).map(move => ({
+        id: move.id,
+        x: move.x,
+        y: move.y,
+      }));
+      if (moves.length === 0) return [];
+
+      const seen = new Set<string>();
+      const elements = moves.map(move => {
+        if (seen.has(move.id)) throw `Duplicate element move: ${move.id}`;
+        seen.add(move.id);
+        const el = session.project.elements.find(element => element.id === move.id);
+        if (!el) throw `Element not found: ${move.id}`;
+        return el;
+      });
+
+      if (moves.some((move, index) => elements[index].x !== move.x || elements[index].y !== move.y)) {
+        const previous = clone(session.project);
+        moves.forEach((move, index) => {
+          elements[index].x = move.x;
+          elements[index].y = move.y;
+        });
+        refreshMockGroupPositions(session, moves.map(move => move.id));
+        markMockChanged(session, previous);
+      }
+
+      return moves.map(move => clone(session.project.elements.find(element => element.id === move.id)!));
     }
     case "element_update": {
       const session = mockSession(args?.project_id);
@@ -770,6 +824,11 @@ export async function elementAdd(element: Element, projectId?: string): Promise<
 export async function elementMove(id: string, x: number, y: number, projectId?: string): Promise<Element> {
   const invoke = await getInvoke();
   return invoke("element_move", { id, x, y, project_id: projectId }) as Promise<Element>;
+}
+
+export async function elementMoveMany(moves: ElementMoveRequest[], projectId?: string): Promise<Element[]> {
+  const invoke = await getInvoke();
+  return invoke("element_move_many", { moves, project_id: projectId }) as Promise<Element[]>;
 }
 
 export async function elementUpdate(id: string, changes: Partial<Element>, projectId?: string): Promise<Element> {
