@@ -417,7 +417,7 @@
               id="prop-tooltip"
               type="text"
               value={selectedEl.tooltip ?? ""}
-              oninput={(e) => updateSelectedElement({ tooltip: optionalText(e.currentTarget.value) ?? undefined })}
+              oninput={(e) => updateSelectedElement({ tooltip: optionalText(e.currentTarget.value) })}
             />
           </div>
           <div class="prop-row">
@@ -426,7 +426,7 @@
               id="prop-binding"
               type="text"
               value={selectedEl.binding ?? ""}
-              oninput={(e) => updateSelectedElement({ binding: optionalText(e.currentTarget.value) ?? undefined })}
+              oninput={(e) => updateSelectedElement({ binding: optionalText(e.currentTarget.value) })}
             />
           </div>
           <div class="prop-row">
@@ -434,7 +434,7 @@
             <select
               id="prop-icon"
               value={selectedEl.icon ?? ""}
-              onchange={(e) => updateSelectedElement({ icon: e.currentTarget.value || undefined, icon_uv: e.currentTarget.value ? selectedEl.icon_uv : null })}
+              onchange={(e) => updateSelectedElement({ icon: optionalText(e.currentTarget.value), icon_uv: optionalText(e.currentTarget.value) ? selectedEl.icon_uv : null })}
             >
               <option value="">(none)</option>
               {#each project.assets as a (a)}

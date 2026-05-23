@@ -82,9 +82,9 @@ export interface Element {
   height?: number;
   size?: number;
   asset?: string;
-  icon?: string;
+  icon?: string | null;
   icon_uv?: UvRect | null;
-  tooltip?: string;
+  tooltip?: string | null;
   direction?: FillDirection;
   content?: string;
   font?: string;
@@ -104,7 +104,7 @@ export interface Element {
   total_rows?: number | null;
   columns?: number | null;
   target_group?: string | null;
-  binding?: string;
+  binding?: string | null;
   dock?: string;
   open_width?: number;
   open_height?: number;

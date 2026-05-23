@@ -368,11 +368,11 @@ export class GuiRenderer {
             void project.addElement(editor.tool, gui.x, gui.y);
             break;
           case "button":
-            void project.addElement("button", gui.x, gui.y);
+            void project.addElement("button", gui.x, gui.y).then(element => editor.selectElement(element.id));
             editor.tool = "select";
             break;
           case "toggle_button":
-            void project.addElement("toggle_button", gui.x, gui.y);
+            void project.addElement("toggle_button", gui.x, gui.y).then(element => editor.selectElement(element.id));
             editor.tool = "select";
             break;
         }
