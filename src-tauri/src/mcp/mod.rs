@@ -1302,23 +1302,20 @@ fn slot_grid_add(
         y,
         elements: element_ids,
     });
-    let semantic_group = semantic_group_kind.map(|kind| {
-        let id = inventory_group
-            .clone()
-            .or_else(|| group.as_ref().map(|group| group.id.clone()))
-            .unwrap_or_else(|| id_prefix.to_string());
-        SemanticGroup {
-            id: id.clone(),
+    let semantic_group = match (semantic_group_kind, inventory_group.clone()) {
+        (Some(kind), Some(inventory_group)) => Some(SemanticGroup {
+            id: inventory_group.clone(),
             kind,
             columns: Some(columns),
             visible_rows: Some(rows),
             total_rows: Some(rows),
             slot_count: Some(semantic_slot_count.unwrap_or(elements.len() as u32)),
-            data_source: Some(inventory_group.clone().unwrap_or(id)),
+            data_source: Some(inventory_group),
             scroll_binding: scroll_binding.clone(),
             dynamic_height: false,
-        }
-    });
+        }),
+        _ => None,
+    };
 
     sessions.record_history(project_id)?;
     let session = sessions.resolve_mut(project_id)?;
@@ -1390,7 +1387,7 @@ fn slot_grid_coordinate(origin: i32, index: u32, spacing: u32, axis: &str) -> Re
     let overflow_error = || format!("slot grid {axis} coordinate overflow");
     let offset = u64::from(index)
         .checked_mul(u64::from(spacing))
-        .ok_or_else(|| overflow_error())?;
+        .ok_or_else(&overflow_error)?;
     let max_offset = (i64::from(i32::MAX) - i64::from(origin)) as u64;
     if offset > max_offset {
         return Err(overflow_error());
@@ -2763,6 +2760,52 @@ mod tests {
     }
 
     #[test]
+    fn slot_grid_add_skips_semantic_group_without_inventory_group() {
+        let state = test_state();
+        {
+            let mut sessions = state.sessions.lock().unwrap();
+            sessions.create_session(Project::new(
+                "Slot Grid No Semantic Group",
+                176,
+                166,
+                ModTarget::Forge,
+            ));
+        }
+
+        let response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "slot-grid-no-semantic-without-inventory",
+                "method": "tools/call",
+                "params": {
+                    "name": "slot_grid_add",
+                    "arguments": {
+                        "id_prefix": "player_inv",
+                        "x": 8,
+                        "y": 84,
+                        "columns": 2,
+                        "rows": 1,
+                        "group_id": "player_inventory_grid",
+                        "semantic_group_kind": "player_inventory",
+                        "slot_count": 2
+                    }
+                }
+            }),
+            &state,
+        );
+
+        assert!(response["error"].is_null());
+        let content = response["result"]["content"][0]["text"].as_str().unwrap();
+        let value: serde_json::Value = serde_json::from_str(content).unwrap();
+        assert!(value["semantic_group"].is_null());
+        let sessions = state.sessions.lock().unwrap();
+        let active = sessions.active_session().unwrap();
+        assert!(active.project.semantic_groups.is_empty());
+        assert_eq!(active.project.groups.len(), 1);
+        assert_eq!(active.revision, 1);
+    }
+
+    #[test]
     fn slot_grid_add_replaces_existing_semantic_group_with_same_id() {
         let state = test_state();
         let original_group = SemanticGroup {
@@ -2824,6 +2867,10 @@ mod tests {
         );
         assert_eq!(active.project.semantic_groups[0].columns, Some(2));
         assert_eq!(active.project.semantic_groups[0].slot_count, Some(2));
+        assert_eq!(
+            active.project.semantic_groups[0].data_source,
+            Some("player_inventory".to_string())
+        );
         assert_eq!(active.revision, 1);
     }
 
