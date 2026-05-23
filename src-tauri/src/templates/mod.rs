@@ -1197,21 +1197,21 @@ fn scrollable_inventory_machine() -> Template {
             slot_role: Some(SlotRole::Machine),
             slot_index: Some(0),
             inventory_group: Some("machine".into()),
-            ..base_element("input_left", ElementType::Slot, 44, 22)
+            ..base_element("input_left", ElementType::Slot, 106, 22)
         },
         Element {
             size: Some(SLOT_SIZE as u32),
             slot_role: Some(SlotRole::Machine),
             slot_index: Some(1),
             inventory_group: Some("machine".into()),
-            ..base_element("input_right", ElementType::Slot, 62, 22)
+            ..base_element("input_right", ElementType::Slot, 126, 22)
         },
         Element {
             size: Some(SLOT_SIZE as u32),
             slot_role: Some(SlotRole::Machine),
             slot_index: Some(2),
             inventory_group: Some("machine".into()),
-            ..base_element("output", ElementType::Slot, 116, 22)
+            ..base_element("output", ElementType::Slot, 146, 22)
         },
         Element {
             width: Some(22),
@@ -1219,7 +1219,7 @@ fn scrollable_inventory_machine() -> Template {
             direction: Some(FillDirection::LeftToRight),
             animation: Some("progress".into()),
             layer: Layer::Animatable,
-            ..base_element("progress_arrow", ElementType::Progress, 86, 24)
+            ..base_element("progress_arrow", ElementType::Progress, 122, 46)
         },
     ];
 
@@ -1235,8 +1235,8 @@ fn scrollable_inventory_machine() -> Template {
                 ..base_element(
                     &format!("buffer_slot_{row}_{column}"),
                     ElementType::VirtualSlotCell,
-                    34 + column * SLOT_STEP,
-                    58 + row * SLOT_STEP,
+                    8 + column * SLOT_STEP,
+                    30 + row * SLOT_STEP,
                 )
             });
         }
@@ -1251,7 +1251,7 @@ fn scrollable_inventory_machine() -> Template {
         total_rows: Some(6),
         columns: Some(5),
         target_group: Some("machine_buffer".into()),
-        ..base_element("buffer_scroll", ElementType::Scrollbar, 130, 58)
+        ..base_element("buffer_scroll", ElementType::Scrollbar, 102, 30)
     });
 
     Template {
@@ -2165,6 +2165,32 @@ mod tests {
         element.y + element.size.unwrap_or(18) as i32
     }
 
+    fn slot_like_rect(element: &crate::project::Element) -> Option<(i32, i32, i32, i32)> {
+        match element.element_type {
+            ElementType::Slot | ElementType::VirtualSlotCell => Some((
+                element.x,
+                element.y,
+                slot_right(element),
+                slot_bottom(element),
+            )),
+            _ => None,
+        }
+    }
+
+    fn slot_like_rects_overlap(
+        left: &crate::project::Element,
+        right: &crate::project::Element,
+    ) -> bool {
+        let Some((left_x1, left_y1, left_x2, left_y2)) = slot_like_rect(left) else {
+            return false;
+        };
+        let Some((right_x1, right_y1, right_x2, right_y2)) = slot_like_rect(right) else {
+            return false;
+        };
+
+        left_x1 < right_x2 && right_x1 < left_x2 && left_y1 < right_y2 && right_y1 < left_y2
+    }
+
     #[test]
     fn starter_template_slots_stay_inside_gui_bounds() {
         for template in list_templates() {
@@ -2396,6 +2422,35 @@ mod tests {
             .semantic_groups
             .iter()
             .any(|group| group.id == "machine_buffer"));
+    }
+
+    #[test]
+    fn scrollable_inventory_template_has_no_real_and_virtual_slot_overlap() {
+        let template = get_template("scrollable_inventory_machine").expect("template exists");
+        let real_slots = template
+            .elements
+            .iter()
+            .filter(|element| element.element_type == ElementType::Slot);
+        let virtual_slots = template
+            .elements
+            .iter()
+            .filter(|element| element.element_type == ElementType::VirtualSlotCell);
+
+        for real_slot in real_slots {
+            for virtual_slot in virtual_slots.clone() {
+                assert!(
+                    !slot_like_rects_overlap(real_slot, virtual_slot),
+                    "{} real slot {} at ({}, {}) overlaps virtual slot {} at ({}, {})",
+                    template.name,
+                    real_slot.id,
+                    real_slot.x,
+                    real_slot.y,
+                    virtual_slot.id,
+                    virtual_slot.x,
+                    virtual_slot.y
+                );
+            }
+        }
     }
 
     #[test]
