@@ -662,6 +662,7 @@ export class GuiRenderer {
       if (dataUrl) {
         const container = new Container();
         const baseTexture = Texture.from(dataUrl);
+        baseTexture.source.scaleMode = "nearest";
         const texture = this.textureWithUv(baseTexture, el);
         if (!texture) return null;
         const sprite = new Sprite(texture);
@@ -723,6 +724,8 @@ export class GuiRenderer {
       g.fill({ color: 0xffffff, alpha: 0.8 });
     } else if (el.asset === "textures/generated/button.png") {
       this.drawButtonGraphics(g, el.x, el.y, w, h);
+    } else if (el.asset === "textures/generated/progress_arrow.png") {
+      this.drawProgressArrow(g, el.x, el.y, w, h, el.direction);
     } else if (el.asset === "textures/generated/scrollbar.png") {
       this.drawScrollbarGraphics(g, el.x, el.y, w, h);
     } else {
@@ -930,6 +933,13 @@ export class GuiRenderer {
   }
 
   private drawProgress(el: Element): Container {
+    if (el.asset) {
+      return this.drawTexture(el) ?? this.drawProgressFallback(el);
+    }
+    return this.drawProgressFallback(el);
+  }
+
+  private drawProgressFallback(el: Element): Container {
     const container = new Container();
     const g = new Graphics();
     const w = el.width ?? 22;
@@ -938,26 +948,42 @@ export class GuiRenderer {
     g.rect(el.x, el.y, w, h);
     g.fill({ color: 0x333333 });
     g.stroke({ width: 1, color: 0x555555 });
-    // Arrow indicator
-    const arrowColor = 0xe9a23b;
-    if (el.direction === "left_to_right" || !el.direction) {
-      // Arrow pointing right
-      const midY = el.y + h / 2;
-      g.moveTo(el.x + 3, midY - 3);
-      g.lineTo(el.x + w - 3, midY);
-      g.lineTo(el.x + 3, midY + 3);
-      g.closePath();
-      g.fill({ color: arrowColor, alpha: 0.5 });
-    } else if (el.direction === "bottom_to_top") {
-      const midX = el.x + w / 2;
-      g.moveTo(midX - 3, el.y + h - 3);
-      g.lineTo(midX, el.y + 3);
-      g.lineTo(midX + 3, el.y + h - 3);
-      g.closePath();
-      g.fill({ color: arrowColor, alpha: 0.5 });
-    }
+    this.drawProgressArrow(g, el.x, el.y, w, h, el.direction);
     container.addChild(g);
     return container;
+  }
+
+  private drawProgressArrow(g: Graphics, x: number, y: number, width: number, height: number, direction = "left_to_right") {
+    const arrowColor = 0xe9a23b;
+    const inset = Math.min(3, Math.max(1, Math.floor(Math.min(width, height) / 4)));
+    const midX = x + width / 2;
+    const midY = y + height / 2;
+
+    switch (direction) {
+      case "right_to_left":
+        g.moveTo(x + width - inset, midY - inset);
+        g.lineTo(x + inset, midY);
+        g.lineTo(x + width - inset, midY + inset);
+        break;
+      case "bottom_to_top":
+        g.moveTo(midX - inset, y + height - inset);
+        g.lineTo(midX, y + inset);
+        g.lineTo(midX + inset, y + height - inset);
+        break;
+      case "top_to_bottom":
+        g.moveTo(midX - inset, y + inset);
+        g.lineTo(midX, y + height - inset);
+        g.lineTo(midX + inset, y + inset);
+        break;
+      case "left_to_right":
+      default:
+        g.moveTo(x + inset, midY - inset);
+        g.lineTo(x + width - inset, midY);
+        g.lineTo(x + inset, midY + inset);
+        break;
+    }
+    g.closePath();
+    g.fill({ color: arrowColor, alpha: 0.5 });
   }
 
   private drawText(el: Element): Container {

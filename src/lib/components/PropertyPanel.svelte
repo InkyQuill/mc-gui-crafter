@@ -1,8 +1,12 @@
 <script lang="ts">
   import { project } from "../stores/project.svelte";
   import { editor } from "../stores/editor.svelte";
-  import type { CodegenMode, Element, SlotRole } from "../types";
+  import UvEditorDialog from "./UvEditorDialog.svelte";
+  import type { CodegenMode, Element, SlotRole, UvRect } from "../types";
 
+  type UvTarget = "uv" | "icon_uv";
+
+  let uvEditorTarget = $state<UvTarget | null>(null);
   let selectedElementId = $derived.by(() => {
     void editor.selectionRevision;
     return editor.selectedElementId;
@@ -84,6 +88,30 @@
     if (parsed !== undefined) {
       updateSelectedElement({ [key]: parsed });
     }
+  }
+
+  function openUvEditor(target: UvTarget) {
+    uvEditorTarget = target;
+  }
+
+  function applyUvSelection(asset: string, uv: UvRect | null) {
+    if (!selectedEl || !uvEditorTarget) return;
+    if (uvEditorTarget === "icon_uv") {
+      updateSelectedElement({ icon: asset, icon_uv: uv });
+    } else {
+      updateSelectedElement({ asset, uv });
+    }
+    uvEditorTarget = null;
+  }
+
+  function clearUvSelection() {
+    if (!selectedEl || !uvEditorTarget) return;
+    if (uvEditorTarget === "icon_uv") {
+      updateSelectedElement({ icon_uv: null });
+    } else {
+      updateSelectedElement({ uv: null });
+    }
+    uvEditorTarget = null;
   }
 </script>
 
@@ -294,9 +322,9 @@
         </div>
       {/if}
 
-      {#if selectedEl.type === "texture"}
+      {#if selectedEl.type === "texture" || selectedEl.type === "progress"}
         <div class="prop-row">
-          <label for="prop-asset">Texture</label>
+          <label for="prop-asset">{selectedEl.type === "progress" ? "Source" : "Texture"}</label>
           <select
             id="prop-asset"
             value={selectedEl.asset ?? ""}
@@ -346,6 +374,9 @@
           </div>
           <button class="secondary-btn" onclick={() => updateProp("uv", null)}>
             Clear UV
+          </button>
+          <button class="secondary-btn" onclick={() => openUvEditor("uv")} disabled={project.assets.length === 0}>
+            Pick Region...
           </button>
         </div>
       {/if}
@@ -455,6 +486,9 @@
           <button class="secondary-btn" onclick={() => updateSelectedElement({ icon_uv: null })}>
             Clear Icon UV
           </button>
+          <button class="secondary-btn" onclick={() => openUvEditor("icon_uv")} disabled={project.assets.length === 0}>
+            Pick Icon Region...
+          </button>
         </div>
       {/if}
 
@@ -496,6 +530,18 @@
     </p>
   {/if}
 </aside>
+
+{#if selectedEl && uvEditorTarget}
+  <UvEditorDialog
+    title={uvEditorTarget === "icon_uv" ? "Pick Button Icon Region" : "Pick Texture Region"}
+    assets={project.assets}
+    asset={uvEditorTarget === "icon_uv" ? selectedEl.icon ?? null : selectedEl.asset ?? null}
+    uv={uvEditorTarget === "icon_uv" ? selectedEl.icon_uv ?? null : selectedEl.uv ?? null}
+    onapply={applyUvSelection}
+    onclear={clearUvSelection}
+    onclose={() => uvEditorTarget = null}
+  />
+{/if}
 
 <style>
   .properties {

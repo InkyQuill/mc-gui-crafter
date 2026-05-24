@@ -177,6 +177,31 @@ fn base_element(id: &str, element_type: ElementType, x: i32, y: i32) -> Element 
     }
 }
 
+fn generated_background_element(width: u32, height: u32) -> Element {
+    Element {
+        width: Some(width),
+        height: Some(height),
+        asset: Some(GENERATED_GUI_PANEL.into()),
+        ..base_element("background", ElementType::Texture, 0, 0)
+    }
+}
+
+fn ensure_generated_background_element(project: &mut Project) {
+    project.elements.retain(|element| {
+        !(element.element_type == ElementType::Texture
+            && element.asset.as_deref() == Some(GENERATED_GUI_PANEL))
+    });
+    project.elements.insert(
+        0,
+        generated_background_element(project.gui_size.width, project.gui_size.height),
+    );
+}
+
+pub fn apply_generated_defaults(project: &mut Project) -> Result<(), String> {
+    ensure_generated_background_element(project);
+    add_generated_template_assets(project)
+}
+
 fn slot_grid(
     id_prefix: &str,
     x: i32,
@@ -2299,7 +2324,7 @@ pub fn apply_template(project: &mut Project, template_name: &str) -> Result<(), 
     project.groups = template.groups;
     project.semantic_groups = template.semantic_groups;
     project.animations.clear();
-    add_generated_template_assets(project)?;
+    apply_generated_defaults(project)?;
     project.is_dirty = true;
 
     Ok(())
@@ -2441,14 +2466,76 @@ mod tests {
     }
 
     #[test]
-    fn applying_empty_template_preserves_requested_canvas_size() {
+    fn applying_empty_template_adds_generated_background_element() {
+        let mut project = Project::new("Empty", 264, 162, crate::project::ModTarget::Forge);
+
+        apply_template(&mut project, "empty").expect("template applies");
+
+        let backgrounds: Vec<_> = project
+            .elements
+            .iter()
+            .filter(|element| {
+                element.element_type == ElementType::Texture
+                    && element.asset.as_deref() == Some(GENERATED_GUI_PANEL)
+            })
+            .collect();
+        assert_eq!(backgrounds.len(), 1);
+        let background = backgrounds[0];
+        assert_eq!(background.id, "background");
+        assert_eq!(background.x, 0);
+        assert_eq!(background.y, 0);
+        assert_eq!(background.width, Some(264));
+        assert_eq!(background.height, Some(162));
+        assert_eq!(background.layer, Layer::Background);
+        assert_eq!(
+            project.elements.first().map(|element| element.id.as_str()),
+            Some("background")
+        );
+    }
+
+    #[test]
+    fn applying_templates_keeps_exactly_one_generated_background_element() {
+        for info in list_template_info() {
+            let mut project = Project::new(
+                "Template",
+                info.default_width,
+                info.default_height,
+                crate::project::ModTarget::Forge,
+            );
+
+            apply_template(&mut project, &info.name).expect("template applies");
+
+            let backgrounds: Vec<_> = project
+                .elements
+                .iter()
+                .filter(|element| {
+                    element.element_type == ElementType::Texture
+                        && element.asset.as_deref() == Some(GENERATED_GUI_PANEL)
+                })
+                .collect();
+            assert_eq!(backgrounds.len(), 1, "{} background count", info.name);
+            assert_eq!(
+                project.elements.first().map(|element| element.id.as_str()),
+                Some("background"),
+                "{} background z-order",
+                info.name
+            );
+        }
+    }
+
+    #[test]
+    fn applying_empty_template_preserves_requested_canvas_size_and_adds_background() {
         let mut project = Project::new("Custom Empty", 264, 162, ModTarget::Forge);
 
         apply_template(&mut project, "empty").expect("template applies");
 
         assert_eq!(project.gui_size.width, 264);
         assert_eq!(project.gui_size.height, 162);
-        assert!(project.elements.is_empty());
+        assert_eq!(project.elements.len(), 1);
+        assert_eq!(
+            project.elements[0].asset.as_deref(),
+            Some(GENERATED_GUI_PANEL)
+        );
     }
 
     #[test]

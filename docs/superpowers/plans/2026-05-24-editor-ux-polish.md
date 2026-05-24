@@ -590,7 +590,7 @@ git commit -m "feat: persist editor layout and window geometry"
 - Create: `src/lib/components/InspectorDock.svelte`
 - Modify: `src/App.svelte`
 
-- [ ] **Step 1: Create layout store**
+- [x] **Step 1: Create layout store**
 
 Create `src/lib/stores/layout.svelte.ts`:
 
@@ -651,7 +651,7 @@ class LayoutStore {
 export const layout = new LayoutStore();
 ```
 
-- [ ] **Step 2: Create InspectorDock component**
+- [x] **Step 2: Create InspectorDock component**
 
 Create `src/lib/components/InspectorDock.svelte`:
 
@@ -781,7 +781,7 @@ After writing, replace the inner resizer positioning with a CSS variable in the 
 style={`width: ${layout.values.right_dock_width}px; grid-template-columns: ${layout.values.properties_width}px 1fr; --properties-width: ${layout.values.properties_width}px;`}
 ```
 
-- [ ] **Step 3: Wire dock into App**
+- [x] **Step 3: Wire dock into App**
 
 In `src/App.svelte`, replace imports:
 
@@ -810,7 +810,7 @@ with:
 
 Remove `.sidebar-right` width styles and keep `.sidebar-left` at `220px`.
 
-- [ ] **Step 4: Load layout and add shortcuts**
+- [x] **Step 4: Load layout and add shortcuts**
 
 In `src/App.svelte`, add to the existing setup effect:
 
@@ -841,7 +841,7 @@ $effect(() => {
 });
 ```
 
-- [ ] **Step 5: Verify frontend shell**
+- [x] **Step 5: Verify frontend shell**
 
 Run:
 
@@ -852,7 +852,7 @@ pnpm build
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit inspector dock shell**
+- [x] **Step 6: Commit inspector dock shell**
 
 ```bash
 git add src/lib/stores/layout.svelte.ts src/lib/components/InspectorDock.svelte src/App.svelte
@@ -864,7 +864,7 @@ git commit -m "feat: add persisted inspector dock"
 **Files:**
 - Modify: `src/lib/components/LayerPanel.svelte`
 
-- [ ] **Step 1: Add grouped layer model**
+- [x] **Step 1: Add grouped layer model**
 
 Replace the top script in `LayerPanel.svelte` with a grouped model:
 
@@ -954,7 +954,7 @@ Replace the top script in `LayerPanel.svelte` with a grouped model:
 
 Keep the existing `toggleVisibility`, `selectedGroupIds`, `selectedElementId`, and `selectedCount` logic below these helpers. Do not remove the current visibility/reorder behavior while changing the row layout.
 
-- [ ] **Step 2: Replace layer markup**
+- [x] **Step 2: Replace layer markup**
 
 Add a local row snippet before the list markup:
 
@@ -1023,7 +1023,7 @@ function iconForElement(el: Element): string {
 }
 ```
 
-- [ ] **Step 3: Update layer styles**
+- [x] **Step 3: Update layer styles**
 
 Replace `max-height: 260px` with full-height scrolling:
 
@@ -1085,7 +1085,7 @@ Replace `max-height: 260px` with full-height scrolling:
 }
 ```
 
-- [ ] **Step 4: Verify Layers**
+- [x] **Step 4: Verify Layers**
 
 Run:
 
@@ -1096,7 +1096,7 @@ pnpm build
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit hybrid Layers**
+- [x] **Step 5: Commit hybrid Layers**
 
 ```bash
 git add src/lib/components/LayerPanel.svelte
@@ -1109,7 +1109,7 @@ git commit -m "feat: group dense layer lists"
 - Create: `src/lib/components/UvEditorDialog.svelte`
 - Modify: `src/lib/components/PropertyPanel.svelte`
 
-- [ ] **Step 1: Create UV editor component**
+- [x] **Step 1: Create UV editor component**
 
 Create `src/lib/components/UvEditorDialog.svelte`:
 
@@ -1376,7 +1376,7 @@ Create `src/lib/components/UvEditorDialog.svelte`:
 </style>
 ```
 
-- [ ] **Step 2: Wire dialog state into PropertyPanel**
+- [x] **Step 2: Wire dialog state into PropertyPanel**
 
 In `src/lib/components/PropertyPanel.svelte`, import:
 
@@ -1420,7 +1420,7 @@ function clearUvSelection() {
 }
 ```
 
-- [ ] **Step 3: Add texture/progress asset controls**
+- [x] **Step 3: Add texture/progress asset controls**
 
 Change the texture-only block:
 
@@ -1448,7 +1448,7 @@ Add an `Edit UV...` button inside the UV section:
 </button>
 ```
 
-- [ ] **Step 4: Add icon UV dialog button**
+- [x] **Step 4: Add icon UV dialog button**
 
 In the button icon section, add:
 
@@ -1460,7 +1460,7 @@ In the button icon section, add:
 
 Keep existing numeric fields as precise fallback.
 
-- [ ] **Step 5: Render UV dialog**
+- [x] **Step 5: Render UV dialog**
 
 Before the closing `</aside>` or after it, render:
 
@@ -1478,7 +1478,7 @@ Before the closing `</aside>` or after it, render:
 {/if}
 ```
 
-- [ ] **Step 6: Verify UV editor**
+- [x] **Step 6: Verify UV editor**
 
 Run:
 
@@ -1489,7 +1489,7 @@ pnpm build
 
 Expected: PASS.
 
-- [ ] **Step 7: Commit UV editor**
+- [x] **Step 7: Commit UV editor**
 
 ```bash
 git add src/lib/components/UvEditorDialog.svelte src/lib/components/PropertyPanel.svelte
@@ -1503,11 +1503,11 @@ git commit -m "feat: add reusable uv editor"
 - Modify: `src/lib/components/PropertyPanel.svelte`
 - Modify: `src/lib/components/Canvas.svelte`
 
-- [ ] **Step 1: Add a renderer regression test or manual fixture note**
+- [x] **Step 1: Add a renderer regression test or manual fixture note**
 
 If the project already has renderer tests, add a focused test that a progress element with `asset` and `uv` creates a texture-backed display object. If renderer tests are not practical because Pixi needs browser APIs, add a short manual fixture note to this task's verification output and cover it with the existing `pnpm build` plus interactive dev check after implementation.
 
-- [ ] **Step 2: Update progress drawing to use asset and UV**
+- [x] **Step 2: Update progress drawing to use asset and UV**
 
 In the progress rendering branch, make it follow this order:
 
@@ -1538,7 +1538,7 @@ private drawProgressArrow(g: Graphics, x: number, y: number, width: number, heig
 
 Then call that helper from both `drawProgressFallback` and the generated texture fallback branch for `progress_arrow.png`.
 
-- [ ] **Step 3: Ensure Canvas observes progress asset and UV**
+- [x] **Step 3: Ensure Canvas observes progress asset and UV**
 
 In `src/lib/components/Canvas.svelte`, verify the reactive loop already touches:
 
@@ -1552,7 +1552,7 @@ void element.uv?.height;
 
 If missing, add those reads.
 
-- [ ] **Step 4: Add progress default asset**
+- [x] **Step 4: Add progress default asset**
 
 In `ProjectStore.addElement()` in `src/lib/stores/project.svelte.ts`, add:
 
@@ -1568,7 +1568,7 @@ if (type === "progress") {
 
 If the renderer click placement already creates progress elements elsewhere, ensure it benefits from `addElement`.
 
-- [ ] **Step 5: Verify progress UX**
+- [x] **Step 5: Verify progress UX**
 
 Run:
 
@@ -1579,7 +1579,7 @@ pnpm build
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit progress texture UX**
+- [x] **Step 6: Commit progress texture UX**
 
 ```bash
 git add src/lib/engine/renderer.ts src/lib/components/Canvas.svelte src/lib/stores/project.svelte.ts src/lib/components/PropertyPanel.svelte

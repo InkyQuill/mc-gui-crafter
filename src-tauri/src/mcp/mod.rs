@@ -1023,6 +1023,8 @@ fn project_new(
     let mut project = Project::new(name, width, height, mod_target);
     if let Some(template) = args.get("template").and_then(|value| value.as_str()) {
         templates::apply_template(&mut project, template)?;
+    } else {
+        templates::apply_generated_defaults(&mut project)?;
     }
     let project_id = sessions.create_session(project);
     project_result(sessions, &project_id)

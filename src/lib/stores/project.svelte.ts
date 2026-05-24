@@ -177,6 +177,14 @@ export class ProjectStore {
       element.shadow ??= false;
     }
 
+    if (type === "progress") {
+      element.width ??= 22;
+      element.height ??= 15;
+      element.asset ??= "textures/generated/progress_arrow.png";
+      element.layer ??= "animatable";
+      element.direction ??= "left_to_right";
+    }
+
     if (type === "button") {
       element.width ??= 52;
       element.height ??= 20;

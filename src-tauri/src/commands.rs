@@ -37,6 +37,8 @@ pub fn project_new(
 
     if let Some(tmpl) = template {
         crate::templates::apply_template(&mut project, &tmpl)?;
+    } else {
+        crate::templates::apply_generated_defaults(&mut project)?;
     }
 
     let mut sessions = state.sessions.lock().unwrap();

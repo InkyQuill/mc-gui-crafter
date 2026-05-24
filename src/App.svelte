@@ -2,9 +2,7 @@
   import Toolbar from "./lib/components/Toolbar.svelte";
   import Canvas from "./lib/components/Canvas.svelte";
   import ElementPalette from "./lib/components/ElementPalette.svelte";
-  import PropertyPanel from "./lib/components/PropertyPanel.svelte";
-  import LayerPanel from "./lib/components/LayerPanel.svelte";
-  import AssetLibrary from "./lib/components/AssetLibrary.svelte";
+  import InspectorDock from "./lib/components/InspectorDock.svelte";
   import AnimationTimeline from "./lib/components/AnimationTimeline.svelte";
   import NewProjectDialog from "./lib/components/NewProjectDialog.svelte";
   import StatusBar from "./lib/components/StatusBar.svelte";
@@ -12,6 +10,7 @@
   import StartPanel from "./lib/components/StartPanel.svelte";
   import { project } from "./lib/stores/project.svelte";
   import { editor } from "./lib/stores/editor.svelte";
+  import { layout } from "./lib/stores/layout.svelte";
   import { status, readableError } from "./lib/stores/status.svelte";
   import * as api from "./lib/api";
 
@@ -34,6 +33,7 @@
   $effect(() => {
     let unlisten: (() => void) | undefined;
     (async () => {
+      await layout.load();
       await project.syncFromBackend();
       try {
         const { listen } = await import("@tauri-apps/api/event");
@@ -54,6 +54,25 @@
     })();
     return () => { unlisten?.(); };
   });
+
+  $effect(() => {
+    function handleKeydown(event: KeyboardEvent) {
+      const key = event.key.toLowerCase();
+      if (key === "r" && event.ctrlKey && event.shiftKey && event.altKey) {
+        event.preventDefault();
+        void layout.reset();
+        status.success("UI layout reset.");
+        return;
+      }
+      if (key === "r" && event.ctrlKey && !event.shiftKey && !event.altKey) {
+        event.preventDefault();
+        editor.resetView(project.guiSize);
+        status.success("Canvas view reset.");
+      }
+    }
+    window.addEventListener("keydown", handleKeydown);
+    return () => window.removeEventListener("keydown", handleKeydown);
+  });
 </script>
 
 <div class="app">
@@ -73,11 +92,7 @@
       {/if}
     </main>
 
-    <aside class="sidebar-right">
-      <PropertyPanel />
-      <LayerPanel />
-      <AssetLibrary />
-    </aside>
+    <InspectorDock />
   </div>
 
   <AnimationTimeline />
@@ -167,8 +182,7 @@
     overflow: hidden;
   }
 
-  .sidebar-left,
-  .sidebar-right {
+  .sidebar-left {
     width: 220px;
     background: var(--surface);
     overflow-y: auto;
@@ -177,10 +191,6 @@
 
   .sidebar-left {
     border-right: 1px solid var(--border);
-  }
-
-  .sidebar-right {
-    border-left: 1px solid var(--border);
   }
 
   .canvas-area {
