@@ -263,8 +263,12 @@ Use project-specific output paths when saving visual artifacts:
 
 ```json
 {
-  "project_id": "11111111-2222-3333-4444-555555555555",
-  "output_path": "docs/mcgui/screenshots/example.png"
+  "name": "project_render",
+  "arguments": {
+    "project_id": "11111111-2222-3333-4444-555555555555",
+    "output_path": "docs/mcgui/screenshots/example.png",
+    "include_data_url": false
+  }
 }
 ```
 

@@ -73,6 +73,7 @@ export interface SemanticGroup {
   data_source?: string;
   scroll_binding?: string;
   dynamic_height?: boolean;
+  member_ids?: string[];
 }
 
 export type AttachedRegionAnchor = "left" | "right" | "top" | "bottom" | "free";
