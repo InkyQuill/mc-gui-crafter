@@ -1,7 +1,9 @@
 import type {
   ActiveProjectPayload,
   Animation,
+  AppConfig,
   Element,
+  EditorLayoutConfig,
   FontAsset,
   FontRenderData,
   GlyphInfo,
@@ -15,6 +17,7 @@ import type {
   ProjectSummary,
   SaveProjectResult,
   SemanticGroup,
+  WindowConfig,
 } from "./types";
 
 let tauriInvoke: ((cmd: string, args?: Record<string, unknown>) => Promise<unknown>) | null = null;
@@ -61,6 +64,21 @@ const mockAssetDataUrls = new Map<string, Map<string, string>>();
 const mockExistingExportFiles = new Set<string>();
 let mockActiveProjectId: string | null = null;
 let mockNextProjectId = 1;
+let mockAppConfig: AppConfig = {
+  mcp_port: 47381,
+  editor_layout: {
+    version: 1,
+    right_dock_width: 520,
+    properties_width: 300,
+    browser_tab: "layers",
+  },
+  window: {
+    width: 1280,
+    height: 800,
+    x: null,
+    y: null,
+  },
+};
 
 export function setMockExistingExportFiles(paths: string[]): void {
   mockExistingExportFiles.clear();
@@ -121,6 +139,39 @@ function createMockSession(project: ProjectData): ProjectSummary {
   mockAssetDataUrls.set(id, new Map());
   mockActiveProjectId = id;
   return mockProjectResult(session);
+}
+
+function clampMockLayout(layout: EditorLayoutConfig): EditorLayoutConfig {
+  const right = layout.right_dock_width >= 360 && layout.right_dock_width <= 900
+    ? Math.round(layout.right_dock_width)
+    : 520;
+  const maxProperties = Math.max(240, right - 160);
+  const properties = layout.properties_width >= 240 && layout.properties_width <= maxProperties
+    ? Math.round(layout.properties_width)
+    : Math.min(300, maxProperties);
+  return {
+    version: 1,
+    right_dock_width: right,
+    properties_width: properties,
+    browser_tab: layout.browser_tab === "assets" ? "assets" : "layers",
+  };
+}
+
+function clampMockWindow(window: WindowConfig): WindowConfig {
+  if (window.width < 900 || window.height < 600) {
+    return { width: 1280, height: 800, x: null, y: null };
+  }
+  const hasValidPosition =
+    typeof window.x === "number" &&
+    typeof window.y === "number" &&
+    Math.abs(window.x) < 20000 &&
+    Math.abs(window.y) < 20000;
+  return {
+    width: Math.round(window.width),
+    height: Math.round(window.height),
+    x: hasValidPosition ? Math.round(window.x!) : null,
+    y: hasValidPosition ? Math.round(window.y!) : null,
+  };
 }
 
 function updateMockHistoryFlags(session: MockSession) {
@@ -329,15 +380,58 @@ function mockExportSettings(project: ProjectData, args?: Record<string, unknown>
 
 async function mockInvoke(cmd: string, args?: Record<string, unknown>): Promise<unknown> {
   switch (cmd) {
+    case "app_config_get":
+      return clone(mockAppConfig);
+    case "editor_layout_save": {
+      mockAppConfig = {
+        ...mockAppConfig,
+        editor_layout: clampMockLayout(args?.layout as EditorLayoutConfig),
+      };
+      return clone(mockAppConfig);
+    }
+    case "app_window_save": {
+      mockAppConfig = {
+        ...mockAppConfig,
+        window: clampMockWindow(args?.window as WindowConfig),
+      };
+      return clone(mockAppConfig);
+    }
+    case "ui_layout_reset":
+      mockAppConfig = {
+        ...mockAppConfig,
+        editor_layout: {
+          version: 1,
+          right_dock_width: 520,
+          properties_width: 300,
+          browser_tab: "layers",
+        },
+        window: {
+          width: 1280,
+          height: 800,
+          x: null,
+          y: null,
+        },
+      };
+      return clone(mockAppConfig);
     case "project_new":
       return createMockSession({
         name: (args?.name as string) || "Untitled",
         gui_size: { width: (args?.width as number) || 176, height: (args?.height as number) || 166 },
         mod_target: (args?.mod_target as ModTarget) || "forge",
-        elements: [],
+        elements: [{
+          id: "background",
+          type: "texture",
+          x: 0,
+          y: 0,
+          width: (args?.width as number) || 176,
+          height: (args?.height as number) || 166,
+          asset: "textures/generated/gui_panel.png",
+          visible: true,
+          layer: "background",
+        }],
         groups: [],
         animations: [],
-        assets: [],
+        assets: ["textures/generated/gui_panel.png"],
         is_dirty: true,
       });
     case "project_open":
@@ -756,6 +850,26 @@ async function mockInvoke(cmd: string, args?: Record<string, unknown>): Promise<
 export async function projectNew(name: string, width: number, height: number, modTarget: string, template?: string): Promise<ProjectSummary> {
   const invoke = await getInvoke();
   return invoke("project_new", { name, width, height, mod_target: modTarget, template }) as Promise<ProjectSummary>;
+}
+
+export async function appConfigGet(): Promise<AppConfig> {
+  const invoke = await getInvoke();
+  return invoke("app_config_get") as Promise<AppConfig>;
+}
+
+export async function editorLayoutSave(layout: EditorLayoutConfig): Promise<AppConfig> {
+  const invoke = await getInvoke();
+  return invoke("editor_layout_save", { layout }) as Promise<AppConfig>;
+}
+
+export async function appWindowSave(window: WindowConfig): Promise<AppConfig> {
+  const invoke = await getInvoke();
+  return invoke("app_window_save", { window }) as Promise<AppConfig>;
+}
+
+export async function uiLayoutReset(): Promise<AppConfig> {
+  const invoke = await getInvoke();
+  return invoke("ui_layout_reset") as Promise<AppConfig>;
 }
 
 export async function projectOpen(path: string): Promise<ProjectSummary> {

@@ -12,7 +12,7 @@ mod templates;
 mod texture;
 
 use std::sync::Mutex;
-use tauri::Manager;
+use tauri::{Manager, WindowEvent};
 
 pub struct AppState {
     pub sessions: Mutex<project::ProjectSessionManager>,
@@ -48,6 +48,19 @@ pub fn run() {
             });
             let state = app.state::<AppState>();
             let mut app_config = config::load().map_err(Box::<dyn std::error::Error>::from)?;
+            if let Some(window_config) = app_config.window.clone() {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.set_size(tauri::Size::Physical(tauri::PhysicalSize {
+                        width: window_config.width,
+                        height: window_config.height,
+                    }));
+                    if let Some((x, y)) = window_config.x.zip(window_config.y) {
+                        let _ = window.set_position(tauri::Position::Physical(
+                            tauri::PhysicalPosition { x, y },
+                        ));
+                    }
+                }
+            }
             let handle = mcp::start_web_server(app.handle().clone(), app_config.mcp_port)
                 .map_err(Box::<dyn std::error::Error>::from)?;
             app_config.mcp_port = Some(handle.address().port());
@@ -60,7 +73,24 @@ pub fn run() {
 
             Ok(())
         })
+        .on_window_event(|window, event| {
+            if window.label() != "main" {
+                return;
+            }
+            if matches!(
+                event,
+                WindowEvent::CloseRequested { .. }
+                    | WindowEvent::Resized(_)
+                    | WindowEvent::Moved(_)
+            ) {
+                save_main_window_geometry(window);
+            }
+        })
         .invoke_handler(tauri::generate_handler![
+            commands::app_config_get,
+            commands::editor_layout_save,
+            commands::app_window_save,
+            commands::ui_layout_reset,
             commands::project_new,
             commands::project_open,
             commands::project_save,
@@ -107,4 +137,23 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running MCGUI Crafter");
+}
+
+fn save_main_window_geometry(window: &tauri::Window) {
+    let Ok(size) = window.outer_size() else {
+        return;
+    };
+    let position = window.outer_position().ok();
+    if let Ok(mut config) = crate::config::load() {
+        config.window = Some(
+            crate::config::WindowConfig {
+                width: size.width,
+                height: size.height,
+                x: position.as_ref().map(|position| position.x),
+                y: position.as_ref().map(|position| position.y),
+            }
+            .clamped(),
+        );
+        let _ = crate::config::save(&config);
+    }
 }

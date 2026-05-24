@@ -19,6 +19,28 @@ export type FillDirection = "left_to_right" | "right_to_left" | "bottom_to_top" 
 
 export type ModTarget = "forge" | "fabric" | "neoforge";
 
+export type BrowserTab = "layers" | "assets";
+
+export interface EditorLayoutConfig {
+  version: number;
+  right_dock_width: number;
+  properties_width: number;
+  browser_tab: BrowserTab;
+}
+
+export interface WindowConfig {
+  width: number;
+  height: number;
+  x?: number | null;
+  y?: number | null;
+}
+
+export interface AppConfig {
+  mcp_port?: number | null;
+  editor_layout?: EditorLayoutConfig | null;
+  window?: WindowConfig | null;
+}
+
 export type SlotRole =
   | "machine"
   | "player_inventory"

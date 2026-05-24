@@ -1,4 +1,5 @@
 use crate::animation::Animation;
+use crate::config::{AppConfig, EditorLayoutConfig, WindowConfig};
 use crate::format;
 use crate::project::{
     CodegenMode, Element, Group, ModTarget, Project, ProjectExportSettings, ProjectSessionSummary,
@@ -45,6 +46,34 @@ pub fn project_new(
     let project_id = sessions.create_session(project);
 
     project_result(&sessions, &project_id)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub fn app_config_get() -> Result<AppConfig, String> {
+    crate::config::load()
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub fn editor_layout_save(layout: EditorLayoutConfig) -> Result<AppConfig, String> {
+    let mut config = crate::config::load()?;
+    config.editor_layout = Some(layout.clamped());
+    crate::config::save(&config)?;
+    Ok(config.clamped())
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub fn app_window_save(window: WindowConfig) -> Result<AppConfig, String> {
+    let mut config = crate::config::load()?;
+    config.window = Some(window.clamped());
+    crate::config::save(&config)?;
+    Ok(config.clamped())
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub fn ui_layout_reset() -> Result<AppConfig, String> {
+    let config = crate::config::load()?.with_reset_ui_layout();
+    crate::config::save(&config)?;
+    Ok(config.clamped())
 }
 
 #[tauri::command(rename_all = "snake_case")]
