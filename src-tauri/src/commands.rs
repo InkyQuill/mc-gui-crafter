@@ -2,8 +2,8 @@ use crate::animation::Animation;
 use crate::config::{AppConfig, EditorLayoutConfig, WindowConfig};
 use crate::format;
 use crate::project::{
-    CodegenMode, Element, Group, ModTarget, Project, ProjectExportSettings, ProjectSessionSummary,
-    SemanticGroup,
+    AttachedRegion, CodegenMode, Element, Group, ModTarget, Project, ProjectExportSettings,
+    ProjectSessionSummary, SemanticGroup,
 };
 use crate::templates::TemplateInfo;
 use crate::AppState;
@@ -286,6 +286,60 @@ pub fn element_list(
     let session = sessions.resolve(project_id.as_deref())?;
 
     Ok(session.project.elements.clone())
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub fn attached_region_create(
+    state: State<AppState>,
+    project_id: Option<String>,
+    region: AttachedRegion,
+) -> Result<AttachedRegion, String> {
+    let mut sessions = state.sessions.lock().unwrap();
+    create_attached_region_in_session(&mut sessions, project_id.as_deref(), region)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub fn attached_region_update(
+    state: State<AppState>,
+    project_id: Option<String>,
+    id: String,
+    changes: serde_json::Value,
+) -> Result<AttachedRegion, String> {
+    let mut sessions = state.sessions.lock().unwrap();
+    update_attached_region_in_session(&mut sessions, project_id.as_deref(), id, changes)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub fn attached_region_remove(
+    state: State<AppState>,
+    project_id: Option<String>,
+    id: String,
+) -> Result<serde_json::Value, String> {
+    let mut sessions = state.sessions.lock().unwrap();
+    let removed = remove_attached_region_in_session(&mut sessions, project_id.as_deref(), &id)?;
+    Ok(serde_json::json!({ "removed": removed }))
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub fn attached_region_list(
+    state: State<AppState>,
+    project_id: Option<String>,
+) -> Result<Vec<AttachedRegion>, String> {
+    let sessions = state.sessions.lock().unwrap();
+    let session = sessions.resolve(project_id.as_deref())?;
+    Ok(session.project.attached_regions.clone())
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub fn attached_region_move_with_elements(
+    state: State<AppState>,
+    project_id: Option<String>,
+    id: String,
+    x: i32,
+    y: i32,
+) -> Result<AttachedRegion, String> {
+    let mut sessions = state.sessions.lock().unwrap();
+    move_attached_region_with_elements_in_session(&mut sessions, project_id.as_deref(), id, x, y)
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -1085,6 +1139,171 @@ fn apply_element_changes(element: &Element, changes: serde_json::Value) -> Resul
     }
 
     serde_json::from_value(value).map_err(|error| format!("Invalid element update: {error}"))
+}
+
+fn create_attached_region_in_session(
+    sessions: &mut crate::project::ProjectSessionManager,
+    project_id: Option<&str>,
+    region: AttachedRegion,
+) -> Result<AttachedRegion, String> {
+    let project = &sessions.resolve(project_id)?.project;
+    if project.find_attached_region(&region.id).is_some() {
+        return Err(format!("Attached region already exists: {}", region.id));
+    }
+
+    sessions.record_history(project_id)?;
+    let session = sessions.resolve_mut(project_id)?;
+    session.project.attached_regions.push(region.clone());
+    sessions.mark_changed(project_id)?;
+    Ok(region)
+}
+
+fn update_attached_region_in_session(
+    sessions: &mut crate::project::ProjectSessionManager,
+    project_id: Option<&str>,
+    id: String,
+    changes: serde_json::Value,
+) -> Result<AttachedRegion, String> {
+    let current = sessions
+        .resolve(project_id)?
+        .project
+        .find_attached_region(&id)
+        .ok_or_else(|| format!("Attached region not found: {id}"))?;
+    let updated = apply_attached_region_changes(current, changes)?;
+    if updated == *current {
+        return Ok(current.clone());
+    }
+
+    sessions.record_history(project_id)?;
+    let session = sessions.resolve_mut(project_id)?;
+    let region = session
+        .project
+        .find_attached_region_mut(&id)
+        .ok_or_else(|| format!("Attached region not found: {id}"))?;
+    *region = updated.clone();
+    sessions.mark_changed(project_id)?;
+    Ok(updated)
+}
+
+fn apply_attached_region_changes(
+    region: &AttachedRegion,
+    changes: serde_json::Value,
+) -> Result<AttachedRegion, String> {
+    let mut value = serde_json::to_value(region)
+        .map_err(|error| format!("Failed to encode attached region: {error}"))?;
+    let object = changes
+        .as_object()
+        .ok_or("Attached region changes must be an object")?;
+    if object
+        .get("id")
+        .is_some_and(|value| value.as_str() != Some(region.id.as_str()))
+    {
+        return Err("Attached region id cannot be changed".to_string());
+    }
+
+    let target = value
+        .as_object_mut()
+        .ok_or("Attached region payload must be an object")?;
+    for (key, new_value) in object {
+        if key == "id" {
+            continue;
+        }
+        target.insert(key.clone(), new_value.clone());
+    }
+
+    serde_json::from_value(value)
+        .map_err(|error| format!("Invalid attached region update: {error}"))
+}
+
+fn remove_attached_region_in_session(
+    sessions: &mut crate::project::ProjectSessionManager,
+    project_id: Option<&str>,
+    id: &str,
+) -> Result<bool, String> {
+    let project = &sessions.resolve(project_id)?.project;
+    if project.find_attached_region(id).is_none() {
+        return Ok(false);
+    }
+
+    sessions.record_history(project_id)?;
+    let session = sessions.resolve_mut(project_id)?;
+    session
+        .project
+        .attached_regions
+        .retain(|region| region.id != id);
+    for element in &mut session.project.elements {
+        if element.attached_region.as_deref() == Some(id) {
+            element.attached_region = None;
+        }
+    }
+    sessions.mark_changed(project_id)?;
+    Ok(true)
+}
+
+fn move_attached_region_with_elements_in_session(
+    sessions: &mut crate::project::ProjectSessionManager,
+    project_id: Option<&str>,
+    id: String,
+    x: i32,
+    y: i32,
+) -> Result<AttachedRegion, String> {
+    let project = &sessions.resolve(project_id)?.project;
+    let current = project
+        .find_attached_region(&id)
+        .ok_or_else(|| format!("Attached region not found: {id}"))?;
+    if current.x == x && current.y == y {
+        return Ok(current.clone());
+    }
+
+    let dx = x
+        .checked_sub(current.x)
+        .ok_or("Attached region move overflow")?;
+    let dy = y
+        .checked_sub(current.y)
+        .ok_or("Attached region move overflow")?;
+    let moved_child_ids = project
+        .elements
+        .iter()
+        .filter(|element| element.attached_region.as_deref() == Some(id.as_str()))
+        .map(|element| {
+            element
+                .x
+                .checked_add(dx)
+                .ok_or("Attached region child move overflow")?;
+            element
+                .y
+                .checked_add(dy)
+                .ok_or("Attached region child move overflow")?;
+            Ok(element.id.clone())
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+
+    sessions.record_history(project_id)?;
+    let session = sessions.resolve_mut(project_id)?;
+    let updated = {
+        let region = session
+            .project
+            .find_attached_region_mut(&id)
+            .ok_or_else(|| format!("Attached region not found: {id}"))?;
+        region.x = x;
+        region.y = y;
+        region.clone()
+    };
+    for element in &mut session.project.elements {
+        if element.attached_region.as_deref() == Some(id.as_str()) {
+            element.x = element
+                .x
+                .checked_add(dx)
+                .ok_or("Attached region child move overflow")?;
+            element.y = element
+                .y
+                .checked_add(dy)
+                .ok_or("Attached region child move overflow")?;
+        }
+    }
+    refresh_group_positions_for_elements(&mut session.project, &moved_child_ids);
+    sessions.mark_changed(project_id)?;
+    Ok(updated)
 }
 
 fn resize_element_in_session(
@@ -2195,6 +2414,106 @@ mod tests {
             .project
             .elements;
         assert_eq!(elements[1].id, "slot_1");
+    }
+
+    #[test]
+    fn attached_region_create_update_remove_record_history() {
+        let mut sessions = ProjectSessionManager::default();
+        let project_id =
+            sessions.create_session(Project::new("Attached Regions", 176, 166, ModTarget::Forge));
+
+        let created = create_attached_region_in_session(
+            &mut sessions,
+            Some(&project_id),
+            crate::project::AttachedRegion {
+                id: "returns_pocket".to_string(),
+                anchor: crate::project::AttachedRegionAnchor::Right,
+                x: 100,
+                y: 18,
+                width: 54,
+                height: 72,
+                state: crate::project::AttachedRegionState::Static,
+                kind: Some("returns_pocket".to_string()),
+                semantic_group: Some("food_returns".to_string()),
+                visible: true,
+            },
+        )
+        .unwrap();
+        assert_eq!(created.id, "returns_pocket");
+
+        let updated = update_attached_region_in_session(
+            &mut sessions,
+            Some(&project_id),
+            "returns_pocket".to_string(),
+            serde_json::json!({
+                "x": 112,
+                "state": "toggleable"
+            }),
+        )
+        .unwrap();
+        assert_eq!(updated.x, 112);
+        assert_eq!(
+            updated.state,
+            crate::project::AttachedRegionState::Toggleable
+        );
+
+        let removed =
+            remove_attached_region_in_session(&mut sessions, Some(&project_id), "returns_pocket")
+                .unwrap();
+        assert!(removed);
+        assert!(sessions
+            .resolve(Some(&project_id))
+            .unwrap()
+            .project
+            .attached_regions
+            .is_empty());
+        assert_eq!(session_summary(&sessions, &project_id).unwrap().revision, 3);
+    }
+
+    #[test]
+    fn attached_region_move_with_elements_updates_absolute_child_coordinates() {
+        let mut sessions = ProjectSessionManager::default();
+        let project_id =
+            sessions.create_session(Project::new("Attached Regions", 176, 166, ModTarget::Forge));
+        {
+            let project = &mut sessions.resolve_mut(Some(&project_id)).unwrap().project;
+            project
+                .attached_regions
+                .push(crate::project::AttachedRegion {
+                    id: "returns_pocket".to_string(),
+                    anchor: crate::project::AttachedRegionAnchor::Right,
+                    x: 100,
+                    y: 18,
+                    width: 54,
+                    height: 72,
+                    state: crate::project::AttachedRegionState::Static,
+                    kind: Some("returns_pocket".to_string()),
+                    semantic_group: Some("food_returns".to_string()),
+                    visible: true,
+                });
+            let mut slot = sample_element("returns_0", 108, 26);
+            slot.attached_region = Some("returns_pocket".to_string());
+            project.add_element(slot);
+        }
+
+        let moved = move_attached_region_with_elements_in_session(
+            &mut sessions,
+            Some(&project_id),
+            "returns_pocket".to_string(),
+            110,
+            28,
+        )
+        .unwrap();
+
+        assert_eq!((moved.x, moved.y), (110, 28));
+        let child = sessions
+            .resolve(Some(&project_id))
+            .unwrap()
+            .project
+            .find_element("returns_0")
+            .unwrap();
+        assert_eq!((child.x, child.y), (118, 36));
+        assert_eq!(session_summary(&sessions, &project_id).unwrap().revision, 1);
     }
 
     #[test]
