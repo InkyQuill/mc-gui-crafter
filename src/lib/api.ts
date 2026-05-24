@@ -230,9 +230,23 @@ async function dataUrlDimensions(dataUrl: string): Promise<{ width: number; heig
 const attachedRegionAnchors = new Set<AttachedRegionAnchor>(["left", "right", "top", "bottom", "free"]);
 const attachedRegionStates = new Set<AttachedRegionState>(["static", "toggleable"]);
 const requiredAttachedRegionFields = ["anchor", "x", "y", "width", "height", "state"] as const;
+const maxU32 = 0xffffffff;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function assertIntegerField(value: unknown, field: string): asserts value is number {
+  if (typeof value !== "number" || !Number.isInteger(value)) {
+    throw `Invalid attached region update: ${field} must be an integer`;
+  }
+}
+
+function assertPositiveU32Field(value: unknown, field: string): asserts value is number {
+  assertIntegerField(value, field);
+  if (value <= 0 || value > maxU32) {
+    throw `Invalid attached region update: ${field} is out of range`;
+  }
 }
 
 function applyMockAttachedRegionChanges(current: AttachedRegion, changes: unknown): AttachedRegion {
@@ -255,6 +269,19 @@ function applyMockAttachedRegionChanges(current: AttachedRegion, changes: unknow
   }
   if (!attachedRegionStates.has(next.state)) {
     throw `Invalid attached region update: invalid state ${String(next.state)}`;
+  }
+  assertIntegerField(next.x, "x");
+  assertIntegerField(next.y, "y");
+  assertPositiveU32Field(next.width, "width");
+  assertPositiveU32Field(next.height, "height");
+  if (next.visible !== undefined && typeof next.visible !== "boolean") {
+    throw "Invalid attached region update: visible must be a boolean";
+  }
+  if (next.kind !== null && next.kind !== undefined && typeof next.kind !== "string") {
+    throw "Invalid attached region update: kind must be a string or null";
+  }
+  if (next.semantic_group !== null && next.semantic_group !== undefined && typeof next.semantic_group !== "string") {
+    throw "Invalid attached region update: semantic_group must be a string or null";
   }
 
   return next;
