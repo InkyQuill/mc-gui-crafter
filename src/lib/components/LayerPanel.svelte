@@ -34,7 +34,7 @@
   }
 
   function attachedRegionMeta(region: AttachedRegion, count: number): string {
-    return `${region.anchor} · ${region.width}x${region.height} · ${count} elements`;
+    return `${region.anchor} · ${region.state} · ${count} elements`;
   }
 
   function iconForElement(el: Element): string {
@@ -65,6 +65,7 @@
 
     for (const region of project.attachedRegions) {
       const elements = project.elements.filter(element => element.attached_region === region.id);
+      if (elements.length === 0) continue;
       for (const element of elements) consumed.add(element.id);
       rows.push({ kind: "attached_region", region, meta: attachedRegionMeta(region, elements.length), elements });
     }
@@ -154,7 +155,7 @@
     </button>
   </div>
 
-  {#if project.elements.length === 0 && project.attachedRegions.length === 0}
+  {#if rows.length === 0}
     <p class="muted">No elements</p>
   {:else}
     {#snippet elementRow(el: Element, nested = false)}
@@ -221,10 +222,9 @@
               class="group-main"
               class:selected={selectedAttachedRegionId === row.region.id}
               class:hidden-el={row.region.visible === false}
-              onclick={() => {
-                editor.selectAttachedRegion(row.region.id);
-                toggleGroup(`attached:${row.region.id}`);
-              }}
+              onclick={() => editor.selectAttachedRegion(row.region.id)}
+              ondblclick={() => toggleGroup(`attached:${row.region.id}`)}
+              title="Double-click to collapse or expand"
             >
               <span class="disclosure">{collapsedGroups.has(`attached:${row.region.id}`) ? "▸" : "▾"}</span>
               <span class="group-text">

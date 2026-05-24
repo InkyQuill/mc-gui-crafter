@@ -50,9 +50,8 @@
     project.updateElement(selectedEl.id, changes);
   }
 
-  function updateRegion(changes: Partial<AttachedRegion>) {
-    if (!selectedRegion) return;
-    void project.updateAttachedRegion(selectedRegion.id, changes);
+  function updateRegion(id: string, changes: Partial<AttachedRegion>) {
+    void project.updateAttachedRegion(id, changes);
   }
 
   function numberValue(value: string, fallback = 0): number {
@@ -556,7 +555,7 @@
         <select
           id="prop-region-anchor"
           value={selectedRegion.anchor}
-          onchange={(e) => updateRegion({ anchor: e.currentTarget.value as AttachedRegionAnchor })}
+          onchange={(e) => updateRegion(selectedRegion.id, { anchor: e.currentTarget.value as AttachedRegionAnchor })}
         >
           {#each attachedRegionAnchors as anchor (anchor)}
             <option value={anchor}>{anchor}</option>
@@ -569,7 +568,7 @@
           id="prop-region-x"
           type="number"
           value={selectedRegion.x}
-          oninput={(e) => updateRegion({ x: numberValue(e.currentTarget.value, selectedRegion?.x ?? 0) })}
+          onchange={(e) => updateRegion(selectedRegion.id, { x: numberValue(e.currentTarget.value, selectedRegion.x) })}
         />
       </div>
       <div class="prop-row">
@@ -578,7 +577,7 @@
           id="prop-region-y"
           type="number"
           value={selectedRegion.y}
-          oninput={(e) => updateRegion({ y: numberValue(e.currentTarget.value, selectedRegion?.y ?? 0) })}
+          onchange={(e) => updateRegion(selectedRegion.id, { y: numberValue(e.currentTarget.value, selectedRegion.y) })}
         />
       </div>
       <div class="prop-row">
@@ -588,7 +587,7 @@
           type="number"
           min="1"
           value={selectedRegion.width}
-          oninput={(e) => updateRegion({ width: Math.max(1, numberValue(e.currentTarget.value, selectedRegion?.width ?? 1)) })}
+          onchange={(e) => updateRegion(selectedRegion.id, { width: Math.max(1, numberValue(e.currentTarget.value, selectedRegion.width)) })}
         />
       </div>
       <div class="prop-row">
@@ -598,7 +597,7 @@
           type="number"
           min="1"
           value={selectedRegion.height}
-          oninput={(e) => updateRegion({ height: Math.max(1, numberValue(e.currentTarget.value, selectedRegion?.height ?? 1)) })}
+          onchange={(e) => updateRegion(selectedRegion.id, { height: Math.max(1, numberValue(e.currentTarget.value, selectedRegion.height)) })}
         />
       </div>
       <div class="prop-row">
@@ -606,7 +605,7 @@
         <select
           id="prop-region-state"
           value={selectedRegion.state}
-          onchange={(e) => updateRegion({ state: e.currentTarget.value as AttachedRegionState })}
+          onchange={(e) => updateRegion(selectedRegion.id, { state: e.currentTarget.value as AttachedRegionState })}
         >
           {#each attachedRegionStates as state (state)}
             <option value={state}>{state}</option>
@@ -619,7 +618,7 @@
           id="prop-region-kind"
           type="text"
           value={selectedRegion.kind ?? ""}
-          oninput={(e) => updateRegion({ kind: optionalText(e.currentTarget.value) })}
+          onchange={(e) => updateRegion(selectedRegion.id, { kind: optionalText(e.currentTarget.value) })}
         />
       </div>
       <div class="prop-row">
@@ -628,7 +627,7 @@
           id="prop-region-semantic-group"
           type="text"
           value={selectedRegion.semantic_group ?? ""}
-          oninput={(e) => updateRegion({ semantic_group: optionalText(e.currentTarget.value) })}
+          onchange={(e) => updateRegion(selectedRegion.id, { semantic_group: optionalText(e.currentTarget.value) })}
         />
       </div>
     </div>
