@@ -122,6 +122,13 @@ Some MCP clients cache tool discovery for the current session. If newly added
 tools are missing after upgrading MCGUI Crafter, reconnect the MCP server or
 restart the MCP client session.
 
+## Alpha response contract
+
+Closed-alpha MCP tools return compact JSON by default. Binary fields such as
+PNG data URLs are opt-in. New mutating tools include `project_id` in their
+responses. No-op mutations should not change project revision or trigger UI
+synchronization events.
+
 ## Generating GUIs With an Agent
 
 Once the client is connected, ask the agent to use the `mc-gui-crafter` MCP

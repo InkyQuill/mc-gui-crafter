@@ -3305,6 +3305,194 @@ mod tests {
         project_mutation_snapshot(state, &serde_json::json!({ "project_id": project_id }))
     }
 
+    #[test]
+    fn new_alpha_mutation_responses_include_project_id() {
+        let state = test_state();
+        let project_id = {
+            let mut sessions = state.sessions.lock().unwrap();
+            let mut project = Project::new("Response Contract", 176, 166, ModTarget::Forge);
+            project.elements.push(
+                parse_element_arg(&serde_json::json!({
+                    "id": "a",
+                    "type": "slot",
+                    "x": 8,
+                    "y": 18,
+                    "size": 18
+                }))
+                .unwrap(),
+            );
+            project.elements.push(
+                parse_element_arg(&serde_json::json!({
+                    "id": "b",
+                    "type": "slot",
+                    "x": 26,
+                    "y": 18,
+                    "size": 18
+                }))
+                .unwrap(),
+            );
+            sessions.create_session(project)
+        };
+
+        for (tool_name, arguments) in [
+            (
+                "project_resize",
+                serde_json::json!({ "project_id": project_id, "width": 180, "height": 166 }),
+            ),
+            (
+                "group_upsert",
+                serde_json::json!({ "project_id": project_id, "group_id": "machine", "element_ids": ["a", "b"] }),
+            ),
+            (
+                "element_update_many",
+                serde_json::json!({ "project_id": project_id, "updates": [{ "id": "a", "changes": { "x": 10 } }] }),
+            ),
+        ] {
+            let response = response_for(
+                serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": tool_name,
+                    "method": "tools/call",
+                    "params": {
+                        "name": tool_name,
+                        "arguments": arguments
+                    }
+                }),
+                &state,
+            );
+            assert!(response["error"].is_null(), "{tool_name}: {response:#}");
+            let value = tool_text_value(&response);
+            assert_eq!(value["project_id"], project_id, "{tool_name}");
+        }
+    }
+
+    #[test]
+    fn project_render_and_asset_list_do_not_inline_binary_payloads_by_default() {
+        let state = test_state();
+        let project_id = {
+            let mut sessions = state.sessions.lock().unwrap();
+            let mut project = Project::new("Compact", 32, 24, ModTarget::Forge);
+            let asset = "textures/generated/gui_panel.png";
+            project.assets.push(asset.to_string());
+            project.texture_data.insert(
+                asset.to_string(),
+                crate::texture::generated_gui_panel(16, 16).unwrap(),
+            );
+            sessions.create_session(project)
+        };
+        let render_output_path = TempPath::new("mc-gui-crafter-render-compact-test", "png");
+
+        for (tool_name, arguments) in [
+            (
+                "project_render",
+                serde_json::json!({
+                    "project_id": project_id,
+                    "output_path": render_output_path.path_string()
+                }),
+            ),
+            (
+                "asset_list",
+                serde_json::json!({
+                    "project_id": project_id
+                }),
+            ),
+        ] {
+            let response = response_for(
+                serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": tool_name,
+                    "method": "tools/call",
+                    "params": {
+                        "name": tool_name,
+                        "arguments": arguments
+                    }
+                }),
+                &state,
+            );
+            assert!(response["error"].is_null(), "{tool_name}: {response:#}");
+            let value = tool_text_value(&response);
+            assert!(
+                !serde_json::to_string(&value)
+                    .unwrap()
+                    .contains("data:image/png;base64"),
+                "{tool_name} should be compact by default"
+            );
+        }
+    }
+
+    #[test]
+    fn no_op_batch_tools_do_not_change_revision() {
+        let state = test_state();
+        let project_id = {
+            let mut sessions = state.sessions.lock().unwrap();
+            let mut project = Project::new("Noop Batch", 176, 166, ModTarget::Forge);
+            project.elements.push(
+                parse_element_arg(&serde_json::json!({
+                    "id": "a",
+                    "type": "slot",
+                    "x": 8,
+                    "y": 18,
+                    "size": 18
+                }))
+                .unwrap(),
+            );
+            project.elements.push(
+                parse_element_arg(&serde_json::json!({
+                    "id": "b",
+                    "type": "slot",
+                    "x": 26,
+                    "y": 18,
+                    "size": 18
+                }))
+                .unwrap(),
+            );
+            project.groups.push(crate::project::Group {
+                id: "machine".to_string(),
+                x: 8,
+                y: 18,
+                elements: vec!["a".to_string(), "b".to_string()],
+            });
+            sessions.create_session(project)
+        };
+
+        let calls = [
+            (
+                "project_resize",
+                serde_json::json!({ "project_id": project_id, "width": 176, "height": 166 }),
+            ),
+            (
+                "group_upsert",
+                serde_json::json!({ "project_id": project_id, "group_id": "machine", "element_ids": ["a", "b"] }),
+            ),
+            (
+                "element_update_many",
+                serde_json::json!({ "project_id": project_id, "updates": [{ "id": "a", "changes": { "x": 8 } }] }),
+            ),
+        ];
+
+        for (tool_name, arguments) in calls {
+            let before = mutation_snapshot_for(&state, &project_id);
+            let response = response_for(
+                serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": tool_name,
+                    "method": "tools/call",
+                    "params": {
+                        "name": tool_name,
+                        "arguments": arguments
+                    }
+                }),
+                &state,
+            );
+            assert!(response["error"].is_null(), "{tool_name}: {response:#}");
+            assert_eq!(
+                mutation_snapshot_for(&state, &project_id),
+                before,
+                "{tool_name}"
+            );
+        }
+    }
+
     fn attached_region_project(state: &AppState) -> String {
         let mut project = Project::new("Attached Region Regression", 176, 166, ModTarget::Forge);
         project.attached_regions.push(AttachedRegion {
