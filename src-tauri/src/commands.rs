@@ -314,10 +314,9 @@ pub fn attached_region_remove(
     state: State<AppState>,
     project_id: Option<String>,
     id: String,
-) -> Result<serde_json::Value, String> {
+) -> Result<bool, String> {
     let mut sessions = state.sessions.lock().unwrap();
-    let removed = remove_attached_region_in_session(&mut sessions, project_id.as_deref(), &id)?;
-    Ok(serde_json::json!({ "removed": removed }))
+    remove_attached_region_in_session(&mut sessions, project_id.as_deref(), &id)
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -1807,6 +1806,43 @@ mod tests {
         }
     }
 
+    fn sample_attached_region(id: &str, x: i32, y: i32) -> AttachedRegion {
+        AttachedRegion {
+            id: id.to_string(),
+            anchor: crate::project::AttachedRegionAnchor::Right,
+            x,
+            y,
+            width: 54,
+            height: 72,
+            state: crate::project::AttachedRegionState::Static,
+            kind: Some(id.to_string()),
+            semantic_group: Some("food_returns".to_string()),
+            visible: true,
+        }
+    }
+
+    fn seed_attached_region_redo_session() -> (ProjectSessionManager, String) {
+        let mut sessions = ProjectSessionManager::default();
+        let project_id =
+            sessions.create_session(Project::new("Attached Regions", 176, 166, ModTarget::Forge));
+        sessions.record_history(Some(&project_id)).unwrap();
+        sessions
+            .resolve_mut(Some(&project_id))
+            .unwrap()
+            .project
+            .attached_regions
+            .push(sample_attached_region("returns_pocket", 100, 18));
+        sessions.mark_changed(Some(&project_id)).unwrap();
+        sessions.undo(Some(&project_id)).unwrap();
+        sessions
+            .resolve_mut(Some(&project_id))
+            .unwrap()
+            .project
+            .attached_regions
+            .push(sample_attached_region("returns_pocket", 100, 18));
+        (sessions, project_id)
+    }
+
     fn png_data_url(color: [u8; 4]) -> String {
         use base64::Engine;
         use image::{DynamicImage, ImageBuffer, ImageFormat, Rgba};
@@ -2471,6 +2507,188 @@ mod tests {
     }
 
     #[test]
+    fn attached_region_remove_command_returns_bool() {
+        let _: for<'a> fn(State<'a, AppState>, Option<String>, String) -> Result<bool, String> =
+            attached_region_remove;
+    }
+
+    #[test]
+    fn attached_region_remove_clears_children_and_returns_true() {
+        let mut sessions = ProjectSessionManager::default();
+        let project_id =
+            sessions.create_session(Project::new("Attached Regions", 176, 166, ModTarget::Forge));
+        {
+            let project = &mut sessions.resolve_mut(Some(&project_id)).unwrap().project;
+            project
+                .attached_regions
+                .push(sample_attached_region("returns_pocket", 100, 18));
+            let mut attached = sample_element("returns_0", 108, 26);
+            attached.attached_region = Some("returns_pocket".to_string());
+            project.add_element(attached);
+            project.add_element(sample_element("slot_1", 8, 18));
+        }
+
+        let removed =
+            remove_attached_region_in_session(&mut sessions, Some(&project_id), "returns_pocket")
+                .unwrap();
+
+        let project = &sessions.resolve(Some(&project_id)).unwrap().project;
+        assert!(removed);
+        assert!(project.attached_regions.is_empty());
+        assert_eq!(
+            project.find_element("returns_0").unwrap().attached_region,
+            None
+        );
+        assert_eq!(
+            project.find_element("slot_1").unwrap().attached_region,
+            None
+        );
+        assert_eq!(session_summary(&sessions, &project_id).unwrap().revision, 1);
+    }
+
+    #[test]
+    fn attached_region_update_noop_preserves_redo() {
+        let (mut sessions, project_id) = seed_attached_region_redo_session();
+
+        let unchanged = update_attached_region_in_session(
+            &mut sessions,
+            Some(&project_id),
+            "returns_pocket".to_string(),
+            serde_json::json!({ "x": 100 }),
+        )
+        .unwrap();
+
+        assert_eq!(unchanged.x, 100);
+        let summary = session_summary(&sessions, &project_id).unwrap();
+        assert!(!summary.can_undo);
+        assert!(summary.can_redo);
+    }
+
+    #[test]
+    fn attached_region_move_noop_preserves_redo() {
+        let (mut sessions, project_id) = seed_attached_region_redo_session();
+
+        let unchanged = move_attached_region_with_elements_in_session(
+            &mut sessions,
+            Some(&project_id),
+            "returns_pocket".to_string(),
+            100,
+            18,
+        )
+        .unwrap();
+
+        assert_eq!((unchanged.x, unchanged.y), (100, 18));
+        let summary = session_summary(&sessions, &project_id).unwrap();
+        assert!(!summary.can_undo);
+        assert!(summary.can_redo);
+    }
+
+    #[test]
+    fn attached_region_missing_remove_update_and_move_preserve_history_and_redo() {
+        let (mut sessions, project_id) = seed_attached_region_redo_session();
+
+        let removed =
+            remove_attached_region_in_session(&mut sessions, Some(&project_id), "missing").unwrap();
+        let update_result = update_attached_region_in_session(
+            &mut sessions,
+            Some(&project_id),
+            "missing".to_string(),
+            serde_json::json!({ "x": 101 }),
+        );
+        let move_result = move_attached_region_with_elements_in_session(
+            &mut sessions,
+            Some(&project_id),
+            "missing".to_string(),
+            101,
+            19,
+        );
+
+        assert!(!removed);
+        assert!(update_result.is_err());
+        assert!(move_result.is_err());
+        let summary = session_summary(&sessions, &project_id).unwrap();
+        assert!(!summary.can_undo);
+        assert!(summary.can_redo);
+    }
+
+    #[test]
+    fn attached_region_invalid_partial_update_preserves_project_history_and_dirty_state() {
+        let invalid_changes = [
+            serde_json::json!({ "id": "renamed" }),
+            serde_json::json!({ "anchor": null }),
+            serde_json::json!({ "state": "animated" }),
+        ];
+
+        for changes in invalid_changes {
+            let mut sessions = ProjectSessionManager::default();
+            let project_id = sessions.create_session(Project::new(
+                "Attached Regions",
+                176,
+                166,
+                ModTarget::Forge,
+            ));
+            sessions
+                .resolve_mut(Some(&project_id))
+                .unwrap()
+                .project
+                .attached_regions
+                .push(sample_attached_region("returns_pocket", 100, 18));
+            sessions
+                .resolve_mut(Some(&project_id))
+                .unwrap()
+                .project
+                .is_dirty = false;
+            let before = sessions.resolve(Some(&project_id)).unwrap().project.clone();
+
+            let result = update_attached_region_in_session(
+                &mut sessions,
+                Some(&project_id),
+                "returns_pocket".to_string(),
+                changes,
+            );
+
+            let summary = session_summary(&sessions, &project_id).unwrap();
+            let after = &sessions.resolve(Some(&project_id)).unwrap().project;
+            assert!(result.is_err());
+            assert_eq!(after, &before);
+            assert!(!after.is_dirty);
+            assert_eq!(summary.revision, 0);
+            assert!(!summary.can_undo);
+        }
+    }
+
+    #[test]
+    fn attached_region_move_child_overflow_preserves_project_before_history() {
+        let mut sessions = ProjectSessionManager::default();
+        let project_id =
+            sessions.create_session(Project::new("Attached Regions", 176, 166, ModTarget::Forge));
+        {
+            let project = &mut sessions.resolve_mut(Some(&project_id)).unwrap().project;
+            project
+                .attached_regions
+                .push(sample_attached_region("returns_pocket", 100, 18));
+            let mut child = sample_element("returns_0", i32::MAX - 1, 26);
+            child.attached_region = Some("returns_pocket".to_string());
+            project.add_element(child);
+        }
+        let before = sessions.resolve(Some(&project_id)).unwrap().project.clone();
+
+        let result = move_attached_region_with_elements_in_session(
+            &mut sessions,
+            Some(&project_id),
+            "returns_pocket".to_string(),
+            102,
+            18,
+        );
+
+        let summary = session_summary(&sessions, &project_id).unwrap();
+        assert!(result.is_err());
+        assert_eq!(sessions.resolve(Some(&project_id)).unwrap().project, before);
+        assert_eq!(summary.revision, 0);
+        assert!(!summary.can_undo);
+    }
+
+    #[test]
     fn attached_region_move_with_elements_updates_absolute_child_coordinates() {
         let mut sessions = ProjectSessionManager::default();
         let project_id =
@@ -2513,6 +2731,42 @@ mod tests {
             .find_element("returns_0")
             .unwrap();
         assert_eq!((child.x, child.y), (118, 36));
+        assert_eq!(session_summary(&sessions, &project_id).unwrap().revision, 1);
+    }
+
+    #[test]
+    fn attached_region_move_refreshes_group_position_for_attached_children() {
+        let mut sessions = ProjectSessionManager::default();
+        let project_id =
+            sessions.create_session(Project::new("Attached Regions", 176, 166, ModTarget::Forge));
+        {
+            let project = &mut sessions.resolve_mut(Some(&project_id)).unwrap().project;
+            project
+                .attached_regions
+                .push(sample_attached_region("returns_pocket", 100, 18));
+            let mut attached = sample_element("returns_0", 108, 26);
+            attached.attached_region = Some("returns_pocket".to_string());
+            project.add_element(attached);
+            project.add_element(sample_element("slot_1", 200, 200));
+            project.groups.push(Group {
+                id: "group_returns".to_string(),
+                x: 108,
+                y: 26,
+                elements: vec!["slot_1".to_string(), "returns_0".to_string()],
+            });
+        }
+
+        move_attached_region_with_elements_in_session(
+            &mut sessions,
+            Some(&project_id),
+            "returns_pocket".to_string(),
+            110,
+            28,
+        )
+        .unwrap();
+
+        let group = &sessions.resolve(Some(&project_id)).unwrap().project.groups[0];
+        assert_eq!((group.x, group.y), (118, 36));
         assert_eq!(session_summary(&sessions, &project_id).unwrap().revision, 1);
     }
 
