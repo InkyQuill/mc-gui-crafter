@@ -613,32 +613,38 @@ impl Project {
     }
 
     pub fn visual_bounds(&self) -> VisualBounds {
-        let mut min_x = 0_i32;
-        let mut min_y = 0_i32;
-        let mut max_x = self.gui_size.width as i32;
-        let mut max_y = self.gui_size.height as i32;
+        let mut min_x = 0_i64;
+        let mut min_y = 0_i64;
+        let mut max_x = i64::from(self.gui_size.width);
+        let mut max_y = i64::from(self.gui_size.height);
 
         for element in self.elements.iter().filter(|element| element.visible) {
-            let width = element.width.or(element.size).unwrap_or(16) as i32;
-            let height = element.height.or(element.size).unwrap_or(16) as i32;
-            min_x = min_x.min(element.x);
-            min_y = min_y.min(element.y);
-            max_x = max_x.max(element.x.saturating_add(width));
-            max_y = max_y.max(element.y.saturating_add(height));
+            let x = i64::from(element.x);
+            let y = i64::from(element.y);
+            let width = i64::from(element.width.or(element.size).unwrap_or(16));
+            let height = i64::from(element.height.or(element.size).unwrap_or(16));
+            min_x = min_x.min(x);
+            min_y = min_y.min(y);
+            max_x = max_x.max(x + width);
+            max_y = max_y.max(y + height);
         }
 
         for region in self.attached_regions.iter().filter(|region| region.visible) {
-            min_x = min_x.min(region.x);
-            min_y = min_y.min(region.y);
-            max_x = max_x.max(region.x.saturating_add(region.width as i32));
-            max_y = max_y.max(region.y.saturating_add(region.height as i32));
+            let x = i64::from(region.x);
+            let y = i64::from(region.y);
+            let width = i64::from(region.width);
+            let height = i64::from(region.height);
+            min_x = min_x.min(x);
+            min_y = min_y.min(y);
+            max_x = max_x.max(x + width);
+            max_y = max_y.max(y + height);
         }
 
         VisualBounds {
-            x: min_x,
-            y: min_y,
-            width: (max_x - min_x).max(1) as u32,
-            height: (max_y - min_y).max(1) as u32,
+            x: min_x.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32,
+            y: min_y.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32,
+            width: u32::try_from((max_x - min_x).max(1)).unwrap_or(u32::MAX),
+            height: u32::try_from((max_y - min_y).max(1)).unwrap_or(u32::MAX),
         }
     }
 
@@ -1122,6 +1128,29 @@ mod tests {
                 height: 200
             }
         );
+    }
+
+    #[test]
+    fn visual_bounds_clamps_width_when_visible_region_exceeds_u32_extent() {
+        let mut project = Project::new("Huge Visual", 1, 1, ModTarget::Forge);
+        project.attached_regions.push(AttachedRegion {
+            id: "huge_region".into(),
+            anchor: AttachedRegionAnchor::Right,
+            x: i32::MAX,
+            y: 0,
+            width: u32::MAX,
+            height: 1,
+            state: AttachedRegionState::Static,
+            kind: None,
+            semantic_group: None,
+            visible: true,
+        });
+
+        let bounds = project.visual_bounds();
+
+        assert_eq!(bounds.x, 0);
+        assert_eq!(bounds.width, u32::MAX);
+        assert_eq!(bounds.height, 1);
     }
 
     #[test]
