@@ -748,6 +748,19 @@ fn get_tool_definitions() -> Vec<serde_json::Value> {
             ]),
         ),
         td(
+            "group_upsert",
+            "Create or replace a project group membership without ungrouping first",
+            project_props(&[
+                ("group_id", "string", "Group ID", true),
+                (
+                    "element_ids",
+                    "array",
+                    "Replacement element IDs for the group",
+                    true,
+                ),
+            ]),
+        ),
+        td(
             "group_ungroup",
             "Remove a group while keeping its elements",
             project_props(&[("group_id", "string", "Group ID", true)]),
@@ -1205,6 +1218,7 @@ fn execute_tool(
             Ok(serde_json::json!({ "elements": elements }))
         }
         "group_create" => group_create(&mut sessions, project_id, args),
+        "group_upsert" => group_upsert(&mut sessions, project_id, args),
         "group_ungroup" => group_ungroup(&mut sessions, project_id, args),
         "group_list" => {
             let session = sessions.resolve(project_id)?;
@@ -1953,25 +1967,23 @@ fn group_create(
     project_id: Option<&str>,
     args: &serde_json::Value,
 ) -> Result<serde_json::Value, String> {
-    let element_ids = args
-        .get("element_ids")
-        .and_then(|value| value.as_array())
-        .ok_or("Missing element_ids")?
-        .iter()
-        .map(|value| {
-            value
-                .as_str()
-                .map(ToString::to_string)
-                .ok_or("element_ids must contain only strings".to_string())
-        })
-        .collect::<Result<Vec<_>, _>>()?;
+    let element_ids = string_array(args, "element_ids")?;
     let group_id = args
         .get("group_id")
         .and_then(|value| value.as_str())
         .map(ToString::to_string)
         .unwrap_or_else(|| format!("group_{}", uuid::Uuid::new_v4()));
 
-    validate_group_create(sessions, project_id, &group_id, &element_ids)?;
+    if sessions
+        .resolve(project_id)?
+        .project
+        .groups
+        .iter()
+        .any(|group| group.id == group_id)
+    {
+        return Err("Group already exists".to_string());
+    }
+    let element_ids = validate_group_members(sessions, project_id, &element_ids)?;
 
     sessions.record_history(project_id)?;
     let session = sessions.resolve_mut(project_id)?;
@@ -1980,20 +1992,89 @@ fn group_create(
     Ok(serde_json::to_value(group).unwrap())
 }
 
-fn validate_group_create(
+fn group_upsert(
+    sessions: &mut ProjectSessionManager,
+    project_id: Option<&str>,
+    args: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let group_id = required_str(args, "group_id")?.to_string();
+    let element_ids = string_array(args, "element_ids")?;
+    let element_ids = validate_group_members(sessions, project_id, &element_ids)?;
+    let project = &sessions.resolve(project_id)?.project;
+    let existing = project.groups.iter().find(|group| group.id == group_id);
+    let created = existing.is_none();
+    let x = match existing {
+        Some(group) => group.x,
+        None => min_element_coordinate(project, &element_ids, true)?,
+    };
+    let y = match existing {
+        Some(group) => group.y,
+        None => min_element_coordinate(project, &element_ids, false)?,
+    };
+    let next = crate::project::Group {
+        id: group_id.clone(),
+        x,
+        y,
+        elements: element_ids,
+    };
+    let mut next_groups = Vec::new();
+    let mut target_applied = false;
+    for group in &project.groups {
+        if group.id == group_id {
+            next_groups.push(next.clone());
+            target_applied = true;
+            continue;
+        }
+
+        let mut group = group.clone();
+        group
+            .elements
+            .retain(|element_id| !next.elements.iter().any(|id| id == element_id));
+        if group.elements.len() >= 2 {
+            next_groups.push(group);
+        }
+    }
+    if !target_applied {
+        next_groups.push(next.clone());
+    }
+
+    if project.groups == next_groups {
+        let session = sessions.resolve(project_id)?;
+        let member_count = next.elements.len();
+        return Ok(serde_json::json!({
+            "project_id": session.id,
+            "group": next,
+            "created": false,
+            "updated": false,
+            "member_count": member_count
+        }));
+    }
+
+    sessions.record_history(project_id)?;
+    let session = sessions.resolve_mut(project_id)?;
+    session.project.groups = next_groups;
+    let session_id = session.id.clone();
+    let member_count = next.elements.len();
+    sessions.mark_changed(project_id)?;
+    Ok(serde_json::json!({
+        "project_id": session_id,
+        "group": next,
+        "created": created,
+        "updated": !created,
+        "member_count": member_count
+    }))
+}
+
+fn validate_group_members(
     sessions: &ProjectSessionManager,
     project_id: Option<&str>,
-    group_id: &str,
     element_ids: &[String],
-) -> Result<(), String> {
+) -> Result<Vec<String>, String> {
     let project = &sessions.resolve(project_id)?.project;
-    if project.groups.iter().any(|group| group.id == group_id) {
-        return Err("Group already exists".to_string());
-    }
-    let mut unique_ids: Vec<&String> = Vec::new();
+    let mut unique_ids = Vec::new();
     for id in element_ids {
-        if !unique_ids.contains(&id) {
-            unique_ids.push(id);
+        if !unique_ids.contains(id) {
+            unique_ids.push(id.clone());
         }
         if project.find_element(id).is_none() {
             return Err(format!("Element not found: {id}"));
@@ -2002,7 +2083,35 @@ fn validate_group_create(
     if unique_ids.len() < 2 {
         return Err("At least two elements are required to create a group".to_string());
     }
-    Ok(())
+    Ok(unique_ids)
+}
+
+fn string_array(value: &serde_json::Value, key: &str) -> Result<Vec<String>, String> {
+    value
+        .get(key)
+        .and_then(|value| value.as_array())
+        .ok_or(format!("Missing {key}"))?
+        .iter()
+        .map(|value| {
+            value
+                .as_str()
+                .map(ToString::to_string)
+                .ok_or(format!("{key} must contain only strings"))
+        })
+        .collect()
+}
+
+fn min_element_coordinate(
+    project: &Project,
+    element_ids: &[String],
+    x_axis: bool,
+) -> Result<i32, String> {
+    element_ids
+        .iter()
+        .filter_map(|id| project.find_element(id))
+        .map(|element| if x_axis { element.x } else { element.y })
+        .min()
+        .ok_or("Group must contain at least one existing element".to_string())
 }
 
 fn group_ungroup(
@@ -3004,6 +3113,17 @@ mod tests {
     }
 
     #[test]
+    fn tools_list_exposes_group_upsert() {
+        let tools = get_tool_definitions();
+        let names = tools
+            .iter()
+            .filter_map(|tool| tool["name"].as_str())
+            .collect::<Vec<_>>();
+
+        assert!(names.contains(&"group_upsert"));
+    }
+
+    #[test]
     fn tools_list_exposes_alpha_ergonomics_tools() {
         let tools = get_tool_definitions();
         let names = tools
@@ -3097,6 +3217,270 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("toggleable"));
+    }
+
+    #[test]
+    fn group_upsert_creates_and_updates_existing_group() {
+        let state = test_state();
+        let project_id = {
+            let mut sessions = state.sessions.lock().unwrap();
+            let mut project = Project::new("Group Upsert", 176, 166, ModTarget::Forge);
+            for (id, x) in [("a", 8), ("b", 26), ("c", 44)] {
+                project.elements.push(
+                    parse_element_arg(&serde_json::json!({
+                        "id": id,
+                        "type": "slot",
+                        "x": x,
+                        "y": 18,
+                        "size": 18
+                    }))
+                    .unwrap(),
+                );
+            }
+            sessions.create_session(project)
+        };
+
+        let create_response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "group-upsert-create",
+                "method": "tools/call",
+                "params": {
+                    "name": "group_upsert",
+                    "arguments": {
+                        "project_id": project_id,
+                        "group_id": "machine",
+                        "element_ids": ["a", "b"]
+                    }
+                }
+            }),
+            &state,
+        );
+        assert!(create_response["error"].is_null(), "{create_response:#}");
+        let create_value = tool_text_value(&create_response);
+        assert_eq!(create_value["project_id"], project_id);
+        assert_eq!(create_value["created"], true);
+        assert_eq!(create_value["updated"], false);
+        assert_eq!(create_value["member_count"], 2);
+
+        let update_response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "group-upsert-update",
+                "method": "tools/call",
+                "params": {
+                    "name": "group_upsert",
+                    "arguments": {
+                        "project_id": project_id,
+                        "group_id": "machine",
+                        "element_ids": ["a", "c"]
+                    }
+                }
+            }),
+            &state,
+        );
+        assert!(update_response["error"].is_null(), "{update_response:#}");
+        let update_value = tool_text_value(&update_response);
+        assert_eq!(update_value["created"], false);
+        assert_eq!(update_value["updated"], true);
+        assert_eq!(update_value["member_count"], 2);
+
+        let sessions = state.sessions.lock().unwrap();
+        let session = sessions.resolve(Some(&project_id)).unwrap();
+        assert_eq!(session.project.groups.len(), 1);
+        assert_eq!(
+            session.project.groups[0].elements,
+            vec!["a".to_string(), "c".to_string()]
+        );
+        assert_eq!(session.project.groups[0].x, 8);
+        assert_eq!(session.project.groups[0].y, 18);
+        assert_eq!(session.revision, 2);
+    }
+
+    #[test]
+    fn group_upsert_no_op_does_not_change_revision() {
+        let state = test_state();
+        let project_id = {
+            let mut sessions = state.sessions.lock().unwrap();
+            let mut project = Project::new("Group Upsert Noop", 176, 166, ModTarget::Forge);
+            project.elements.push(
+                parse_element_arg(&serde_json::json!({
+                    "id": "a",
+                    "type": "slot",
+                    "x": 8,
+                    "y": 18,
+                    "size": 18
+                }))
+                .unwrap(),
+            );
+            project.elements.push(
+                parse_element_arg(&serde_json::json!({
+                    "id": "b",
+                    "type": "slot",
+                    "x": 26,
+                    "y": 18,
+                    "size": 18
+                }))
+                .unwrap(),
+            );
+            project.groups.push(crate::project::Group {
+                id: "machine".to_string(),
+                x: 8,
+                y: 18,
+                elements: vec!["a".to_string(), "b".to_string()],
+            });
+            sessions.create_session(project)
+        };
+        let before = mutation_snapshot_for(&state, &project_id);
+
+        let response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "group-upsert-noop",
+                "method": "tools/call",
+                "params": {
+                    "name": "group_upsert",
+                    "arguments": {
+                        "project_id": project_id,
+                        "group_id": "machine",
+                        "element_ids": ["a", "b"]
+                    }
+                }
+            }),
+            &state,
+        );
+
+        assert!(response["error"].is_null(), "{response:#}");
+        assert_eq!(mutation_snapshot_for(&state, &project_id), before);
+    }
+
+    #[test]
+    fn group_upsert_preserves_existing_group_position_metadata() {
+        let state = test_state();
+        let project_id = {
+            let mut sessions = state.sessions.lock().unwrap();
+            let mut project = Project::new("Group Upsert Metadata", 176, 166, ModTarget::Forge);
+            for (id, x) in [("a", 8), ("b", 26), ("c", 44)] {
+                project.elements.push(
+                    parse_element_arg(&serde_json::json!({
+                        "id": id,
+                        "type": "slot",
+                        "x": x,
+                        "y": 18,
+                        "size": 18
+                    }))
+                    .unwrap(),
+                );
+            }
+            project.groups.push(crate::project::Group {
+                id: "machine".to_string(),
+                x: 99,
+                y: 77,
+                elements: vec!["a".to_string(), "b".to_string()],
+            });
+            sessions.create_session(project)
+        };
+
+        let response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "group-upsert-metadata",
+                "method": "tools/call",
+                "params": {
+                    "name": "group_upsert",
+                    "arguments": {
+                        "project_id": project_id,
+                        "group_id": "machine",
+                        "element_ids": ["a", "c"]
+                    }
+                }
+            }),
+            &state,
+        );
+
+        assert!(response["error"].is_null(), "{response:#}");
+        let value = tool_text_value(&response);
+        assert_eq!(value["group"]["x"], 99);
+        assert_eq!(value["group"]["y"], 77);
+        assert_eq!(value["group"]["elements"], serde_json::json!(["a", "c"]));
+
+        let sessions = state.sessions.lock().unwrap();
+        let session = sessions.resolve(Some(&project_id)).unwrap();
+        assert_eq!(session.project.groups[0].x, 99);
+        assert_eq!(session.project.groups[0].y, 77);
+        assert_eq!(
+            session.project.groups[0].elements,
+            vec!["a".to_string(), "c".to_string()]
+        );
+    }
+
+    #[test]
+    fn group_upsert_removes_members_from_other_groups_and_prunes_short_groups() {
+        let state = test_state();
+        let project_id = {
+            let mut sessions = state.sessions.lock().unwrap();
+            let mut project = Project::new("Group Upsert Rehome", 176, 166, ModTarget::Forge);
+            for (id, x) in [("a", 8), ("b", 26), ("c", 44), ("d", 62)] {
+                project.elements.push(
+                    parse_element_arg(&serde_json::json!({
+                        "id": id,
+                        "type": "slot",
+                        "x": x,
+                        "y": 18,
+                        "size": 18
+                    }))
+                    .unwrap(),
+                );
+            }
+            project.groups.push(crate::project::Group {
+                id: "g1".to_string(),
+                x: 8,
+                y: 18,
+                elements: vec!["a".to_string(), "b".to_string()],
+            });
+            project.groups.push(crate::project::Group {
+                id: "g2".to_string(),
+                x: 44,
+                y: 18,
+                elements: vec!["c".to_string(), "d".to_string()],
+            });
+            sessions.create_session(project)
+        };
+
+        let response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "group-upsert-rehome",
+                "method": "tools/call",
+                "params": {
+                    "name": "group_upsert",
+                    "arguments": {
+                        "project_id": project_id,
+                        "group_id": "g1",
+                        "element_ids": ["a", "c"]
+                    }
+                }
+            }),
+            &state,
+        );
+
+        assert!(response["error"].is_null(), "{response:#}");
+        let sessions = state.sessions.lock().unwrap();
+        let session = sessions.resolve(Some(&project_id)).unwrap();
+        assert_eq!(session.revision, 1);
+        assert_eq!(session.project.groups.len(), 1);
+        assert_eq!(session.project.groups[0].id, "g1");
+        assert_eq!(
+            session.project.groups[0].elements,
+            vec!["a".to_string(), "c".to_string()]
+        );
+        assert!(session.project.groups.iter().all(|group| group.id != "g2"));
+        assert!(session
+            .project
+            .groups
+            .iter()
+            .filter(|group| group.id != "g1")
+            .all(|group| !group.elements.contains(&"c".to_string())));
     }
 
     #[test]

@@ -114,6 +114,10 @@ textures. Use `icon` plus `icon_uv` for atlas-backed icons, or `icon` alone for 
 standalone PNG. Keep `content` even for icon buttons as label, accessibility, and
 fallback metadata.
 
+Use `group_upsert` when revising group membership after elements already exist.
+It creates missing groups or replaces existing membership in one history entry;
+avoid ungrouping and recreating groups just to edit their members.
+
 5. Create and bind the progress animation.
 
 ```json

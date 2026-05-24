@@ -627,8 +627,15 @@ explicitly after resizing.
 | Tool | Description |
 |------|-------------|
 | `group_create` | Group two or more elements by `element_ids`; optional `group_id` |
+| `group_upsert` | Create or replace a group membership |
 | `group_ungroup` | Remove a group while keeping its elements |
 | `group_list` | List groups |
+
+### `group_upsert`
+
+Use `group_upsert` when editing existing groups. It creates a group if missing
+or replaces membership if present, preserving a single history entry and
+avoiding the `group_ungroup` plus `group_create` workaround.
 
 ### Animations
 
