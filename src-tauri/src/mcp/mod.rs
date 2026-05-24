@@ -400,15 +400,15 @@ fn handle_mcp_method(request: JsonRpcRequest, state: &AppState) -> JsonRpcRespon
                 .cloned()
                 .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
 
-            let revision_before = if is_mutating_tool(tool_name) {
-                project_revision_snapshot(state, &arguments)
+            let snapshot_before = if is_mutating_tool(tool_name) {
+                project_mutation_snapshot(state, &arguments)
             } else {
                 None
             };
 
             match execute_tool(tool_name, &arguments, state) {
                 Ok(content) => {
-                    if should_emit_project_changed(tool_name, state, &arguments, revision_before) {
+                    if should_emit_project_changed(tool_name, state, &arguments, snapshot_before) {
                         emit_project_changed(state, tool_name);
                     }
                     json_rpc_result(
@@ -458,21 +458,31 @@ fn json_rpc_error(
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct ProjectRevisionSnapshot {
+struct ProjectMutationSnapshot {
     project_id: String,
     revision: u64,
+    is_dirty: bool,
+    project_path: Option<String>,
+    active_project_id: Option<String>,
 }
 
-fn project_revision_snapshot(
+fn project_mutation_snapshot(
     state: &AppState,
     args: &serde_json::Value,
-) -> Option<ProjectRevisionSnapshot> {
+) -> Option<ProjectMutationSnapshot> {
     let sessions = state.sessions.lock().unwrap();
     let project_id = optional_string(args, "project_id");
+    let active_project_id = sessions
+        .active_session()
+        .ok()
+        .map(|session| session.id.clone());
     let session = sessions.resolve(project_id.as_deref()).ok()?;
-    Some(ProjectRevisionSnapshot {
+    Some(ProjectMutationSnapshot {
         project_id: session.id.clone(),
         revision: session.revision,
+        is_dirty: session.project.is_dirty,
+        project_path: session.project.project_path.clone(),
+        active_project_id,
     })
 }
 
@@ -480,14 +490,14 @@ fn should_emit_project_changed(
     tool_name: &str,
     state: &AppState,
     args: &serde_json::Value,
-    revision_before: Option<ProjectRevisionSnapshot>,
+    snapshot_before: Option<ProjectMutationSnapshot>,
 ) -> bool {
     if !is_mutating_tool(tool_name) {
         return false;
     }
 
-    let revision_after = project_revision_snapshot(state, args);
-    match (revision_before, revision_after) {
+    let snapshot_after = project_mutation_snapshot(state, args);
+    match (snapshot_before, snapshot_after) {
         (Some(before), Some(after)) => before != after,
         _ => true,
     }
@@ -2754,6 +2764,13 @@ mod tests {
             .revision
     }
 
+    fn mutation_snapshot_for(
+        state: &AppState,
+        project_id: &str,
+    ) -> Option<ProjectMutationSnapshot> {
+        project_mutation_snapshot(state, &serde_json::json!({ "project_id": project_id }))
+    }
+
     fn attached_region_project(state: &AppState) -> String {
         let mut project = Project::new("Attached Region Regression", 176, 166, ModTarget::Forge);
         project.attached_regions.push(AttachedRegion {
@@ -3051,6 +3068,45 @@ mod tests {
         let value: serde_json::Value = serde_json::from_str(content).unwrap();
         assert_eq!(value["path"], path);
         assert_eq!(value["is_dirty"], false);
+    }
+
+    #[test]
+    fn project_save_as_changes_project_mutation_snapshot() {
+        let state = test_state();
+        let path = std::env::temp_dir()
+            .join(format!(
+                "gui-crafter-mcp-save-as-snapshot-{}.mcgui",
+                uuid::Uuid::new_v4()
+            ))
+            .to_string_lossy()
+            .into_owned();
+        let project_id = {
+            let mut sessions = state.sessions.lock().unwrap();
+            sessions.create_session(Project::new("Save As Snapshot", 176, 166, ModTarget::Forge))
+        };
+        let before = mutation_snapshot_for(&state, &project_id);
+
+        let response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "save-as-snapshot",
+                "method": "tools/call",
+                "params": {
+                    "name": "project_save_as",
+                    "arguments": {
+                        "project_id": project_id,
+                        "path": path,
+                    }
+                }
+            }),
+            &state,
+        );
+        let _ = std::fs::remove_file(&path);
+        let after = mutation_snapshot_for(&state, &project_id);
+
+        assert!(response["error"].is_null());
+        assert_eq!(revision_for(&state, &project_id), 0);
+        assert_ne!(before, after);
     }
 
     #[test]
@@ -3525,6 +3581,7 @@ mod tests {
     fn attached_region_no_op_update_and_move_do_not_change_revision() {
         let state = test_state();
         let project_id = attached_region_project(&state);
+        let before = mutation_snapshot_for(&state, &project_id);
 
         let update_response = attached_region_tool_call(
             &state,
@@ -3553,12 +3610,14 @@ mod tests {
         assert!(update_response["error"].is_null());
         assert!(move_response["error"].is_null());
         assert_eq!(revision_for(&state, &project_id), 0);
+        assert_eq!(mutation_snapshot_for(&state, &project_id), before);
     }
 
     #[test]
     fn attached_region_missing_remove_returns_false_without_revision_change() {
         let state = test_state();
         let project_id = attached_region_project(&state);
+        let before = mutation_snapshot_for(&state, &project_id);
 
         let response = attached_region_tool_call(
             &state,
@@ -3571,6 +3630,7 @@ mod tests {
         let value = tool_text_value(&response);
         assert_eq!(value["removed"], false);
         assert_eq!(revision_for(&state, &project_id), 0);
+        assert_eq!(mutation_snapshot_for(&state, &project_id), before);
     }
 
     #[test]
