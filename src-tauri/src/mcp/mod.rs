@@ -947,6 +947,11 @@ fn semantic_groups_props() -> serde_json::Value {
                     "visible_rows": { "type": "integer", "description": "Visible row count" },
                     "total_rows": { "type": "integer", "description": "Total row count" },
                     "slot_count": { "type": "integer", "description": "Total slot count" },
+                    "member_ids": {
+                        "type": "array",
+                        "description": "Explicit element IDs that belong to this semantic group",
+                        "items": { "type": "string" }
+                    },
                     "data_source": { "type": "string", "description": "Semantic data source key" },
                     "scroll_binding": { "type": "string", "description": "Scroll binding ID" },
                     "dynamic_height": { "type": "boolean", "description": "Whether this group can change height dynamically" }
@@ -1662,6 +1667,7 @@ fn slot_grid_add(
             visible_rows: Some(rows),
             total_rows: Some(rows),
             slot_count: Some(semantic_slot_count.unwrap_or(elements.len() as u32)),
+            member_ids: elements.iter().map(|element| element.id.clone()).collect(),
             data_source: Some(inventory_group),
             scroll_binding: scroll_binding.clone(),
             dynamic_height: false,
@@ -3631,6 +3637,20 @@ mod tests {
     }
 
     #[test]
+    fn semantic_groups_schema_exposes_member_ids() {
+        let tools = get_tool_definitions();
+        let tool = tools
+            .iter()
+            .find(|tool| tool["name"] == "project_semantic_groups_update")
+            .unwrap();
+        let properties =
+            &tool["inputSchema"]["properties"]["semantic_groups"]["items"]["properties"];
+
+        assert_eq!(properties["member_ids"]["type"], "array");
+        assert_eq!(properties["member_ids"]["items"]["type"], "string");
+    }
+
+    #[test]
     fn export_props_accept_codegen_override() {
         let schema = export_props();
         let properties = schema["properties"].as_object().unwrap();
@@ -5444,6 +5464,7 @@ mod tests {
             visible_rows: Some(1),
             total_rows: Some(1),
             slot_count: Some(9),
+            member_ids: Vec::new(),
             data_source: Some("old".to_string()),
             scroll_binding: None,
             dynamic_height: false,

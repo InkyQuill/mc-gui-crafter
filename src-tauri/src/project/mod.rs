@@ -107,6 +107,8 @@ pub struct SemanticGroup {
     pub total_rows: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub slot_count: Option<u32>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub member_ids: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub data_source: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -770,6 +772,34 @@ impl Project {
 mod tests {
     use super::*;
     use image::{Rgba, RgbaImage};
+
+    #[test]
+    fn semantic_group_member_ids_round_trip_with_default_empty() {
+        let json = serde_json::json!({
+            "id": "controls",
+            "kind": "control_buttons",
+            "member_ids": ["settings_button", "lock_button"],
+            "data_source": "pouch_settings"
+        });
+
+        let group: SemanticGroup = serde_json::from_value(json.clone()).unwrap();
+        assert_eq!(group.member_ids, vec!["settings_button", "lock_button"]);
+        assert_eq!(
+            serde_json::to_value(&group).unwrap()["member_ids"],
+            json["member_ids"]
+        );
+
+        let without_members: SemanticGroup = serde_json::from_value(serde_json::json!({
+            "id": "inventory",
+            "kind": "player_inventory"
+        }))
+        .unwrap();
+        assert!(without_members.member_ids.is_empty());
+        assert!(serde_json::to_value(&without_members)
+            .unwrap()
+            .get("member_ids")
+            .is_none());
+    }
 
     fn sample_element_defaults() -> Element {
         Element {

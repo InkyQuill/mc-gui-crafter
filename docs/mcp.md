@@ -400,6 +400,10 @@ Elements can then reference those groups with fields such as `slot_role`,
 `slot_index`, `inventory_group`, `scroll_binding`, and scrollbar fields like
 `target_group`, `columns`, `visible_rows`, and `total_rows`.
 
+Semantic groups may include `member_ids` for explicit membership. Use it for
+non-rectangular fixed slot groups and control button groups. Export preview
+warns when explicit members are missing or have the wrong element type.
+
 Accepted slot roles:
 
 - `machine`

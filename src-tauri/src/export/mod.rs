@@ -4,6 +4,7 @@ use crate::project::{
     SemanticGroupKind, SlotRole,
 };
 use std::borrow::Cow;
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -516,8 +517,16 @@ fn semantic_integrity_warnings(project: &Project) -> Vec<String> {
     let mut warnings = Vec::new();
 
     for group in &project.semantic_groups {
+        let explicit_members = explicit_member_elements(project, group);
+        warnings.extend(duplicate_member_warnings(group));
+        warnings.extend(
+            explicit_members
+                .iter()
+                .filter_map(|member| member.as_ref().err().map(std::string::ToString::to_string)),
+        );
+
         if let Some(slot_count) = slot_count_requirement(group) {
-            let matching = count_matching_group_elements(project, group);
+            let matching = count_matching_group_elements(project, group, &explicit_members);
             if matching != slot_count {
                 let qualifier = if matching < slot_count { "only " } else { "" };
                 warnings.push(format!(
@@ -545,16 +554,99 @@ fn semantic_integrity_warnings(project: &Project) -> Vec<String> {
             }
         }
 
-        warnings.extend(control_button_warnings(project, group));
+        warnings.extend(control_button_warnings(project, group, &explicit_members));
     }
 
     warnings
 }
 
-fn control_button_warnings(project: &Project, group: &SemanticGroup) -> Vec<String> {
+fn explicit_member_elements<'a>(
+    project: &'a Project,
+    group: &SemanticGroup,
+) -> Vec<Result<&'a crate::project::Element, String>> {
+    group
+        .member_ids
+        .iter()
+        .map(|id| {
+            project
+                .elements
+                .iter()
+                .find(|element| element.id == *id)
+                .ok_or_else(|| {
+                    format!(
+                        "Semantic group '{}' references missing element '{}'.",
+                        group.id, id
+                    )
+                })
+        })
+        .collect()
+}
+
+fn duplicate_member_warnings(group: &SemanticGroup) -> Vec<String> {
+    let mut seen = HashSet::new();
+    let mut warned = HashSet::new();
+    group
+        .member_ids
+        .iter()
+        .filter(|id| !seen.insert(id.as_str()) && warned.insert(id.as_str()))
+        .map(|id| {
+            format!(
+                "Semantic group '{}' references duplicate member id '{}'.",
+                group.id, id
+            )
+        })
+        .collect()
+}
+
+fn control_button_warnings(
+    project: &Project,
+    group: &SemanticGroup,
+    explicit_members: &[Result<&crate::project::Element, String>],
+) -> Vec<String> {
     if group.kind != SemanticGroupKind::ControlButtons {
         return Vec::new();
     }
+    if !group.member_ids.is_empty() {
+        let explicit_buttons = distinct_resolved_explicit_members(explicit_members)
+            .filter(|element| {
+                matches!(
+                    element.element_type,
+                    ElementType::Button | ElementType::ToggleButton
+                )
+            })
+            .count();
+        let mut warnings = distinct_resolved_explicit_members(explicit_members)
+            .filter(|element| {
+                !matches!(
+                    element.element_type,
+                    ElementType::Button | ElementType::ToggleButton
+                )
+            })
+            .map(|element| {
+                format!(
+                    "Semantic group '{}' references non-button element '{}'.",
+                    group.id, element.id
+                )
+            })
+            .collect::<Vec<_>>();
+
+        if let Some(expected) = group.slot_count.map(|slot_count| slot_count as usize) {
+            if explicit_buttons != expected {
+                let qualifier = if explicit_buttons < expected {
+                    "only "
+                } else {
+                    ""
+                };
+                warnings.push(format!(
+                    "Semantic group '{}' declares {} control buttons but {}{} matching button elements were found.",
+                    group.id, expected, qualifier, explicit_buttons
+                ));
+            }
+        }
+
+        return warnings;
+    }
+
     let Some(expected) = group.slot_count.map(|slot_count| slot_count as usize) else {
         return Vec::new();
     };
@@ -600,7 +692,18 @@ fn slot_count_requirement(group: &SemanticGroup) -> Option<u32> {
     }
 }
 
-fn count_matching_group_elements(project: &Project, group: &SemanticGroup) -> u32 {
+fn count_matching_group_elements(
+    project: &Project,
+    group: &SemanticGroup,
+    explicit_members: &[Result<&crate::project::Element, String>],
+) -> u32 {
+    if !group.member_ids.is_empty() {
+        return distinct_resolved_explicit_members(explicit_members)
+            .filter(|element| element.element_type == ElementType::Slot)
+            .filter(|element| slot_role_matches_group(element.slot_role.as_ref(), &group.kind))
+            .count() as u32;
+    }
+
     project
         .elements
         .iter()
@@ -608,6 +711,20 @@ fn count_matching_group_elements(project: &Project, group: &SemanticGroup) -> u3
         .filter(|element| element.inventory_group.as_deref() == Some(group.id.as_str()))
         .filter(|element| slot_role_matches_group(element.slot_role.as_ref(), &group.kind))
         .count() as u32
+}
+
+fn distinct_resolved_explicit_members<'a>(
+    explicit_members: &'a [Result<&'a crate::project::Element, String>],
+) -> impl Iterator<Item = &'a crate::project::Element> + 'a {
+    let mut seen = HashSet::new();
+    explicit_members.iter().filter_map(move |member| {
+        let element = member.as_ref().ok().copied()?;
+        if seen.insert(element.id.as_str()) {
+            Some(element)
+        } else {
+            None
+        }
+    })
 }
 
 fn slot_role_matches_group(slot_role: Option<&SlotRole>, kind: &SemanticGroupKind) -> bool {
@@ -2546,6 +2663,7 @@ mod tests {
             visible_rows: Some(3),
             total_rows: Some(3),
             slot_count: Some(27),
+            member_ids: Vec::new(),
             data_source: Some("player_inventory".to_string()),
             scroll_binding: None,
             dynamic_height: false,
@@ -2598,6 +2716,7 @@ mod tests {
             visible_rows: Some(3),
             total_rows: Some(3),
             slot_count: Some(27),
+            member_ids: Vec::new(),
             data_source: Some("player_inventory".to_string()),
             scroll_binding: None,
             dynamic_height: false,
@@ -2651,6 +2770,7 @@ mod tests {
                 visible_rows: None,
                 total_rows: None,
                 slot_count: None,
+                member_ids: Vec::new(),
                 data_source: Some("query".to_string()),
                 scroll_binding: Some("search_scroll_metadata".to_string()),
                 dynamic_height: false,
@@ -2662,6 +2782,7 @@ mod tests {
                 visible_rows: None,
                 total_rows: None,
                 slot_count: None,
+                member_ids: Vec::new(),
                 data_source: Some("controls".to_string()),
                 scroll_binding: Some("button_scroll_metadata".to_string()),
                 dynamic_height: false,
@@ -2692,6 +2813,7 @@ mod tests {
                 visible_rows: Some(3),
                 total_rows: Some(6),
                 slot_count: Some(30),
+                member_ids: Vec::new(),
                 data_source: Some("missing_scrollbar".to_string()),
                 scroll_binding: Some("missing_scroll".to_string()),
                 dynamic_height: false,
@@ -2703,6 +2825,7 @@ mod tests {
                 visible_rows: Some(3),
                 total_rows: Some(6),
                 slot_count: Some(30),
+                member_ids: Vec::new(),
                 data_source: Some("missing_binding".to_string()),
                 scroll_binding: None,
                 dynamic_height: true,
@@ -2738,6 +2861,7 @@ mod tests {
             visible_rows: None,
             total_rows: None,
             slot_count: Some(1),
+            member_ids: Vec::new(),
             data_source: Some("settings".into()),
             scroll_binding: None,
             dynamic_height: false,
@@ -2762,6 +2886,7 @@ mod tests {
             visible_rows: None,
             total_rows: None,
             slot_count: Some(1),
+            member_ids: Vec::new(),
             data_source: None,
             scroll_binding: None,
             dynamic_height: false,
@@ -2796,6 +2921,7 @@ mod tests {
             visible_rows: None,
             total_rows: None,
             slot_count: None,
+            member_ids: Vec::new(),
             data_source: Some("settings".into()),
             scroll_binding: None,
             dynamic_height: false,
@@ -2809,6 +2935,147 @@ mod tests {
                 .iter()
                 .all(|warning| !warning.contains("settings") || !warning.contains("button")),
             "data-source-only control metadata should not require a button: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn semantic_warnings_report_missing_explicit_members() {
+        let mut project = Project::new("Explicit Members", 176, 166, ModTarget::Forge);
+        project.export_settings.codegen_mode = CodegenMode::Modular;
+        project.semantic_groups.push(SemanticGroup {
+            id: "controls".into(),
+            kind: SemanticGroupKind::ControlButtons,
+            columns: None,
+            visible_rows: None,
+            total_rows: None,
+            slot_count: None,
+            member_ids: vec!["missing_button".into()],
+            data_source: None,
+            scroll_binding: None,
+            dynamic_height: false,
+        });
+        let settings = project.export_settings.clone().normalized();
+
+        let warnings = semantic_warnings(&project, &settings);
+
+        assert!(
+            warnings
+                .iter()
+                .any(|warning| warning.contains("references missing element 'missing_button'")),
+            "missing explicit member should warn: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn semantic_warnings_report_non_button_control_members() {
+        let mut project = Project::new("Explicit Members", 176, 166, ModTarget::Forge);
+        project.export_settings.codegen_mode = CodegenMode::Modular;
+        project.elements.push(semantic_slot_element(
+            "slot_as_button",
+            SlotRole::PlayerInventory,
+            "controls",
+            0,
+        ));
+        project.semantic_groups.push(SemanticGroup {
+            id: "controls".into(),
+            kind: SemanticGroupKind::ControlButtons,
+            columns: None,
+            visible_rows: None,
+            total_rows: None,
+            slot_count: None,
+            member_ids: vec!["slot_as_button".into()],
+            data_source: None,
+            scroll_binding: None,
+            dynamic_height: false,
+        });
+        let settings = project.export_settings.clone().normalized();
+
+        let warnings = semantic_warnings(&project, &settings);
+
+        assert!(
+            warnings.iter().any(|warning| {
+                warning.contains("references non-button element 'slot_as_button'")
+            }),
+            "non-button explicit control member should warn: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn semantic_warnings_report_explicit_control_member_count_mismatch() {
+        let mut project = Project::new("Explicit Members", 176, 166, ModTarget::Forge);
+        project.export_settings.codegen_mode = CodegenMode::Modular;
+        project.elements.push(button_element(
+            "settings_button",
+            ElementType::Button,
+            8,
+            8,
+            Some("Settings"),
+        ));
+        project.semantic_groups.push(SemanticGroup {
+            id: "controls".into(),
+            kind: SemanticGroupKind::ControlButtons,
+            columns: None,
+            visible_rows: None,
+            total_rows: None,
+            slot_count: Some(2),
+            member_ids: vec!["settings_button".into()],
+            data_source: None,
+            scroll_binding: None,
+            dynamic_height: false,
+        });
+        let settings = project.export_settings.clone().normalized();
+
+        let warnings = semantic_warnings(&project, &settings);
+
+        assert!(
+            warnings.iter().any(|warning| {
+                warning.contains("declares 2")
+                    && warning.contains("only 1")
+                    && warning.contains("matching")
+            }),
+            "explicit control member count mismatch should warn: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn semantic_warnings_report_duplicate_explicit_slot_members_and_count_distinct() {
+        let mut project = Project::new("Explicit Members", 176, 166, ModTarget::Forge);
+        project.export_settings.codegen_mode = CodegenMode::Modular;
+        project.elements.push(semantic_slot_element(
+            "slot_0",
+            SlotRole::PlayerInventory,
+            "player_inventory",
+            0,
+        ));
+        project.semantic_groups.push(SemanticGroup {
+            id: "player_inventory".into(),
+            kind: SemanticGroupKind::PlayerInventory,
+            columns: Some(9),
+            visible_rows: Some(1),
+            total_rows: Some(1),
+            slot_count: Some(2),
+            member_ids: vec!["slot_0".into(), "slot_0".into()],
+            data_source: None,
+            scroll_binding: None,
+            dynamic_height: false,
+        });
+        let settings = project.export_settings.clone().normalized();
+
+        let warnings = semantic_warnings(&project, &settings);
+
+        assert!(
+            warnings
+                .iter()
+                .any(|warning| { warning.contains("references duplicate member id 'slot_0'") }),
+            "duplicate explicit member should warn: {warnings:?}"
+        );
+        assert!(
+            warnings.iter().any(|warning| {
+                warning.contains("declares 2")
+                    && warning.contains("only 1")
+                    && warning.contains("matching")
+            }),
+            "duplicate explicit slot member should count once: {warnings:?}"
         );
     }
 

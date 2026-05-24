@@ -358,6 +358,7 @@ mod tests {
             visible_rows: Some(3),
             total_rows: Some(6),
             slot_count: Some(54),
+            member_ids: Vec::new(),
             data_source: Some("machine_buffer".to_string()),
             scroll_binding: Some("buffer_scroll".to_string()),
             dynamic_height: true,
