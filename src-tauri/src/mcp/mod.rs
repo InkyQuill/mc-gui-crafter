@@ -9,7 +9,7 @@ use tauri::{AppHandle, Emitter, Manager};
 
 use crate::animation::Animation;
 use crate::project::{
-    CodegenMode, Element, ModTarget, Project, ProjectSessionManager, SemanticGroup,
+    AttachedRegion, CodegenMode, Element, ModTarget, Project, ProjectSessionManager, SemanticGroup,
 };
 use crate::{templates, AppState};
 
@@ -18,6 +18,9 @@ const SERVER_NAME: &str = "mc-gui-crafter";
 const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
 const SLOT_ROLE_DESCRIPTION: &str = "Accepted values: machine, player_inventory, hotbar, scrollable_inventory, virtual_storage, upgrade, upgrade_settings, filter, ghost, offhand.";
 const SEMANTIC_GROUP_KIND_DESCRIPTION: &str = "Accepted values: fixed_slots, virtual_slot_grid, player_inventory, hotbar, upgrade_slots, upgrade_panel, search_field, control_buttons.";
+const ATTACHED_REGION_ANCHOR_DESCRIPTION: &str =
+    "Attached region anchor. Accepted values: left, right, top, bottom, free.";
+const ATTACHED_REGION_STATE_DESCRIPTION: &str = "Attached region state. Accepted values: static, toggleable. Toggleable is metadata only in this release.";
 
 pub struct McpServerHandle {
     address: SocketAddr,
@@ -476,6 +479,7 @@ fn is_mutating_tool(tool_name: &str) -> bool {
             | "project_screenshot"
             | "element_list"
             | "group_list"
+            | "attached_region_list"
             | "animation_list"
             | "asset_list"
             | "asset_get_data_url"
@@ -660,6 +664,43 @@ fn get_tool_definitions() -> Vec<serde_json::Value> {
             project_props(&[("group_id", "string", "Group ID", true)]),
         ),
         td("group_list", "List groups", project_props(&[])),
+        td(
+            "attached_region_add",
+            "Add an attached region",
+            attached_region_props(true),
+        ),
+        td(
+            "attached_region_update",
+            "Update attached region fields",
+            project_props(&[
+                ("id", "string", "Attached region ID", true),
+                (
+                    "changes",
+                    "object",
+                    "Attached region fields to update",
+                    true,
+                ),
+            ]),
+        ),
+        td(
+            "attached_region_remove",
+            "Remove an attached region",
+            project_props(&[("id", "string", "Attached region ID", true)]),
+        ),
+        td(
+            "attached_region_list",
+            "List attached regions",
+            project_props(&[]),
+        ),
+        td(
+            "attached_region_move_with_elements",
+            "Move an attached region and its attached child elements",
+            project_props(&[
+                ("id", "string", "Attached region ID", true),
+                ("x", "integer", "New X", true),
+                ("y", "integer", "New Y", true),
+            ]),
+        ),
         td(
             "animation_create",
             "Create an animation",
@@ -890,6 +931,61 @@ fn slot_grid_props() -> serde_json::Value {
     ])
 }
 
+fn attached_region_props(require_region: bool) -> serde_json::Value {
+    project_schema(vec![
+        (
+            "id",
+            serde_json::json!({ "type": "string", "description": "Attached region ID" }),
+            require_region,
+        ),
+        (
+            "anchor",
+            serde_json::json!({ "type": "string", "description": ATTACHED_REGION_ANCHOR_DESCRIPTION }),
+            require_region,
+        ),
+        (
+            "x",
+            serde_json::json!({ "type": "integer", "description": "Attached region X" }),
+            require_region,
+        ),
+        (
+            "y",
+            serde_json::json!({ "type": "integer", "description": "Attached region Y" }),
+            require_region,
+        ),
+        (
+            "width",
+            serde_json::json!({ "type": "integer", "description": "Attached region width" }),
+            require_region,
+        ),
+        (
+            "height",
+            serde_json::json!({ "type": "integer", "description": "Attached region height" }),
+            require_region,
+        ),
+        (
+            "state",
+            serde_json::json!({ "type": "string", "description": ATTACHED_REGION_STATE_DESCRIPTION }),
+            false,
+        ),
+        (
+            "kind",
+            serde_json::json!({ "type": "string", "description": "Attached region kind" }),
+            false,
+        ),
+        (
+            "semantic_group",
+            serde_json::json!({ "type": "string", "description": "Semantic group ID for this attached region" }),
+            false,
+        ),
+        (
+            "visible",
+            serde_json::json!({ "type": "boolean", "description": "Whether this attached region is visible" }),
+            false,
+        ),
+    ])
+}
+
 fn props(items: &[(&str, &str, &str, bool)]) -> serde_json::Value {
     let mut required = Vec::new();
     let mut properties = serde_json::Map::new();
@@ -975,6 +1071,13 @@ fn execute_tool(
         "group_list" => {
             let session = sessions.resolve(project_id)?;
             Ok(serde_json::json!({ "groups": session.project.groups }))
+        }
+        "attached_region_add" => attached_region_add(&mut sessions, project_id, args),
+        "attached_region_update" => attached_region_update(&mut sessions, project_id, args),
+        "attached_region_remove" => attached_region_remove(&mut sessions, project_id, args),
+        "attached_region_list" => attached_region_list(&sessions, project_id),
+        "attached_region_move_with_elements" => {
+            attached_region_move_with_elements(&mut sessions, project_id, args)
         }
         "animation_create" => animation_create(&mut sessions, project_id, args),
         "animation_update" => animation_update(&mut sessions, project_id, args),
@@ -1752,6 +1855,222 @@ fn group_ungroup(
     Ok(serde_json::json!({ "removed": removed }))
 }
 
+fn attached_region_add(
+    sessions: &mut ProjectSessionManager,
+    project_id: Option<&str>,
+    args: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let region = parse_attached_region_arg(args)?;
+    let project = &sessions.resolve(project_id)?.project;
+    if project.find_attached_region(&region.id).is_some() {
+        return Err(format!("Attached region already exists: {}", region.id));
+    }
+
+    sessions.record_history(project_id)?;
+    let session = sessions.resolve_mut(project_id)?;
+    session.project.attached_regions.push(region.clone());
+    sessions.mark_changed(project_id)?;
+    serde_json::to_value(region).map_err(|error| error.to_string())
+}
+
+fn attached_region_update(
+    sessions: &mut ProjectSessionManager,
+    project_id: Option<&str>,
+    args: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let id = required_str(args, "id")?;
+    let changes = args
+        .get("changes")
+        .ok_or("Missing changes")?
+        .as_object()
+        .ok_or("Attached region changes must be an object")?;
+    let current = sessions
+        .resolve(project_id)?
+        .project
+        .find_attached_region(id)
+        .ok_or_else(|| format!("Attached region not found: {id}"))?;
+    if changes
+        .get("id")
+        .is_some_and(|value| value.as_str() != Some(current.id.as_str()))
+    {
+        return Err("Attached region id cannot be changed".to_string());
+    }
+
+    let mut value = serde_json::to_value(current)
+        .map_err(|error| format!("Failed to encode attached region: {error}"))?;
+    let target = value
+        .as_object_mut()
+        .ok_or("Attached region payload must be an object")?;
+    for (key, value) in changes {
+        if key == "id" {
+            continue;
+        }
+        target.insert(key.clone(), value.clone());
+    }
+    let updated: AttachedRegion = serde_json::from_value(value)
+        .map_err(|error| format!("Invalid attached region update: {error}"))?;
+    if &updated == current {
+        return serde_json::to_value(current).map_err(|error| error.to_string());
+    }
+
+    sessions.record_history(project_id)?;
+    let session = sessions.resolve_mut(project_id)?;
+    *session
+        .project
+        .find_attached_region_mut(id)
+        .ok_or_else(|| format!("Attached region not found: {id}"))? = updated.clone();
+    sessions.mark_changed(project_id)?;
+    serde_json::to_value(updated).map_err(|error| error.to_string())
+}
+
+fn attached_region_remove(
+    sessions: &mut ProjectSessionManager,
+    project_id: Option<&str>,
+    args: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let id = required_str(args, "id")?;
+    let project = &sessions.resolve(project_id)?.project;
+    if project.find_attached_region(id).is_none() {
+        return Ok(serde_json::json!({ "removed": false }));
+    }
+
+    sessions.record_history(project_id)?;
+    let session = sessions.resolve_mut(project_id)?;
+    session
+        .project
+        .attached_regions
+        .retain(|region| region.id != id);
+    for element in &mut session.project.elements {
+        if element.attached_region.as_deref() == Some(id) {
+            element.attached_region = None;
+        }
+    }
+    sessions.mark_changed(project_id)?;
+    Ok(serde_json::json!({ "removed": true }))
+}
+
+fn attached_region_list(
+    sessions: &ProjectSessionManager,
+    project_id: Option<&str>,
+) -> Result<serde_json::Value, String> {
+    let session = sessions.resolve(project_id)?;
+    Ok(serde_json::json!({ "attached_regions": session.project.attached_regions }))
+}
+
+fn attached_region_move_with_elements(
+    sessions: &mut ProjectSessionManager,
+    project_id: Option<&str>,
+    args: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let id = required_str(args, "id")?.to_string();
+    let x = required_i32(args, "x")?;
+    let y = required_i32(args, "y")?;
+    let project = &sessions.resolve(project_id)?.project;
+    let current = project
+        .find_attached_region(&id)
+        .ok_or_else(|| format!("Attached region not found: {id}"))?;
+    if current.x == x && current.y == y {
+        return serde_json::to_value(current).map_err(|error| error.to_string());
+    }
+
+    let dx = x
+        .checked_sub(current.x)
+        .ok_or("Attached region move overflow")?;
+    let dy = y
+        .checked_sub(current.y)
+        .ok_or("Attached region move overflow")?;
+    let moved_child_ids = project
+        .elements
+        .iter()
+        .filter(|element| element.attached_region.as_deref() == Some(id.as_str()))
+        .map(|element| {
+            element
+                .x
+                .checked_add(dx)
+                .ok_or("Attached region child move overflow")?;
+            element
+                .y
+                .checked_add(dy)
+                .ok_or("Attached region child move overflow")?;
+            Ok(element.id.clone())
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+
+    sessions.record_history(project_id)?;
+    let session = sessions.resolve_mut(project_id)?;
+    let updated = {
+        let region = session
+            .project
+            .find_attached_region_mut(&id)
+            .ok_or_else(|| format!("Attached region not found: {id}"))?;
+        region.x = x;
+        region.y = y;
+        region.clone()
+    };
+    for element in &mut session.project.elements {
+        if element.attached_region.as_deref() == Some(id.as_str()) {
+            element.x = element
+                .x
+                .checked_add(dx)
+                .ok_or("Attached region child move overflow")?;
+            element.y = element
+                .y
+                .checked_add(dy)
+                .ok_or("Attached region child move overflow")?;
+        }
+    }
+    refresh_group_positions_for_elements(&mut session.project, &moved_child_ids);
+    sessions.mark_changed(project_id)?;
+    serde_json::to_value(updated).map_err(|error| error.to_string())
+}
+
+fn parse_attached_region_arg(args: &serde_json::Value) -> Result<AttachedRegion, String> {
+    let mut payload = args.clone();
+    let object = payload
+        .as_object_mut()
+        .ok_or("Attached region payload must be an object")?;
+    object
+        .entry("state".to_string())
+        .or_insert_with(|| serde_json::json!("static"));
+    object
+        .entry("visible".to_string())
+        .or_insert(serde_json::Value::Bool(true));
+    serde_json::from_value(payload)
+        .map_err(|error| format!("Invalid attached region payload: {error}"))
+}
+
+fn refresh_group_positions_for_elements(project: &mut Project, moved_ids: &[String]) {
+    if moved_ids.is_empty() {
+        return;
+    }
+
+    let elements = &project.elements;
+    for group in &mut project.groups {
+        if !group
+            .elements
+            .iter()
+            .any(|element_id| moved_ids.iter().any(|moved_id| moved_id == element_id))
+        {
+            continue;
+        }
+
+        let mut positions = group.elements.iter().filter_map(|element_id| {
+            elements
+                .iter()
+                .find(|element| element.id == *element_id)
+                .map(|element| (element.x, element.y))
+        });
+        if let Some((mut min_x, mut min_y)) = positions.next() {
+            for (x, y) in positions {
+                min_x = min_x.min(x);
+                min_y = min_y.min(y);
+            }
+            group.x = min_x;
+            group.y = min_y;
+        }
+    }
+}
+
 fn animation_create(
     sessions: &mut ProjectSessionManager,
     project_id: Option<&str>,
@@ -2435,6 +2754,32 @@ mod tests {
     }
 
     #[test]
+    fn tools_list_exposes_attached_region_tools() {
+        let state = test_state();
+
+        let response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "tools",
+                "method": "tools/list"
+            }),
+            &state,
+        );
+        let names = response["result"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|tool| tool["name"].as_str())
+            .collect::<Vec<_>>();
+
+        assert!(names.contains(&"attached_region_add"));
+        assert!(names.contains(&"attached_region_update"));
+        assert!(names.contains(&"attached_region_remove"));
+        assert!(names.contains(&"attached_region_list"));
+        assert!(names.contains(&"attached_region_move_with_elements"));
+    }
+
+    #[test]
     fn semantic_groups_schema_describes_object_array_and_enums() {
         let tools = get_tool_definitions();
         let tool = tools
@@ -2878,6 +3223,91 @@ mod tests {
         assert_eq!(active.project.elements[0].id, "slot_1");
         assert_eq!(active.revision, 1);
         assert!(active.project.is_dirty);
+    }
+
+    #[test]
+    fn attached_region_add_and_move_with_elements_mutate_live_session() {
+        let state = test_state();
+        let project_id = {
+            let mut sessions = state.sessions.lock().unwrap();
+            sessions.create_session(Project::new("Attached Regions", 176, 166, ModTarget::Forge))
+        };
+
+        let add_region_response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "attached-region-add",
+                "method": "tools/call",
+                "params": {
+                    "name": "attached_region_add",
+                    "arguments": {
+                        "project_id": project_id,
+                        "id": "returns_pocket",
+                        "anchor": "right",
+                        "x": 100,
+                        "y": 18,
+                        "width": 54,
+                        "height": 72,
+                        "state": "static",
+                        "kind": "returns_pocket",
+                        "semantic_group": "food_returns"
+                    }
+                }
+            }),
+            &state,
+        );
+        assert!(add_region_response["error"].is_null());
+
+        let add_element_response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "attached-region-child-add",
+                "method": "tools/call",
+                "params": {
+                    "name": "element_add",
+                    "arguments": {
+                        "project_id": project_id,
+                        "id": "returns_0",
+                        "type": "slot",
+                        "x": 108,
+                        "y": 26,
+                        "size": 18,
+                        "attached_region": "returns_pocket"
+                    }
+                }
+            }),
+            &state,
+        );
+        assert!(add_element_response["error"].is_null());
+
+        let move_response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "attached-region-move",
+                "method": "tools/call",
+                "params": {
+                    "name": "attached_region_move_with_elements",
+                    "arguments": {
+                        "project_id": project_id,
+                        "id": "returns_pocket",
+                        "x": 110,
+                        "y": 28
+                    }
+                }
+            }),
+            &state,
+        );
+        assert!(move_response["error"].is_null());
+
+        let sessions = state.sessions.lock().unwrap();
+        let active = sessions.active_session().unwrap();
+        let region = active
+            .project
+            .find_attached_region("returns_pocket")
+            .unwrap();
+        let child = active.project.find_element("returns_0").unwrap();
+        assert_eq!(region.x, 110);
+        assert_eq!(child.x, 118);
     }
 
     #[test]
