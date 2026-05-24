@@ -400,9 +400,15 @@ fn handle_mcp_method(request: JsonRpcRequest, state: &AppState) -> JsonRpcRespon
                 .cloned()
                 .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
 
+            let revision_before = if is_mutating_tool(tool_name) {
+                project_revision_snapshot(state, &arguments)
+            } else {
+                None
+            };
+
             match execute_tool(tool_name, &arguments, state) {
                 Ok(content) => {
-                    if is_mutating_tool(tool_name) {
+                    if should_emit_project_changed(tool_name, state, &arguments, revision_before) {
                         emit_project_changed(state, tool_name);
                     }
                     json_rpc_result(
@@ -448,6 +454,42 @@ fn json_rpc_error(
             code,
             message: message.into(),
         }),
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ProjectRevisionSnapshot {
+    project_id: String,
+    revision: u64,
+}
+
+fn project_revision_snapshot(
+    state: &AppState,
+    args: &serde_json::Value,
+) -> Option<ProjectRevisionSnapshot> {
+    let sessions = state.sessions.lock().unwrap();
+    let project_id = optional_string(args, "project_id");
+    let session = sessions.resolve(project_id.as_deref()).ok()?;
+    Some(ProjectRevisionSnapshot {
+        project_id: session.id.clone(),
+        revision: session.revision,
+    })
+}
+
+fn should_emit_project_changed(
+    tool_name: &str,
+    state: &AppState,
+    args: &serde_json::Value,
+    revision_before: Option<ProjectRevisionSnapshot>,
+) -> bool {
+    if !is_mutating_tool(tool_name) {
+        return false;
+    }
+
+    let revision_after = project_revision_snapshot(state, args);
+    match (revision_before, revision_after) {
+        (Some(before), Some(after)) => before != after,
+        _ => true,
     }
 }
 
@@ -672,15 +714,7 @@ fn get_tool_definitions() -> Vec<serde_json::Value> {
         td(
             "attached_region_update",
             "Update attached region fields",
-            project_props(&[
-                ("id", "string", "Attached region ID", true),
-                (
-                    "changes",
-                    "object",
-                    "Attached region fields to update",
-                    true,
-                ),
-            ]),
+            attached_region_update_props(),
         ),
         td(
             "attached_region_remove",
@@ -965,7 +999,7 @@ fn attached_region_props(require_region: bool) -> serde_json::Value {
         ),
         (
             "state",
-            serde_json::json!({ "type": "string", "description": ATTACHED_REGION_STATE_DESCRIPTION }),
+            serde_json::json!({ "type": "string", "description": format!("{ATTACHED_REGION_STATE_DESCRIPTION} Defaults to static when omitted.") }),
             false,
         ),
         (
@@ -980,8 +1014,64 @@ fn attached_region_props(require_region: bool) -> serde_json::Value {
         ),
         (
             "visible",
-            serde_json::json!({ "type": "boolean", "description": "Whether this attached region is visible" }),
+            serde_json::json!({ "type": "boolean", "description": "Whether this attached region is visible. Defaults to true when omitted." }),
             false,
+        ),
+    ])
+}
+
+fn attached_region_update_props() -> serde_json::Value {
+    project_schema(vec![
+        (
+            "id",
+            serde_json::json!({ "type": "string", "description": "Attached region ID" }),
+            true,
+        ),
+        (
+            "changes",
+            serde_json::json!({
+                "type": "object",
+                "description": "Attached region fields to update; id cannot be changed.",
+                "properties": {
+                    "anchor": {
+                        "type": "string",
+                        "description": ATTACHED_REGION_ANCHOR_DESCRIPTION
+                    },
+                    "x": {
+                        "type": "integer",
+                        "description": "Attached region X coordinate"
+                    },
+                    "y": {
+                        "type": "integer",
+                        "description": "Attached region Y coordinate"
+                    },
+                    "width": {
+                        "type": "integer",
+                        "description": "Attached region width"
+                    },
+                    "height": {
+                        "type": "integer",
+                        "description": "Attached region height"
+                    },
+                    "state": {
+                        "type": "string",
+                        "description": ATTACHED_REGION_STATE_DESCRIPTION
+                    },
+                    "kind": {
+                        "type": "string",
+                        "description": "Attached region kind"
+                    },
+                    "semantic_group": {
+                        "type": "string",
+                        "description": "Semantic group ID for this attached region"
+                    },
+                    "visible": {
+                        "type": "boolean",
+                        "description": "Whether this attached region is visible"
+                    }
+                }
+            }),
+            true,
         ),
     ])
 }
@@ -2629,6 +2719,58 @@ mod tests {
         serde_json::from_str(content).unwrap()
     }
 
+    fn attached_region_tool_call(
+        state: &AppState,
+        tool_name: &str,
+        project_id: &str,
+        arguments: serde_json::Value,
+    ) -> serde_json::Value {
+        let mut args = arguments.as_object().cloned().unwrap_or_default();
+        args.insert(
+            "project_id".to_string(),
+            serde_json::Value::String(project_id.to_string()),
+        );
+        response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": tool_name,
+                "method": "tools/call",
+                "params": {
+                    "name": tool_name,
+                    "arguments": args
+                }
+            }),
+            state,
+        )
+    }
+
+    fn revision_for(state: &AppState, project_id: &str) -> u64 {
+        state
+            .sessions
+            .lock()
+            .unwrap()
+            .resolve(Some(project_id))
+            .unwrap()
+            .revision
+    }
+
+    fn attached_region_project(state: &AppState) -> String {
+        let mut project = Project::new("Attached Region Regression", 176, 166, ModTarget::Forge);
+        project.attached_regions.push(AttachedRegion {
+            id: "returns_pocket".to_string(),
+            anchor: crate::project::AttachedRegionAnchor::Right,
+            x: 100,
+            y: 18,
+            width: 54,
+            height: 72,
+            state: crate::project::AttachedRegionState::Static,
+            kind: Some("returns_pocket".to_string()),
+            semantic_group: Some("food_returns".to_string()),
+            visible: true,
+        });
+        state.sessions.lock().unwrap().create_session(project)
+    }
+
     struct TempPath {
         path: PathBuf,
     }
@@ -2777,6 +2919,59 @@ mod tests {
         assert!(names.contains(&"attached_region_remove"));
         assert!(names.contains(&"attached_region_list"));
         assert!(names.contains(&"attached_region_move_with_elements"));
+    }
+
+    #[test]
+    fn attached_region_schemas_describe_defaults_and_update_fields() {
+        let tools = get_tool_definitions();
+        let add_schema = tools
+            .iter()
+            .find(|tool| tool["name"] == "attached_region_add")
+            .unwrap();
+        let update_schema = tools
+            .iter()
+            .find(|tool| tool["name"] == "attached_region_update")
+            .unwrap();
+
+        assert!(
+            add_schema["inputSchema"]["properties"]["state"]["description"]
+                .as_str()
+                .unwrap()
+                .contains("Defaults to static")
+        );
+        assert!(
+            add_schema["inputSchema"]["properties"]["visible"]["description"]
+                .as_str()
+                .unwrap()
+                .contains("Defaults to true")
+        );
+        let changes = &update_schema["inputSchema"]["properties"]["changes"];
+        assert_eq!(changes["type"], "object");
+        assert!(changes["description"]
+            .as_str()
+            .unwrap()
+            .contains("id cannot be changed"));
+        for field in [
+            "anchor",
+            "x",
+            "y",
+            "width",
+            "height",
+            "state",
+            "kind",
+            "semantic_group",
+            "visible",
+        ] {
+            assert!(changes["properties"].get(field).is_some(), "{field}");
+        }
+        assert!(changes["properties"]["anchor"]["description"]
+            .as_str()
+            .unwrap()
+            .contains("left"));
+        assert!(changes["properties"]["state"]["description"]
+            .as_str()
+            .unwrap()
+            .contains("toggleable"));
     }
 
     #[test]
@@ -3308,6 +3503,243 @@ mod tests {
         let child = active.project.find_element("returns_0").unwrap();
         assert_eq!(region.x, 110);
         assert_eq!(child.x, 118);
+    }
+
+    #[test]
+    fn attached_region_list_does_not_change_revision() {
+        let state = test_state();
+        let project_id = attached_region_project(&state);
+
+        let response = attached_region_tool_call(
+            &state,
+            "attached_region_list",
+            &project_id,
+            serde_json::json!({}),
+        );
+
+        assert!(response["error"].is_null());
+        assert_eq!(revision_for(&state, &project_id), 0);
+    }
+
+    #[test]
+    fn attached_region_no_op_update_and_move_do_not_change_revision() {
+        let state = test_state();
+        let project_id = attached_region_project(&state);
+
+        let update_response = attached_region_tool_call(
+            &state,
+            "attached_region_update",
+            &project_id,
+            serde_json::json!({
+                "id": "returns_pocket",
+                "changes": {
+                    "x": 100,
+                    "y": 18,
+                    "visible": true
+                }
+            }),
+        );
+        let move_response = attached_region_tool_call(
+            &state,
+            "attached_region_move_with_elements",
+            &project_id,
+            serde_json::json!({
+                "id": "returns_pocket",
+                "x": 100,
+                "y": 18
+            }),
+        );
+
+        assert!(update_response["error"].is_null());
+        assert!(move_response["error"].is_null());
+        assert_eq!(revision_for(&state, &project_id), 0);
+    }
+
+    #[test]
+    fn attached_region_missing_remove_returns_false_without_revision_change() {
+        let state = test_state();
+        let project_id = attached_region_project(&state);
+
+        let response = attached_region_tool_call(
+            &state,
+            "attached_region_remove",
+            &project_id,
+            serde_json::json!({ "id": "missing_region" }),
+        );
+
+        assert!(response["error"].is_null());
+        let value = tool_text_value(&response);
+        assert_eq!(value["removed"], false);
+        assert_eq!(revision_for(&state, &project_id), 0);
+    }
+
+    #[test]
+    fn attached_region_invalid_updates_return_errors_without_mutation() {
+        let state = test_state();
+        let project_id = attached_region_project(&state);
+
+        let id_change_response = attached_region_tool_call(
+            &state,
+            "attached_region_update",
+            &project_id,
+            serde_json::json!({
+                "id": "returns_pocket",
+                "changes": { "id": "other_region" }
+            }),
+        );
+        let null_required_response = attached_region_tool_call(
+            &state,
+            "attached_region_update",
+            &project_id,
+            serde_json::json!({
+                "id": "returns_pocket",
+                "changes": { "width": null }
+            }),
+        );
+        let bad_enum_response = attached_region_tool_call(
+            &state,
+            "attached_region_update",
+            &project_id,
+            serde_json::json!({
+                "id": "returns_pocket",
+                "changes": { "state": "animated" }
+            }),
+        );
+
+        assert_eq!(
+            id_change_response["error"]["message"],
+            "Attached region id cannot be changed"
+        );
+        assert!(null_required_response["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("Invalid attached region update"));
+        assert!(bad_enum_response["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("Invalid attached region update"));
+        let sessions = state.sessions.lock().unwrap();
+        let active = sessions.resolve(Some(&project_id)).unwrap();
+        let region = active
+            .project
+            .find_attached_region("returns_pocket")
+            .unwrap();
+        assert_eq!(region.width, 54);
+        assert_eq!(region.state, crate::project::AttachedRegionState::Static);
+        assert_eq!(active.revision, 0);
+    }
+
+    #[test]
+    fn attached_region_move_overflow_errors_before_mutation() {
+        let state = test_state();
+        let project_id = attached_region_project(&state);
+        {
+            let mut sessions = state.sessions.lock().unwrap();
+            sessions
+                .resolve_mut(Some(&project_id))
+                .unwrap()
+                .project
+                .elements
+                .push(
+                    parse_element_arg(&serde_json::json!({
+                        "id": "returns_0",
+                        "type": "slot",
+                        "x": i32::MAX,
+                        "y": 26,
+                        "size": 18,
+                        "attached_region": "returns_pocket"
+                    }))
+                    .unwrap(),
+                );
+        }
+
+        let response = attached_region_tool_call(
+            &state,
+            "attached_region_move_with_elements",
+            &project_id,
+            serde_json::json!({
+                "id": "returns_pocket",
+                "x": 101,
+                "y": 18
+            }),
+        );
+
+        assert_eq!(
+            response["error"]["message"],
+            "Attached region child move overflow"
+        );
+        let sessions = state.sessions.lock().unwrap();
+        let active = sessions.resolve(Some(&project_id)).unwrap();
+        let region = active
+            .project
+            .find_attached_region("returns_pocket")
+            .unwrap();
+        let child = active.project.find_element("returns_0").unwrap();
+        assert_eq!(region.x, 100);
+        assert_eq!(child.x, i32::MAX);
+        assert_eq!(active.revision, 0);
+    }
+
+    #[test]
+    fn attached_region_move_refreshes_group_position_for_attached_children() {
+        let state = test_state();
+        let project_id = attached_region_project(&state);
+        {
+            let mut sessions = state.sessions.lock().unwrap();
+            let project = &mut sessions.resolve_mut(Some(&project_id)).unwrap().project;
+            project.elements.push(
+                parse_element_arg(&serde_json::json!({
+                    "id": "returns_0",
+                    "type": "slot",
+                    "x": 108,
+                    "y": 26,
+                    "size": 18,
+                    "attached_region": "returns_pocket"
+                }))
+                .unwrap(),
+            );
+            project.elements.push(
+                parse_element_arg(&serde_json::json!({
+                    "id": "returns_1",
+                    "type": "slot",
+                    "x": 126,
+                    "y": 26,
+                    "size": 18,
+                    "attached_region": "returns_pocket"
+                }))
+                .unwrap(),
+            );
+            project.groups.push(crate::project::Group {
+                id: "returns_group".to_string(),
+                x: 108,
+                y: 26,
+                elements: vec!["returns_0".to_string(), "returns_1".to_string()],
+            });
+        }
+
+        let response = attached_region_tool_call(
+            &state,
+            "attached_region_move_with_elements",
+            &project_id,
+            serde_json::json!({
+                "id": "returns_pocket",
+                "x": 110,
+                "y": 30
+            }),
+        );
+
+        assert!(response["error"].is_null());
+        let sessions = state.sessions.lock().unwrap();
+        let active = sessions.resolve(Some(&project_id)).unwrap();
+        let group = active
+            .project
+            .groups
+            .iter()
+            .find(|group| group.id == "returns_group")
+            .unwrap();
+        assert_eq!(group.x, 118);
+        assert_eq!(group.y, 38);
+        assert_eq!(active.revision, 1);
     }
 
     #[test]
