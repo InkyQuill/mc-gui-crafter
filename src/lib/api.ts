@@ -3,6 +3,8 @@ import type {
   Animation,
   AppConfig,
   AttachedRegion,
+  AttachedRegionAnchor,
+  AttachedRegionState,
   Element,
   EditorLayoutConfig,
   FontAsset,
@@ -223,6 +225,39 @@ async function dataUrlDimensions(dataUrl: string): Promise<{ width: number; heig
     image.onerror = () => reject("Failed to decode PNG");
     image.src = dataUrl;
   });
+}
+
+const attachedRegionAnchors = new Set<AttachedRegionAnchor>(["left", "right", "top", "bottom", "free"]);
+const attachedRegionStates = new Set<AttachedRegionState>(["static", "toggleable"]);
+const requiredAttachedRegionFields = ["anchor", "x", "y", "width", "height", "state"] as const;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function applyMockAttachedRegionChanges(current: AttachedRegion, changes: unknown): AttachedRegion {
+  if (!isRecord(changes)) throw "Attached region changes must be an object";
+  if ("id" in changes && changes.id !== current.id) throw "Attached region id cannot be changed";
+
+  const next = { ...current };
+  for (const [key, value] of Object.entries(changes)) {
+    if (key === "id") continue;
+    (next as Record<string, unknown>)[key] = value;
+  }
+
+  for (const field of requiredAttachedRegionFields) {
+    if (next[field] === null || next[field] === undefined) {
+      throw `Invalid attached region update: ${field} is required`;
+    }
+  }
+  if (!attachedRegionAnchors.has(next.anchor)) {
+    throw `Invalid attached region update: invalid anchor ${String(next.anchor)}`;
+  }
+  if (!attachedRegionStates.has(next.state)) {
+    throw `Invalid attached region update: invalid state ${String(next.state)}`;
+  }
+
+  return next;
 }
 
 const javaKeywords = new Set([
@@ -547,7 +582,7 @@ async function mockInvoke(cmd: string, args?: Record<string, unknown>): Promise<
       if (index === -1) throw `Attached region not found: ${id}`;
 
       const current = regions[index];
-      const updated: AttachedRegion = { ...current, ...(args?.changes as Partial<AttachedRegion>), id: current.id };
+      const updated = applyMockAttachedRegionChanges(current, args?.changes);
       if (JSON.stringify(updated) !== JSON.stringify(current)) {
         const previous = clone(session.project);
         session.project.attached_regions = regions.map(region => region.id === id ? clone(updated) : region);

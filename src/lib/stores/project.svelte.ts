@@ -24,6 +24,7 @@ function uid(): string {
 
 // Global map of asset name -> data URL for rendering
 export const assetDataUrls = new SvelteMap<string, string>();
+export const assetDimensions = new SvelteMap<string, Size>();
 
 const DEFAULT_EXPORT_SETTINGS: ProjectExportSettings = {
   codegen_mode: "simple",
@@ -700,8 +701,12 @@ export class ProjectStore {
       const assets = await api.assetList(this.activeProjectId ?? undefined);
       this.assets = assets.map(a => a.name);
       assetDataUrls.clear();
+      assetDimensions.clear();
       for (const a of assets) {
         assetDataUrls.set(a.name, a.data_url);
+        if (a.width > 0 && a.height > 0) {
+          assetDimensions.set(a.name, { width: a.width, height: a.height });
+        }
       }
       this.bumpRenderVersion();
     } catch { /* assets may not be available */ }
@@ -777,6 +782,7 @@ export class ProjectStore {
     this.revision = 0;
     this.isOpen = false;
     assetDataUrls.clear();
+    assetDimensions.clear();
     this.bumpRenderVersion();
   }
   private bumpRenderVersion() {
@@ -799,9 +805,13 @@ export class ProjectStore {
       }
     })();
 
+    const assetSize = element.type === "texture" && element.asset
+      ? assetDimensions.get(element.asset)
+      : undefined;
+
     return {
-      width: element.width ?? element.size ?? defaultSize.width,
-      height: element.height ?? element.size ?? defaultSize.height,
+      width: element.width ?? element.size ?? assetSize?.width ?? defaultSize.width,
+      height: element.height ?? element.size ?? assetSize?.height ?? defaultSize.height,
     };
   }
 
