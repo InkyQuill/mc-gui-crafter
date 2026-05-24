@@ -565,6 +565,24 @@ fn get_tool_definitions() -> Vec<serde_json::Value> {
             project_props(&[("path", "string", "Path to write the .mcgui project", true)]),
         ),
         td(
+            "project_resize",
+            "Resize the project GUI canvas without moving or scaling elements",
+            project_props(&[
+                (
+                    "width",
+                    "integer",
+                    "New GUI width; must be greater than zero",
+                    true,
+                ),
+                (
+                    "height",
+                    "integer",
+                    "New GUI height; must be greater than zero",
+                    true,
+                ),
+            ]),
+        ),
+        td(
             "project_export_preview",
             "Preview generated export files and preflight warnings",
             export_props(),
@@ -1153,6 +1171,7 @@ fn execute_tool(
         "project_open" => project_open(&mut sessions, args),
         "project_save" => project_save(&mut sessions, project_id),
         "project_save_as" => project_save_as(&mut sessions, project_id, args),
+        "project_resize" => project_resize(&mut sessions, project_id, args),
         "project_export_preview" => project_export_preview(&sessions, project_id, args),
         "project_export" => project_export(&sessions, project_id, args),
         "project_render" | "project_screenshot" => project_render(&sessions, project_id, args),
@@ -1370,6 +1389,43 @@ fn project_summary(
         "export_settings": session.project.export_settings,
         "revision": session.revision,
         "session": sessions.list_sessions().into_iter().find(|summary| summary.id == session.id),
+    }))
+}
+
+fn project_resize(
+    sessions: &mut ProjectSessionManager,
+    project_id: Option<&str>,
+    args: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let width = required_u32(args, "width")?;
+    let height = required_u32(args, "height")?;
+    if width == 0 || height == 0 {
+        return Err("Project dimensions must be greater than zero".to_string());
+    }
+
+    let session = sessions.resolve(project_id)?;
+    let old_size = session.project.gui_size.clone();
+    let new_size = crate::project::Size { width, height };
+    if old_size == new_size {
+        return Ok(serde_json::json!({
+            "project_id": session.id,
+            "old_size": old_size,
+            "new_size": new_size,
+            "changed": false
+        }));
+    }
+
+    sessions.record_history(project_id)?;
+    let session = sessions.resolve_mut(project_id)?;
+    session.project.gui_size = new_size.clone();
+    let session_id = session.id.clone();
+    sessions.mark_changed(project_id)?;
+
+    Ok(serde_json::json!({
+        "project_id": session_id,
+        "old_size": old_size,
+        "new_size": new_size,
+        "changed": true
     }))
 }
 
@@ -2937,6 +2993,17 @@ mod tests {
     }
 
     #[test]
+    fn tools_list_exposes_project_resize() {
+        let tools = get_tool_definitions();
+        let names = tools
+            .iter()
+            .filter_map(|tool| tool["name"].as_str())
+            .collect::<Vec<_>>();
+
+        assert!(names.contains(&"project_resize"));
+    }
+
+    #[test]
     fn tools_list_exposes_alpha_ergonomics_tools() {
         let tools = get_tool_definitions();
         let names = tools
@@ -3181,6 +3248,128 @@ mod tests {
         let active = sessions.active_session().unwrap();
         assert_eq!(active.project.gui_size.width, 264);
         assert_eq!(active.project.gui_size.height, 162);
+    }
+
+    #[test]
+    fn project_resize_changes_only_gui_size_and_preserves_elements() {
+        let state = test_state();
+        let project_id = {
+            let mut sessions = state.sessions.lock().unwrap();
+            let mut project = Project::new("Resize", 176, 166, ModTarget::Forge);
+            project.elements.push(
+                parse_element_arg(&serde_json::json!({
+                    "id": "outside_slot",
+                    "type": "slot",
+                    "x": 200,
+                    "y": -12,
+                    "size": 18
+                }))
+                .unwrap(),
+            );
+            sessions.create_session(project)
+        };
+
+        let response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "resize",
+                "method": "tools/call",
+                "params": {
+                    "name": "project_resize",
+                    "arguments": {
+                        "project_id": project_id,
+                        "width": 264,
+                        "height": 162
+                    }
+                }
+            }),
+            &state,
+        );
+
+        assert!(response["error"].is_null(), "{response:#}");
+        let value = tool_text_value(&response);
+        assert_eq!(value["project_id"], project_id);
+        assert_eq!(
+            value["old_size"],
+            serde_json::json!({ "width": 176, "height": 166 })
+        );
+        assert_eq!(
+            value["new_size"],
+            serde_json::json!({ "width": 264, "height": 162 })
+        );
+
+        let sessions = state.sessions.lock().unwrap();
+        let session = sessions.resolve(Some(&project_id)).unwrap();
+        assert_eq!(session.project.gui_size.width, 264);
+        assert_eq!(session.project.gui_size.height, 162);
+        let element = session.project.find_element("outside_slot").unwrap();
+        assert_eq!(element.x, 200);
+        assert_eq!(element.y, -12);
+        assert_eq!(session.revision, 1);
+        assert!(session.project.is_dirty);
+    }
+
+    #[test]
+    fn project_resize_no_op_does_not_change_revision() {
+        let state = test_state();
+        let project_id = {
+            let mut sessions = state.sessions.lock().unwrap();
+            sessions.create_session(Project::new("Resize Noop", 176, 166, ModTarget::Forge))
+        };
+        let before = mutation_snapshot_for(&state, &project_id);
+
+        let response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "resize-noop",
+                "method": "tools/call",
+                "params": {
+                    "name": "project_resize",
+                    "arguments": {
+                        "project_id": project_id,
+                        "width": 176,
+                        "height": 166
+                    }
+                }
+            }),
+            &state,
+        );
+
+        assert!(response["error"].is_null(), "{response:#}");
+        assert_eq!(mutation_snapshot_for(&state, &project_id), before);
+        assert_eq!(revision_for(&state, &project_id), 0);
+    }
+
+    #[test]
+    fn project_resize_rejects_zero_dimensions_without_mutation() {
+        let state = test_state();
+        let project_id = {
+            let mut sessions = state.sessions.lock().unwrap();
+            sessions.create_session(Project::new("Resize Bad", 176, 166, ModTarget::Forge))
+        };
+
+        let response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "resize-bad",
+                "method": "tools/call",
+                "params": {
+                    "name": "project_resize",
+                    "arguments": {
+                        "project_id": project_id,
+                        "width": 0,
+                        "height": 166
+                    }
+                }
+            }),
+            &state,
+        );
+
+        assert_eq!(
+            response["error"]["message"],
+            "Project dimensions must be greater than zero"
+        );
+        assert_eq!(revision_for(&state, &project_id), 0);
     }
 
     #[test]

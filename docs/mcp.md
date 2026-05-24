@@ -579,6 +579,12 @@ Tools that read or mutate project data accept optional `project_id`. When
 edits are visible in the current GUI instance and use the same undo/redo stacks
 as UI-driven edits.
 
+### `project_resize`
+
+Changes `gui_size` only. It does not move, scale, clamp, or delete elements,
+including elements outside the new bounds. Agents should move affected elements
+explicitly after resizing.
+
 ## Available Tools
 
 ### Project Sessions
@@ -589,6 +595,7 @@ as UI-driven edits.
 | `project_open` | Open an existing `.mcgui` file as a session |
 | `project_save` | Save a project session |
 | `project_save_as` | Save a new or existing project session to a `.mcgui` path |
+| `project_resize` | Resize the project GUI canvas without moving elements |
 | `project_export_preview` | Preview generated export files, warnings, and validation errors |
 | `project_export` | Write generated mod files to disk |
 | `project_render` | Render a compact PNG preview of the project |
