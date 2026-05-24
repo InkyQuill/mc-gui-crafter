@@ -70,9 +70,16 @@ pub fn app_window_save(window: WindowConfig) -> Result<AppConfig, String> {
 }
 
 #[tauri::command(rename_all = "snake_case")]
-pub fn ui_layout_reset() -> Result<AppConfig, String> {
+pub fn ui_layout_reset(window: tauri::Window) -> Result<AppConfig, String> {
     let config = crate::config::load()?.with_reset_ui_layout();
     crate::config::save(&config)?;
+    if let Some(window_config) = config.window.as_ref() {
+        let _ = window.set_size(tauri::Size::Physical(tauri::PhysicalSize {
+            width: window_config.width,
+            height: window_config.height,
+        }));
+        let _ = window.center();
+    }
     Ok(config.clamped())
 }
 
