@@ -2,7 +2,7 @@
   import { project } from "../stores/project.svelte";
   import { editor } from "../stores/editor.svelte";
   import UvEditorDialog from "./UvEditorDialog.svelte";
-  import type { CodegenMode, Element, SlotRole, UvRect } from "../types";
+  import type { AttachedRegion, AttachedRegionAnchor, AttachedRegionState, CodegenMode, Element, SlotRole, UvRect } from "../types";
 
   type UvTarget = "uv" | "icon_uv";
 
@@ -13,6 +13,11 @@
   });
   let selectedEl = $derived(selectedElementId ? project.elementById(selectedElementId) : null);
   let selectedGroup = $derived(selectedElementId ? project.groupForElement(selectedElementId) : null);
+  let selectedRegion = $derived.by(() => {
+    void editor.regionSelectionRevision;
+    const id = editor.selectedAttachedRegionId;
+    return id ? project.attachedRegionById(id) : null;
+  });
   let fontOptions = $derived.by(() => {
     const options = project.fonts.filter((font, index, fonts) => fonts.findIndex(candidate => candidate.id === font.id) === index);
     if (!options.some(font => font.id === "minecraft:default")) {
@@ -32,6 +37,8 @@
     "ghost",
     "offhand",
   ];
+  const attachedRegionAnchors: AttachedRegionAnchor[] = ["left", "right", "top", "bottom", "free"];
+  const attachedRegionStates: AttachedRegionState[] = ["static", "toggleable"];
 
   function updateProp(key: string, value: unknown) {
     if (!editor.selectedElementId) return;
@@ -41,6 +48,11 @@
   function updateSelectedElement(changes: Partial<Element>) {
     if (!selectedEl) return;
     project.updateElement(selectedEl.id, changes);
+  }
+
+  function updateRegion(changes: Partial<AttachedRegion>) {
+    if (!selectedRegion) return;
+    void project.updateAttachedRegion(selectedRegion.id, changes);
   }
 
   function numberValue(value: string, fallback = 0): number {
@@ -192,6 +204,19 @@
           <option value="background">Background</option>
           <option value="overlay">Overlay</option>
           <option value="animatable">Animatable</option>
+        </select>
+      </div>
+      <div class="prop-row">
+        <label for="prop-attached-region">Region</label>
+        <select
+          id="prop-attached-region"
+          value={selectedEl.attached_region ?? ""}
+          onchange={(e) => updateSelectedElement({ attached_region: e.currentTarget.value || null })}
+        >
+          <option value="">(none)</option>
+          {#each project.attachedRegions as region (region.id)}
+            <option value={region.id}>{region.id}</option>
+          {/each}
         </select>
       </div>
 
@@ -519,6 +544,93 @@
           Ungroup
         </button>
       {/if}
+    </div>
+  {:else if selectedRegion}
+    <div class="props-form">
+      <div class="prop-row">
+        <span class="prop-label">ID</span>
+        <span class="prop-value mono">{selectedRegion.id}</span>
+      </div>
+      <div class="prop-row">
+        <label for="prop-region-anchor">Anchor</label>
+        <select
+          id="prop-region-anchor"
+          value={selectedRegion.anchor}
+          onchange={(e) => updateRegion({ anchor: e.currentTarget.value as AttachedRegionAnchor })}
+        >
+          {#each attachedRegionAnchors as anchor (anchor)}
+            <option value={anchor}>{anchor}</option>
+          {/each}
+        </select>
+      </div>
+      <div class="prop-row">
+        <label for="prop-region-x">X</label>
+        <input
+          id="prop-region-x"
+          type="number"
+          value={selectedRegion.x}
+          oninput={(e) => updateRegion({ x: numberValue(e.currentTarget.value, selectedRegion?.x ?? 0) })}
+        />
+      </div>
+      <div class="prop-row">
+        <label for="prop-region-y">Y</label>
+        <input
+          id="prop-region-y"
+          type="number"
+          value={selectedRegion.y}
+          oninput={(e) => updateRegion({ y: numberValue(e.currentTarget.value, selectedRegion?.y ?? 0) })}
+        />
+      </div>
+      <div class="prop-row">
+        <label for="prop-region-width">Width</label>
+        <input
+          id="prop-region-width"
+          type="number"
+          min="1"
+          value={selectedRegion.width}
+          oninput={(e) => updateRegion({ width: Math.max(1, numberValue(e.currentTarget.value, selectedRegion?.width ?? 1)) })}
+        />
+      </div>
+      <div class="prop-row">
+        <label for="prop-region-height">Height</label>
+        <input
+          id="prop-region-height"
+          type="number"
+          min="1"
+          value={selectedRegion.height}
+          oninput={(e) => updateRegion({ height: Math.max(1, numberValue(e.currentTarget.value, selectedRegion?.height ?? 1)) })}
+        />
+      </div>
+      <div class="prop-row">
+        <label for="prop-region-state">State</label>
+        <select
+          id="prop-region-state"
+          value={selectedRegion.state}
+          onchange={(e) => updateRegion({ state: e.currentTarget.value as AttachedRegionState })}
+        >
+          {#each attachedRegionStates as state (state)}
+            <option value={state}>{state}</option>
+          {/each}
+        </select>
+      </div>
+      <div class="prop-row">
+        <label for="prop-region-kind">Kind</label>
+        <input
+          id="prop-region-kind"
+          type="text"
+          value={selectedRegion.kind ?? ""}
+          oninput={(e) => updateRegion({ kind: optionalText(e.currentTarget.value) })}
+        />
+      </div>
+      <div class="prop-row">
+        <label for="prop-region-semantic-group">Semantic</label>
+        <input
+          id="prop-region-semantic-group"
+          type="text"
+          value={selectedRegion.semantic_group ?? ""}
+          oninput={(e) => updateRegion({ semantic_group: optionalText(e.currentTarget.value) })}
+        />
+      </div>
     </div>
   {:else}
     <p class="muted">

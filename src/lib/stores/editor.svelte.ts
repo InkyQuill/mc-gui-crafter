@@ -10,11 +10,13 @@ export function snap(value: number, snapSize: number): number {
 
 class EditorStore {
   selectedElementId = $state<string | null>(null);
+  selectedAttachedRegionId = $state<string | null>(null);
   selectedIds = $state<Set<string>>(new Set());
   zoom = $state(2);
   activeTool = $state<EditorTool>("select");
   toolRevision = $state(0);
   selectionRevision = $state(0);
+  regionSelectionRevision = $state(0);
 
   // Mouse position in GUI pixel coordinates (relative to GUI top-left)
   mouseGuiX = $state(0);
@@ -79,6 +81,10 @@ class EditorStore {
   resizeOrigH = $state(0);
 
   selectElement(id: string | null, additive = false) {
+    if (this.selectedAttachedRegionId !== null) {
+      this.selectedAttachedRegionId = null;
+      this.regionSelectionRevision += 1;
+    }
     if (additive && id) {
       const next = new Set(this.selectedIds);
       if (next.has(id)) {
@@ -95,7 +101,19 @@ class EditorStore {
     this.selectionRevision += 1;
   }
 
+  selectAttachedRegion(id: string | null) {
+    this.selectedAttachedRegionId = id;
+    this.selectedElementId = null;
+    this.selectedIds = new Set();
+    this.selectionRevision += 1;
+    this.regionSelectionRevision += 1;
+  }
+
   clearSelection() {
+    if (this.selectedAttachedRegionId !== null) {
+      this.selectedAttachedRegionId = null;
+      this.regionSelectionRevision += 1;
+    }
     this.selectedElementId = null;
     this.selectedIds = new Set();
     this.selectionRevision += 1;

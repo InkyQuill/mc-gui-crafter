@@ -1,5 +1,5 @@
 import { Application, Assets, Container, Graphics, Rectangle, Text, TextStyle, Sprite, Texture } from "pixi.js";
-import type { Element, FontRenderData, GlyphInfo, MinecraftFontProviderRenderData, Layer } from "../types";
+import type { AttachedRegion, Element, FontRenderData, GlyphInfo, MinecraftFontProviderRenderData, Layer } from "../types";
 import { project, assetDataUrls } from "../stores/project.svelte";
 import { editor } from "../stores/editor.svelte";
 import { preferences } from "../stores/preferences.svelte";
@@ -75,6 +75,7 @@ export class GuiRenderer {
   private gridContainer: Container;
   private elementsContainer: Container;
   private overlayContainer: Container;
+  private attachedRegionGraphics: Graphics;
   private selectionGraphics: Graphics;
   private cursorLabel: Text;
 
@@ -107,6 +108,7 @@ export class GuiRenderer {
     this.gridContainer = new Container();
     this.elementsContainer = new Container();
     this.overlayContainer = new Container();
+    this.attachedRegionGraphics = new Graphics();
     this.selectionGraphics = new Graphics();
     this.cursorLabel = new Text({
       text: "",
@@ -150,6 +152,7 @@ export class GuiRenderer {
     this.app.stage.addChild(this.gridContainer);
     this.app.stage.addChild(this.elementsContainer);
     this.app.stage.addChild(this.overlayContainer);
+    this.overlayContainer.addChild(this.attachedRegionGraphics);
     this.overlayContainer.addChild(this.selectionGraphics);
     this.overlayContainer.addChild(this.cursorLabel);
 
@@ -265,6 +268,12 @@ export class GuiRenderer {
         const dy = (pointer.y - editor.dragStartY) / editor.zoom;
         const newDragX = editor.snapCoordinate(editor.dragOrigX + dx);
         const newDragY = editor.snapCoordinate(editor.dragOrigY + dy);
+
+        if (editor.selectedAttachedRegionId) {
+          project.previewMoveAttachedRegionWithElements(editor.selectedAttachedRegionId, newDragX, newDragY);
+          return;
+        }
+
         const snappedDx = newDragX - editor.dragOrigX;
         const snappedDy = newDragY - editor.dragOrigY;
 
@@ -295,7 +304,14 @@ export class GuiRenderer {
         }
       }
       if (editor.isDragging && editor.dragElementId) {
-        project.commitMovedElements(this.dragStartPositions.keys());
+        if (editor.selectedAttachedRegionId) {
+          const region = project.attachedRegionById(editor.selectedAttachedRegionId);
+          if (region) {
+            void project.moveAttachedRegionWithElements(editor.selectedAttachedRegionId, region.x, region.y);
+          }
+        } else {
+          project.commitMovedElements(this.dragStartPositions.keys());
+        }
       }
       this.dragStartPositions.clear();
       editor.isDragging = false;
@@ -360,6 +376,14 @@ export class GuiRenderer {
         );
         editor.startDragElementAt(clicked.id, pointer.x, pointer.y, clicked.x, clicked.y);
       } else if (editor.tool === "select" && !clicked && !shiftHeld) {
+        const clickedRegion = [...project.attachedRegions]
+          .reverse()
+          .find(region => (region.visible ?? true) && this.hitTestAttachedRegion(region, gui.x, gui.y));
+        if (clickedRegion) {
+          editor.selectAttachedRegion(clickedRegion.id);
+          editor.startDragElementAt(clickedRegion.id, pointer.x, pointer.y, clickedRegion.x, clickedRegion.y);
+          return;
+        }
         editor.clearSelection();
       } else {
         switch (editor.tool) {
@@ -454,6 +478,10 @@ export class GuiRenderer {
     return gx >= bounds.x && gx <= bounds.x + bounds.w && gy >= bounds.y && gy <= bounds.y + bounds.h;
   }
 
+  private hitTestAttachedRegion(region: AttachedRegion, gx: number, gy: number): boolean {
+    return gx >= region.x && gx <= region.x + region.width && gy >= region.y && gy <= region.y + region.height;
+  }
+
   private hitTestHandle(el: Element, gx: number, gy: number): "tl" | "tr" | "bl" | "br" | null {
     const bounds = this.elementBounds(el);
     const w = bounds.w;
@@ -539,6 +567,7 @@ export class GuiRenderer {
     this.syncGlyphTextureCache();
     this.drawGrid();
     this.drawElements();
+    this.drawAttachedRegions();
     this.drawSelection();
     this.requestFrame();
   }
@@ -558,8 +587,12 @@ export class GuiRenderer {
     g.fill({ color: palette.guiFill, alpha: palette.guiAlpha });
 
     // Draw GUI border
-    g.rect(-1, -1, gw + 2, gh + 2);
+    g.rect(0, 0, gw, gh);
     g.stroke({ width: 1, color: palette.border, alpha: palette.borderAlpha });
+
+    const bounds = project.visualBounds;
+    g.rect(bounds.x, bounds.y, bounds.width, bounds.height);
+    g.stroke({ width: 1, color: 0xffb000, alpha: 0.95 });
 
     // Minor grid
     const minorAlpha = palette.minorAlpha;
@@ -611,6 +644,18 @@ export class GuiRenderer {
         console.error("Failed to draw element", el, error);
       }
       if (g) this.elementsContainer.addChild(g);
+    }
+  }
+
+  private drawAttachedRegions() {
+    const g = this.attachedRegionGraphics;
+    g.clear();
+
+    for (const region of project.attachedRegions) {
+      if (region.visible === false) continue;
+      const selected = editor.selectedAttachedRegionId === region.id;
+      g.rect(region.x, region.y, region.width, region.height);
+      g.stroke({ width: selected ? 2 : 1, color: selected ? SELECTED_TINT : 0x2f8cff, alpha: selected ? 1 : 0.85 });
     }
   }
 

@@ -1,10 +1,11 @@
 <script lang="ts">
   import { project } from "../stores/project.svelte";
   import { editor } from "../stores/editor.svelte";
-  import type { Element, Group, SemanticGroup } from "../types";
+  import type { AttachedRegion, Element, Group, SemanticGroup } from "../types";
 
   type LayerRow =
     | { kind: "group"; id: string; label: string; meta: string; elements: Element[] }
+    | { kind: "attached_region"; region: AttachedRegion; meta: string; elements: Element[] }
     | { kind: "element"; element: Element; meta: string };
 
   let collapsedGroups = $state<Set<string>>(new Set());
@@ -32,6 +33,10 @@
     return `${count} elements`;
   }
 
+  function attachedRegionMeta(region: AttachedRegion, count: number): string {
+    return `${region.anchor} · ${region.width}x${region.height} · ${count} elements`;
+  }
+
   function iconForElement(el: Element): string {
     switch (el.type) {
       case "slot": return "◻";
@@ -57,6 +62,12 @@
     const consumed = new Set<string>();
     const rows: LayerRow[] = [];
     const reversed = [...project.elements].reverse();
+
+    for (const region of project.attachedRegions) {
+      const elements = project.elements.filter(element => element.attached_region === region.id);
+      for (const element of elements) consumed.add(element.id);
+      rows.push({ kind: "attached_region", region, meta: attachedRegionMeta(region, elements.length), elements });
+    }
 
     for (const semantic of project.semanticGroups) {
       const elements = project.elements.filter(element => element.inventory_group === semantic.id);
@@ -102,6 +113,11 @@
     return editor.selectedElementId;
   });
 
+  let selectedAttachedRegionId = $derived.by(() => {
+    void editor.regionSelectionRevision;
+    return editor.selectedAttachedRegionId;
+  });
+
   let selectedCount = $derived.by(() => {
     void editor.selectionRevision;
     return editor.selectedIds.size;
@@ -110,9 +126,11 @@
   let rows = $derived.by(() => {
     void project.revision;
     void project.elements.length;
+    void project.attachedRegions.length;
     void project.groups.length;
     void project.semanticGroups.length;
     void editor.selectionRevision;
+    void editor.regionSelectionRevision;
     return groupedRows();
   });
 </script>
@@ -136,7 +154,7 @@
     </button>
   </div>
 
-  {#if project.elements.length === 0}
+  {#if project.elements.length === 0 && project.attachedRegions.length === 0}
     <p class="muted">No elements</p>
   {:else}
     {#snippet elementRow(el: Element, nested = false)}
@@ -193,6 +211,29 @@
             </button>
           </div>
           {#if !collapsedGroups.has(row.id)}
+            {#each row.elements as el (el.id)}
+              {@render elementRow(el, true)}
+            {/each}
+          {/if}
+        {:else if row.kind === "attached_region"}
+          <div class="group-row">
+            <button
+              class="group-main"
+              class:selected={selectedAttachedRegionId === row.region.id}
+              class:hidden-el={row.region.visible === false}
+              onclick={() => {
+                editor.selectAttachedRegion(row.region.id);
+                toggleGroup(`attached:${row.region.id}`);
+              }}
+            >
+              <span class="disclosure">{collapsedGroups.has(`attached:${row.region.id}`) ? "▸" : "▾"}</span>
+              <span class="group-text">
+                <span class="group-title">{displayId(row.region.id)}</span>
+                <span class="group-meta">{row.meta}</span>
+              </span>
+            </button>
+          </div>
+          {#if !collapsedGroups.has(`attached:${row.region.id}`)}
             {#each row.elements as el (el.id)}
               {@render elementRow(el, true)}
             {/each}
@@ -284,6 +325,15 @@
     text-align: left;
     cursor: pointer;
     font: inherit;
+  }
+
+  .group-main.selected {
+    color: var(--accent);
+    border-color: var(--accent);
+  }
+
+  .group-main.hidden-el {
+    opacity: 0.35;
   }
 
   .group-text {
