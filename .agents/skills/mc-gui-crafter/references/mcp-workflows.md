@@ -325,6 +325,56 @@ rows. For larger logical inventories, replace semantic groups explicitly:
 }
 ```
 
+## Attached Region Workflow
+
+Use attached regions for GUI parts outside the main `gui_size` bounds: side
+module panels, return pockets, upgrade panes, floating toggles, and flair.
+Coordinates stay absolute relative to the main GUI origin.
+
+1. Call `attached_region_add` with `id`, `anchor`, `x`, `y`, `width`,
+   `height`, `state: "static"`, and optional `kind` / `semantic_group`.
+2. Add child elements with normal absolute `x` / `y` coordinates and set
+   `attached_region` to the region id.
+3. Use semantic groups to describe the meaning of slots/buttons inside the
+   region. The region itself only describes geometry and anchoring.
+4. Prefer `state: "static"` for generated exports. `toggleable` is preserved as
+   metadata until runtime open/closed behavior is implemented.
+5. Use `attached_region_move_with_elements` when repositioning the region after
+   adding children.
+
+```json
+{
+  "name": "attached_region_add",
+  "arguments": {
+    "id": "returns_pocket",
+    "anchor": "right",
+    "x": 176,
+    "y": 18,
+    "width": 54,
+    "height": 72,
+    "state": "static",
+    "kind": "returns_pocket",
+    "semantic_group": "food_returns"
+  }
+}
+```
+
+```json
+{
+  "name": "element_add",
+  "arguments": {
+    "id": "returns_0",
+    "type": "slot",
+    "x": 184,
+    "y": 26,
+    "size": 18,
+    "slot_role": "machine",
+    "inventory_group": "food_returns",
+    "attached_region": "returns_pocket"
+  }
+}
+```
+
 ## Enums
 
 Slot roles:

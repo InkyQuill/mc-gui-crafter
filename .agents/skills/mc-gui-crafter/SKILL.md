@@ -109,6 +109,12 @@ exporting a project.
 - For icon buttons, use `icon` plus `icon_uv` for atlas-backed icons, or `icon`
   alone for a standalone PNG. Keep `content` as label/accessibility/fallback
   metadata.
+- When creating side panels, module pockets, return-slot pockets, or flair
+  outside the main GUI rectangle, create an attached region first. Keep child
+  element coordinates absolute relative to the main GUI origin and set each
+  child's `attached_region`. Use semantic groups to describe slot/button
+  meaning; the region only describes geometry and anchoring. Prefer `state:
+  "static"` until toggleable runtime support is implemented.
 - Do not leave generated output unverified. A successful MCP tool call only
   proves the command ran; it does not prove the GUI is useful.
 

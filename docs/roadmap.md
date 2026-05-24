@@ -110,9 +110,11 @@
 - [x] MCP/UI polish v2: screenshot previews, button/toggle authoring, icon/tooltip metadata, overwrite previews, and validation polish
 - [x] Editor UX polish: generated background elements, progress texture editing, persisted inspector dock, grouped Layers, reusable UV Editor, and UI/window layout reset
 - [x] Parameterized custom grid generation through MCP `slot_grid_add`
+- [x] Static attached regions: active outside-GUI flair, side panels, return pockets, computed visual bounds, and MCP authoring
 - [ ] Expression support in animation bindings (`cook_time / total_cook_time`)
 - [ ] Workspace/dock framework: movable and pinnable editor panels, workspace profiles, richer Asset/UV panes, and optional stacked/pinned Layers and Assets behavior
 - [ ] Full runtime container/menu code generation for semantic inventories and virtual storage grids
+- [ ] Toggleable attached-region runtime: open/closed state, click bindings, animation, conditional slot activation, and modular generated helpers
 - [ ] Resource pack export (Bedrock JSON UI) — research, not implemented
 - [x] Font import for project font selection and canvas preview
 - [ ] Custom runtime font support for exported Minecraft screens; exported runtime currently uses the platform text renderer

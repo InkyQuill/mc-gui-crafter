@@ -298,6 +298,57 @@ control is icon-only:
 
 For standalone icon PNGs, set `icon` to that PNG and omit `icon_uv`.
 
+### Attached Regions
+
+Use attached regions when a GUI has visible or interactive elements outside the
+main `gui_size` rectangle: side toggles, upgrade panels, return pockets, or
+decorative flair. Coordinates remain absolute relative to the main GUI origin.
+
+Create the region:
+
+```json
+{
+  "name": "attached_region_add",
+  "arguments": {
+    "id": "returns_pocket",
+    "anchor": "right",
+    "x": 176,
+    "y": 18,
+    "width": 54,
+    "height": 72,
+    "state": "static",
+    "kind": "returns_pocket",
+    "semantic_group": "food_returns"
+  }
+}
+```
+
+Add elements using normal absolute coordinates and set `attached_region`:
+
+```json
+{
+  "name": "element_add",
+  "arguments": {
+    "id": "returns_0",
+    "type": "slot",
+    "x": 184,
+    "y": 26,
+    "size": 18,
+    "slot_role": "machine",
+    "inventory_group": "food_returns",
+    "attached_region": "returns_pocket"
+  }
+}
+```
+
+Add semantic groups separately. The region describes geometry; semantic groups
+describe runtime meaning. Use `attached_region_move_with_elements` when
+repositioning a region after adding children.
+
+`state: "toggleable"` is preserved as metadata, but generated runtime open/close
+behavior is deferred to the toggleable attached-region roadmap item. Use
+`static` for fully supported exports today.
+
 ### Simple And Modular Codegen
 
 Projects default to simple code generation. Simple mode keeps the generated
