@@ -37,7 +37,7 @@
 - Modify: `src-tauri/src/commands.rs`
 - Modify: `src-tauri/src/mcp/mod.rs`
 
-- [ ] **Step 1: Add failing template tests**
+- [x] **Step 1: Add failing template tests**
 
 Add tests to `#[cfg(test)] mod tests` in `src-tauri/src/templates/mod.rs`:
 
@@ -98,7 +98,7 @@ fn applying_templates_keeps_exactly_one_generated_background_element() {
 }
 ```
 
-- [ ] **Step 2: Run failing tests**
+- [x] **Step 2: Run failing tests**
 
 Run:
 
@@ -108,7 +108,7 @@ cargo test --manifest-path src-tauri/Cargo.toml generated_background_element --l
 
 Expected: FAIL because `empty` currently has no background and some templates use `bg` instead of normalized `background`.
 
-- [ ] **Step 3: Add generated background helper**
+- [x] **Step 3: Add generated background helper**
 
 In `src-tauri/src/templates/mod.rs`, add helper functions near `base_element`:
 
@@ -134,7 +134,7 @@ fn ensure_generated_background_element(project: &mut Project) {
 }
 ```
 
-- [ ] **Step 4: Apply background after templates**
+- [x] **Step 4: Apply background after templates**
 
 In `apply_template`, after assigning template elements/groups/semantic groups and before `add_generated_template_assets(project)?`, call:
 
@@ -153,7 +153,7 @@ pub fn apply_generated_defaults(project: &mut Project) -> Result<(), String> {
 
 Then update `apply_template` to call `apply_generated_defaults(project)` instead of `add_generated_template_assets(project)?`.
 
-- [ ] **Step 5: Use generated defaults in project creation**
+- [x] **Step 5: Use generated defaults in project creation**
 
 In `src-tauri/src/commands.rs`, after optional template application, call defaults when no template was supplied:
 
@@ -175,7 +175,7 @@ if let Some(template) = args.get("template").and_then(|value| value.as_str()) {
 }
 ```
 
-- [ ] **Step 6: Update existing template tests**
+- [x] **Step 6: Update existing template tests**
 
 Update `applying_empty_template_preserves_requested_canvas_size` so it asserts both size preservation and one generated background:
 
@@ -193,7 +193,7 @@ fn applying_empty_template_preserves_requested_canvas_size_and_adds_background()
 }
 ```
 
-- [ ] **Step 7: Verify background tests**
+- [x] **Step 7: Verify background tests**
 
 Run:
 
@@ -204,7 +204,7 @@ cargo test --manifest-path src-tauri/Cargo.toml mcp::tests::project_new_empty_te
 
 Expected: PASS.
 
-- [ ] **Step 8: Commit generated backgrounds**
+- [x] **Step 8: Commit generated backgrounds**
 
 ```bash
 git add src-tauri/src/templates/mod.rs src-tauri/src/commands.rs src-tauri/src/mcp/mod.rs
@@ -220,7 +220,7 @@ git commit -m "fix: apply generated gui background by default"
 - Modify: `src/lib/types.ts`
 - Modify: `src/lib/api.ts`
 
-- [ ] **Step 1: Add failing config tests**
+- [x] **Step 1: Add failing config tests**
 
 In `src-tauri/src/config.rs`, extend tests with:
 
@@ -281,7 +281,7 @@ fn reset_layout_preserves_mcp_port_and_clears_window_position() {
 }
 ```
 
-- [ ] **Step 2: Run failing config tests**
+- [x] **Step 2: Run failing config tests**
 
 Run:
 
@@ -291,7 +291,7 @@ cargo test --manifest-path src-tauri/Cargo.toml config::tests --locked
 
 Expected: FAIL because the new config structs and helpers do not exist.
 
-- [ ] **Step 3: Extend config model**
+- [x] **Step 3: Extend config model**
 
 In `src-tauri/src/config.rs`, add constants and structs:
 
@@ -363,7 +363,7 @@ pub struct AppConfig {
 }
 ```
 
-- [ ] **Step 4: Add clamp/reset helpers**
+- [x] **Step 4: Add clamp/reset helpers**
 
 Add helper methods in `src-tauri/src/config.rs`:
 
@@ -433,7 +433,7 @@ impl AppConfig {
 
 Update `load_from_dir` to return `config.clamped()`.
 
-- [ ] **Step 5: Add Tauri config commands**
+- [x] **Step 5: Add Tauri config commands**
 
 In `src-tauri/src/commands.rs`, import config types:
 
@@ -475,7 +475,7 @@ pub fn ui_layout_reset() -> Result<AppConfig, String> {
 
 Register them in `src-tauri/src/lib.rs` `generate_handler!`.
 
-- [ ] **Step 6: Restore and persist window geometry**
+- [x] **Step 6: Restore and persist window geometry**
 
 In `src-tauri/src/lib.rs`, before starting the MCP server in `.setup`, load config and apply window geometry to the main window:
 
@@ -515,7 +515,7 @@ fn save_main_window_geometry(window: &tauri::WebviewWindow) {
 
 Use a debounce if repeated resize events are noisy; at minimum persist on close.
 
-- [ ] **Step 7: Add frontend API types and wrappers**
+- [x] **Step 7: Add frontend API types and wrappers**
 
 In `src/lib/types.ts`, add:
 
@@ -564,7 +564,7 @@ export async function uiLayoutReset(): Promise<AppConfig> {
 
 Add mock cases returning and updating an in-memory mock config.
 
-- [ ] **Step 8: Verify config tests**
+- [x] **Step 8: Verify config tests**
 
 Run:
 
@@ -576,7 +576,7 @@ pnpm check
 
 Expected: PASS.
 
-- [ ] **Step 9: Commit config and window layout persistence**
+- [x] **Step 9: Commit config and window layout persistence**
 
 ```bash
 git add src-tauri/src/config.rs src-tauri/src/commands.rs src-tauri/src/lib.rs src/lib/types.ts src/lib/api.ts
