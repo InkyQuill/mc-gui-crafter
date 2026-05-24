@@ -640,7 +640,7 @@ impl Project {
         for element in self.elements.iter().filter(|element| element.visible) {
             let x = i64::from(element.x);
             let y = i64::from(element.y);
-            let size = element.render_size();
+            let size = self.element_visual_size(element);
             let width = i64::from(size.width);
             let height = i64::from(size.height);
             min_x = min_x.min(x);
@@ -665,6 +665,27 @@ impl Project {
             y: min_y.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32,
             width: u32::try_from((max_x - min_x).max(1)).unwrap_or(u32::MAX),
             height: u32::try_from((max_y - min_y).max(1)).unwrap_or(u32::MAX),
+        }
+    }
+
+    fn element_visual_size(&self, element: &Element) -> Size {
+        if element.element_type != ElementType::Texture {
+            return element.render_size();
+        }
+
+        let Some(asset_name) = element.asset.as_deref() else {
+            return element.render_size();
+        };
+        let Some(data) = self.texture_data.get(asset_name) else {
+            return element.render_size();
+        };
+        let Ok(texture) = image::load_from_memory(data) else {
+            return element.render_size();
+        };
+
+        Size {
+            width: element.width.or(element.size).unwrap_or(texture.width()),
+            height: element.height.or(element.size).unwrap_or(texture.height()),
         }
     }
 
@@ -748,6 +769,7 @@ impl Project {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use image::{Rgba, RgbaImage};
 
     fn sample_element_defaults() -> Element {
         Element {
@@ -812,6 +834,18 @@ mod tests {
             y,
             ..sample_element_defaults()
         }
+    }
+
+    fn test_png(width: u32, height: u32, color: Rgba<u8>) -> Vec<u8> {
+        let image = RgbaImage::from_pixel(width, height, color);
+        let mut bytes = Vec::new();
+        image
+            .write_to(
+                &mut std::io::Cursor::new(&mut bytes),
+                image::ImageFormat::Png,
+            )
+            .unwrap();
+        bytes
     }
 
     #[test]
@@ -1197,6 +1231,36 @@ mod tests {
 
         assert_eq!(scrollbar_bounds.width, 22);
         assert_eq!(scrollbar_bounds.height, 64);
+    }
+
+    #[test]
+    fn visual_bounds_use_texture_asset_size_when_explicit_size_missing() {
+        let mut project = Project::new("Texture Visual", 100, 80, ModTarget::Forge);
+        project.texture_data.insert(
+            "textures/flair.png".into(),
+            test_png(32, 24, Rgba([0xd7, 0xa3, 0x39, 0xff])),
+        );
+        let mut flair = base_element_for_test("flair", ElementType::Texture, 84, 70);
+        flair.asset = Some("textures/flair.png".into());
+        project.elements.push(flair);
+
+        let bounds = project.visual_bounds();
+
+        assert_eq!(
+            bounds,
+            VisualBounds {
+                x: 0,
+                y: 0,
+                width: 116,
+                height: 94,
+            }
+        );
+
+        let atlas = crate::texture::composite_atlas_for_layer(&project, Layer::Background).unwrap();
+        let image = image::load_from_memory(&atlas).unwrap().to_rgba8();
+
+        assert_eq!(image.dimensions(), (116, 94));
+        assert_eq!(image.get_pixel(115, 93).0, [0xd7, 0xa3, 0x39, 0xff]);
     }
 
     #[test]
