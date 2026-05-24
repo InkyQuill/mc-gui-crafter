@@ -37,6 +37,24 @@ pub fn composite_atlas_for_layer(project: &Project, layer: Layer) -> Result<Vec<
     Ok(buf)
 }
 
+pub fn composite_atlas_for_layer_with_visual_empty(
+    project: &Project,
+    layer: Layer,
+) -> Result<Vec<u8>, String> {
+    let has_elements = project
+        .elements
+        .iter()
+        .any(|el| el.visible && el.layer == layer && is_baked_atlas_element(el));
+
+    if has_elements {
+        return composite_atlas_for_layer(project, layer);
+    }
+
+    let bounds = project.visual_bounds();
+    validate_composite_size("atlas", bounds.width, bounds.height)?;
+    encode_png(RgbaImage::new(bounds.width, bounds.height))
+}
+
 pub fn composite_project_preview(project: &Project) -> Result<Vec<u8>, String> {
     let bounds = project.visual_bounds();
     validate_composite_size("preview", bounds.width, bounds.height)?;

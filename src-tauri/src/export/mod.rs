@@ -209,7 +209,8 @@ fn plan_export(
     )?;
 
     // Background atlas
-    let bg_atlas = crate::texture::composite_atlas_for_layer(project, Layer::Background)?;
+    let bg_atlas =
+        crate::texture::composite_atlas_for_layer_with_visual_empty(project, Layer::Background)?;
     let bg_texture_path = export
         .asset_dir()
         .join(format!("textures/gui/{}_gui.png", export.resource_name));
@@ -221,7 +222,8 @@ fn plan_export(
         .iter()
         .any(|e| e.visible && e.layer == Layer::Overlay);
     if has_overlay {
-        let overlay_atlas = crate::texture::composite_atlas_for_layer(project, Layer::Overlay)?;
+        let overlay_atlas =
+            crate::texture::composite_atlas_for_layer_with_visual_empty(project, Layer::Overlay)?;
         let overlay_texture_path = export
             .asset_dir()
             .join(format!("textures/gui/{}_overlay.png", export.resource_name));
@@ -375,7 +377,7 @@ fn layout_json_value(project: &Project, mut textures_json: serde_json::Value) ->
         .iter()
         .map(|e| {
             let mut val = serde_json::to_value(e).unwrap();
-            if e.layer == Layer::Animatable {
+            if e.visible && e.layer == Layer::Animatable {
                 val["texture"] = serde_json::json!(format!("textures/gui/{}.png", e.id));
             }
             val
@@ -2457,6 +2459,27 @@ mod tests {
     }
 
     #[test]
+    fn layout_json_omits_generated_texture_for_hidden_animatable_elements() {
+        let mut project = layered_project(ModTarget::Forge);
+        let progress = project
+            .elements
+            .iter_mut()
+            .find(|element| element.id == "progress_arrow")
+            .unwrap();
+        progress.visible = false;
+
+        let layout = layout_json_value(&project, textures_json_for_test());
+        let progress_json = layout["elements"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|element| element["id"] == "progress_arrow")
+            .unwrap();
+
+        assert!(progress_json.get("texture").is_none());
+    }
+
+    #[test]
     fn loader_metadata_data_preserves_fabric_json_but_trims_toml_text() {
         let metadata = "line with trailing spaces   \nnext line\t\n".to_string();
 
@@ -3061,6 +3084,39 @@ mod tests {
     }
 
     #[test]
+    fn hidden_animatable_export_does_not_reference_missing_generated_sprite_texture() {
+        let output_dir = TempExportDir::new("hidden-animatable-sprite");
+        let config = ExportConfig {
+            mod_id: "testmod".to_string(),
+            package: "com.example".to_string(),
+            class_name: "LayeredGui".to_string(),
+            output_dir: output_dir.path().to_string_lossy().to_string(),
+            settings_override: None,
+            overwrite: false,
+        };
+        let mut project = layered_project(ModTarget::Forge);
+        let progress = project
+            .elements
+            .iter_mut()
+            .find(|element| element.id == "progress_arrow")
+            .unwrap();
+        progress.visible = false;
+
+        export_project(&project, &config, "forge").unwrap();
+        let layout_json = read(
+            &output_dir
+                .path()
+                .join("src/main/resources/assets/testmod/gui/layeredgui_layout.json"),
+        );
+        let sprite_path = output_dir
+            .path()
+            .join("src/main/resources/assets/testmod/textures/gui/progress_arrow.png");
+
+        assert!(!sprite_path.exists());
+        assert!(!layout_json.contains(r#""texture": "textures/gui/progress_arrow.png""#));
+    }
+
+    #[test]
     fn animatable_sprite_export_crops_progress_uv_region() {
         let output_dir = TempExportDir::new("animatable-progress-uv");
         let config = ExportConfig {
@@ -3108,6 +3164,47 @@ mod tests {
         let sprite = image::open(sprite_path).unwrap().to_rgba8();
 
         assert_eq!(sprite.get_pixel(0, 0).0, [0xf0, 0xb4, 0x28, 0xff]);
+    }
+
+    #[test]
+    fn background_export_uses_visual_bounds_when_empty_layer_is_visually_expanded() {
+        let output_dir = TempExportDir::new("empty-background-visual-bounds");
+        let config = ExportConfig {
+            mod_id: "testmod".to_string(),
+            package: "com.example".to_string(),
+            class_name: "ReturnsGui".to_string(),
+            output_dir: output_dir.path().to_string_lossy().to_string(),
+            settings_override: None,
+            overwrite: false,
+        };
+        let mut project = Project::new("Returns", 100, 80, ModTarget::Forge);
+        project.attached_regions.push(AttachedRegion {
+            id: "returns_pocket".to_string(),
+            anchor: AttachedRegionAnchor::Right,
+            x: 100,
+            y: 18,
+            width: 54,
+            height: 72,
+            state: AttachedRegionState::Static,
+            kind: Some("returns_pocket".to_string()),
+            semantic_group: Some("food_returns".to_string()),
+            visible: true,
+        });
+
+        export_project(&project, &config, "forge").unwrap();
+        let background_path = output_dir
+            .path()
+            .join("src/main/resources/assets/testmod/textures/gui/returnsgui_gui.png");
+        let background = image::open(background_path).unwrap().to_rgba8();
+        let screen = read(
+            &output_dir
+                .path()
+                .join("src/main/java/com/example/ReturnsGuiScreen.java"),
+        );
+
+        assert_eq!(background.dimensions(), (154, 90));
+        assert!(screen.contains("this.imageWidth = 100;"));
+        assert!(screen.contains("this.imageHeight = 80;"));
     }
 
     #[test]
