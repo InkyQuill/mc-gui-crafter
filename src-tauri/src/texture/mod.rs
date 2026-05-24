@@ -2,8 +2,9 @@ use crate::project::{Element, ElementType, Layer, Project};
 use image::{GenericImageView, Rgba, RgbaImage};
 
 pub fn composite_atlas_for_layer(project: &Project, layer: Layer) -> Result<Vec<u8>, String> {
-    let w = project.gui_size.width;
-    let h = project.gui_size.height;
+    let bounds = project.visual_bounds();
+    let w = bounds.width;
+    let h = bounds.height;
 
     let mut img = RgbaImage::new(w, h);
     let has_elements = project
@@ -23,7 +24,7 @@ pub fn composite_atlas_for_layer(project: &Project, layer: Layer) -> Result<Vec<
             continue;
         }
 
-        overlay_baked_element(&mut img, project, el)?;
+        overlay_baked_element(&mut img, project, el, bounds.x, bounds.y)?;
     }
 
     let mut buf = Vec::new();
@@ -34,7 +35,8 @@ pub fn composite_atlas_for_layer(project: &Project, layer: Layer) -> Result<Vec<
 }
 
 pub fn composite_project_preview(project: &Project) -> Result<Vec<u8>, String> {
-    let mut preview = RgbaImage::new(project.gui_size.width, project.gui_size.height);
+    let bounds = project.visual_bounds();
+    let mut preview = RgbaImage::new(bounds.width, bounds.height);
 
     for layer in [Layer::Background, Layer::Overlay, Layer::Animatable] {
         for element in project
@@ -43,14 +45,14 @@ pub fn composite_project_preview(project: &Project) -> Result<Vec<u8>, String> {
             .filter(|element| element.visible && element.layer == layer)
         {
             if is_baked_atlas_element(element) {
-                overlay_baked_element(&mut preview, project, element)?;
+                overlay_baked_element(&mut preview, project, element, bounds.x, bounds.y)?;
             } else {
                 let element_png = composite_single_element(element, project)?;
                 overlay_png(
                     &mut preview,
                     &element_png,
-                    element.x as i64,
-                    element.y as i64,
+                    i64::from(element.x) - i64::from(bounds.x),
+                    i64::from(element.y) - i64::from(bounds.y),
                     &element.id,
                 )?;
             }
@@ -76,24 +78,33 @@ fn overlay_baked_element(
     img: &mut RgbaImage,
     project: &Project,
     element: &Element,
+    offset_x: i32,
+    offset_y: i32,
 ) -> Result<(), String> {
     match element.element_type {
         ElementType::Texture => {
             if let Some(asset_name) = &element.asset {
-                overlay_asset(img, project, element, asset_name)?;
+                overlay_asset(img, project, element, asset_name, offset_x, offset_y)?;
             }
         }
         ElementType::Slot | ElementType::VirtualSlotCell => {
-            overlay_slot(img, project, element)?;
+            overlay_slot(img, project, element, offset_x, offset_y)?;
         }
         ElementType::Button | ElementType::ToggleButton => {
-            overlay_button(img, project, element)?;
+            overlay_button(img, project, element, offset_x, offset_y)?;
         }
         ElementType::Scrollbar => {
             let w = element.width.or(element.size).unwrap_or(12);
             let h = element.height.or(element.size).unwrap_or(54);
             let data = generated_scrollbar(w, h)?;
-            overlay_texture_data(img, element, &data, "generated scrollbar")?;
+            overlay_texture_data(
+                img,
+                element,
+                &data,
+                "generated scrollbar",
+                offset_x,
+                offset_y,
+            )?;
         }
         _ => {}
     }
@@ -101,40 +112,54 @@ fn overlay_baked_element(
     Ok(())
 }
 
-fn overlay_slot(img: &mut RgbaImage, project: &Project, element: &Element) -> Result<(), String> {
+fn overlay_slot(
+    img: &mut RgbaImage,
+    project: &Project,
+    element: &Element,
+    offset_x: i32,
+    offset_y: i32,
+) -> Result<(), String> {
     if let Some(asset_name) = element.asset.as_deref().or_else(|| {
         project
             .texture_data
             .contains_key("textures/generated/slot.png")
             .then_some("textures/generated/slot.png")
     }) {
-        return overlay_asset(img, project, element, asset_name);
+        return overlay_asset(img, project, element, asset_name, offset_x, offset_y);
     }
 
     let data = generated_slot()?;
-    overlay_texture_data(img, element, &data, "generated slot")
+    overlay_texture_data(img, element, &data, "generated slot", offset_x, offset_y)
 }
 
-fn overlay_button(img: &mut RgbaImage, project: &Project, element: &Element) -> Result<(), String> {
+fn overlay_button(
+    img: &mut RgbaImage,
+    project: &Project,
+    element: &Element,
+    offset_x: i32,
+    offset_y: i32,
+) -> Result<(), String> {
     if let Some(asset_name) = element.asset.as_deref().or_else(|| {
         project
             .texture_data
             .contains_key("textures/generated/button.png")
             .then_some("textures/generated/button.png")
     }) {
-        overlay_asset(img, project, element, asset_name)?;
+        overlay_asset(img, project, element, asset_name, offset_x, offset_y)?;
     } else {
         let data = generated_button()?;
-        overlay_texture_data(img, element, &data, "generated button")?;
+        overlay_texture_data(img, element, &data, "generated button", offset_x, offset_y)?;
     }
 
-    overlay_button_icon(img, project, element)
+    overlay_button_icon(img, project, element, offset_x, offset_y)
 }
 
 fn overlay_button_icon(
     img: &mut RgbaImage,
     project: &Project,
     element: &Element,
+    offset_x: i32,
+    offset_y: i32,
 ) -> Result<(), String> {
     let Some(icon_name) = element.icon.as_deref() else {
         return Ok(());
@@ -167,9 +192,11 @@ fn overlay_button_icon(
         target_h,
         image::imageops::FilterType::Nearest,
     );
-    let x = element.x + (element_w.saturating_sub(target_w) / 2) as i32;
-    let y = element.y + (element_h.saturating_sub(target_h) / 2) as i32;
-    image::imageops::overlay(img, &resized, x as i64, y as i64);
+    let x = i64::from(element.x) - i64::from(offset_x)
+        + i64::from(element_w.saturating_sub(target_w) / 2);
+    let y = i64::from(element.y) - i64::from(offset_y)
+        + i64::from(element_h.saturating_sub(target_h) / 2);
+    image::imageops::overlay(img, &resized, x, y);
     Ok(())
 }
 
@@ -178,11 +205,13 @@ fn overlay_asset(
     project: &Project,
     element: &Element,
     asset_name: &str,
+    offset_x: i32,
+    offset_y: i32,
 ) -> Result<(), String> {
     let Some(data) = project.texture_data.get(asset_name) else {
         return Ok(());
     };
-    overlay_texture_data(img, element, data, asset_name)
+    overlay_texture_data(img, element, data, asset_name, offset_x, offset_y)
 }
 
 fn overlay_texture_data(
@@ -190,6 +219,8 @@ fn overlay_texture_data(
     element: &Element,
     data: &[u8],
     asset_name: &str,
+    offset_x: i32,
+    offset_y: i32,
 ) -> Result<(), String> {
     let tex = image::load_from_memory(data)
         .map_err(|e| format!("Failed to load texture '{}': {e}", asset_name))?
@@ -204,7 +235,12 @@ fn overlay_texture_data(
     }
 
     let resized = image::imageops::resize(&source, tw, th, image::imageops::FilterType::Nearest);
-    image::imageops::overlay(img, &resized, element.x as i64, element.y as i64);
+    image::imageops::overlay(
+        img,
+        &resized,
+        i64::from(element.x) - i64::from(offset_x),
+        i64::from(element.y) - i64::from(offset_y),
+    );
     Ok(())
 }
 
@@ -583,6 +619,47 @@ mod tests {
 
         assert_eq!(image.get_pixel(12, 11), &Rgba([0x11, 0xaa, 0xee, 0xff]));
         assert_ne!(image.get_pixel(12, 9), &Rgba([0x11, 0xaa, 0xee, 0xff]));
+    }
+
+    #[test]
+    fn background_export_expands_to_visual_bounds_for_outside_elements() {
+        let mut project = Project::new("Outside", 100, 80, ModTarget::Forge);
+        project.texture_data.insert(
+            "textures/flair.png".into(),
+            test_png(32, 32, Rgba([0xd7, 0xa3, 0x39, 0xff])),
+        );
+        let mut flair = button_element("flair", 84, -16);
+        flair.element_type = ElementType::Texture;
+        flair.width = Some(32);
+        flair.height = Some(32);
+        flair.asset = Some("textures/flair.png".into());
+        project.elements.push(flair);
+
+        let atlas = composite_atlas_for_layer(&project, Layer::Background).unwrap();
+        let image = image::load_from_memory(&atlas).unwrap().to_rgba8();
+
+        assert_eq!(image.dimensions(), (116, 96));
+        assert_eq!(image.get_pixel(84, 0).0, [0xd7, 0xa3, 0x39, 0xff]);
+    }
+
+    #[test]
+    fn background_export_remains_main_size_when_elements_stay_inside() {
+        let mut project = Project::new("Inside", 100, 80, ModTarget::Forge);
+        project.texture_data.insert(
+            "textures/panel.png".into(),
+            test_png(10, 10, Rgba([0x11, 0x22, 0x33, 0xff])),
+        );
+        let mut panel = button_element("panel", 10, 10);
+        panel.element_type = ElementType::Texture;
+        panel.width = Some(10);
+        panel.height = Some(10);
+        panel.asset = Some("textures/panel.png".into());
+        project.elements.push(panel);
+
+        let atlas = composite_atlas_for_layer(&project, Layer::Background).unwrap();
+        let image = image::load_from_memory(&atlas).unwrap().to_rgba8();
+
+        assert_eq!(image.dimensions(), (100, 80));
     }
 
     #[test]
