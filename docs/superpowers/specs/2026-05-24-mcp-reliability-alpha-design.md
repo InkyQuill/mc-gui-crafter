@@ -34,8 +34,9 @@ those larger features.
 Alpha MCP tools should follow a consistent contract:
 
 - tool names use `snake_case`;
-- mutating responses include `project_id` and enough compact metadata to verify
-  what changed;
+- Reliability Alpha mutating tools `project_resize`, `group_upsert`, and
+  `element_update_many` include `project_id` and enough compact metadata to
+  verify what changed;
 - binary assets and rendered images return metadata such as `path`, `width`,
   `height`, `bytes`, and `sha256`, not inline payloads by default;
 - no-op mutations should not create history entries or misleading change

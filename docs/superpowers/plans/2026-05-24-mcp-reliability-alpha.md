@@ -1925,7 +1925,8 @@ In `docs/mcp.md`, add:
 ## Alpha response contract
 
 Closed-alpha MCP tools return compact JSON by default. Binary fields such as
-PNG data URLs are opt-in. New mutating tools include `project_id` in their
+PNG data URLs are opt-in. Reliability Alpha mutating tools `project_resize`,
+`group_upsert`, and `element_update_many` include `project_id` in their
 responses. No-op mutations should not change project revision or trigger UI
 synchronization events.
 ```
