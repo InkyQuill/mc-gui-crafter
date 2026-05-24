@@ -13,6 +13,15 @@ For concrete JSON examples and command sequences, read
 [references/mcp-workflows.md](references/mcp-workflows.md) when creating or
 exporting a project.
 
+Prefer these closed-alpha MCP tools:
+
+- `schema_discover` for accepted enums and editable fields.
+- `project_render` for visual verification.
+- `project_resize` for canvas size changes only.
+- `slot_grid_add`, `element_add_many`, and `element_update_many` for bulk edits.
+- `group_upsert` for creating or replacing group membership.
+- `project_semantic_groups_update` with `member_ids` for explicit semantics.
+
 ## Core Workflow
 
 1. Discover the current surface:

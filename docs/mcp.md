@@ -125,9 +125,24 @@ restart the MCP client session.
 ## Alpha response contract
 
 Closed-alpha MCP tools return compact JSON by default. Binary fields such as
-PNG data URLs are opt-in. New mutating tools include `project_id` in their
+PNG data URLs are opt-in. Reliability Alpha mutating tools `project_resize`,
+`group_upsert`, and `element_update_many` include `project_id` in their
 responses. No-op mutations should not change project revision or trigger UI
 synchronization events.
+
+## Closed-alpha agent workflow
+
+1. Call `schema_discover` before using unfamiliar enums or semantic groups.
+2. Create or open a project with `project_new` or `project_open`.
+3. Use `slot_grid_add`, `element_add_many`, and `element_update_many` for bulk
+   layout work.
+4. Use `group_upsert` when group membership changes.
+5. Use `project_resize` only for canvas size changes; move elements explicitly.
+6. Use `project_semantic_groups_update` with `member_ids` for non-rectangular
+   slot groups and control button groups.
+7. Use `project_render` after visual edits and inspect the PNG when possible.
+8. Use `project_export_preview` before `project_export`.
+9. Save source projects with `project_save_as`.
 
 ## Generating GUIs With an Agent
 

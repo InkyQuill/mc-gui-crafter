@@ -101,6 +101,13 @@
 
 ## Phase 6.x / Phase 7 Candidates
 
+- [x] MCP Reliability Alpha design/spec written.
+- [x] MCP render tool exposed as `project_render`.
+- [x] MCP project resize, group upsert, and batch element update workflows.
+- [x] MCP schema discovery and explicit semantic member validation.
+- [ ] Visual Authoring Alpha.
+- [ ] Editable State Variants Alpha.
+- [ ] GUI Polish Alpha.
 - [x] More starter templates: advanced machine, fluid tank, brewing stand, anvil, and Custom Grid as a default 3×3 starter layout
 - [x] Minecraft visual fidelity pass: light/dark Minecraft-like themes, generated default GUI textures, and vanilla-aligned template slot metrics
 - [x] Semantic slot roles and semantic group metadata for machine, player, hotbar, scrollable, virtual, upgrade, filter, ghost, and offhand slots

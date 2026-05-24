@@ -4,6 +4,94 @@ Use these examples as patterns. Tool names refer to the `mc-gui-crafter` MCP
 server exposed by the running app. If a tool documented here is missing, reconnect
 or restart the MCP client; many clients cache `tools/list` for the session.
 
+## Closed-alpha Compact Workflow
+
+Use this sequence for a small fixed-slot machine GUI. Keep the returned
+`project_id` from `project_new` and pass it to later calls when multiple sessions
+are open.
+
+```json
+{
+  "name": "schema_discover",
+  "arguments": {}
+}
+```
+
+```json
+{
+  "name": "project_new",
+  "arguments": {
+    "name": "Alpha Machine",
+    "mod_target": "neoforge",
+    "template": "empty",
+    "width": 176,
+    "height": 166
+  }
+}
+```
+
+```json
+{
+  "name": "slot_grid_add",
+  "arguments": {
+    "id_prefix": "input",
+    "x": 44,
+    "y": 35,
+    "columns": 2,
+    "rows": 2,
+    "slot_role": "machine",
+    "inventory_group": "machine_inputs",
+    "slot_index_start": 0,
+    "group_id": "machine_inputs",
+    "semantic_group_kind": "fixed_slots",
+    "slot_count": 4
+  }
+}
+```
+
+```json
+{
+  "name": "group_upsert",
+  "arguments": {
+    "group_id": "machine_inputs",
+    "element_ids": ["input_0", "input_1", "input_2", "input_3"]
+  }
+}
+```
+
+```json
+{
+  "name": "project_render",
+  "arguments": {
+    "output_path": "/tmp/alpha-machine-preview.png",
+    "include_data_url": false
+  }
+}
+```
+
+```json
+{
+  "name": "project_export_preview",
+  "arguments": {
+    "target": "neoforge",
+    "mod_id": "examplemod",
+    "package": "net.example.gui",
+    "class_name": "AlphaMachineScreen",
+    "output_dir": "/tmp/alpha-machine-export",
+    "overwrite": true
+  }
+}
+```
+
+```json
+{
+  "name": "project_save_as",
+  "arguments": {
+    "path": "/tmp/alpha-machine.mcgui"
+  }
+}
+```
+
 ## Practical Machine GUI Workflow
 
 1. List templates.
