@@ -216,7 +216,10 @@ fn plan_export(
     plan_file(&mut files, bg_texture_path, bg_atlas)?;
 
     // Overlay atlas (only if overlay elements exist)
-    let has_overlay = project.elements.iter().any(|e| e.layer == Layer::Overlay);
+    let has_overlay = project
+        .elements
+        .iter()
+        .any(|e| e.visible && e.layer == Layer::Overlay);
     if has_overlay {
         let overlay_atlas = crate::texture::composite_atlas_for_layer(project, Layer::Overlay)?;
         let overlay_texture_path = export
@@ -227,7 +230,7 @@ fn plan_export(
 
     // Animatable sprites
     for element in &project.elements {
-        if element.layer == Layer::Animatable {
+        if element.visible && element.layer == Layer::Animatable {
             let sprite = crate::texture::composite_single_element(element, project)?;
             let sprite_path = export
                 .asset_dir()
@@ -362,7 +365,11 @@ fn project_with_effective_settings<'a>(
     }
 }
 
-fn layout_json_value(project: &Project, textures_json: serde_json::Value) -> serde_json::Value {
+fn layout_json_value(project: &Project, mut textures_json: serde_json::Value) -> serde_json::Value {
+    let visual_bounds = project.visual_bounds();
+    textures_json["visual_offset_x"] = serde_json::json!(visual_bounds.x);
+    textures_json["visual_offset_y"] = serde_json::json!(visual_bounds.y);
+
     let elements_json: Vec<serde_json::Value> = project
         .elements
         .iter()
@@ -377,10 +384,12 @@ fn layout_json_value(project: &Project, textures_json: serde_json::Value) -> ser
 
     serde_json::json!({
         "gui_size": project.gui_size,
+        "visual_bounds": visual_bounds,
         "textures": textures_json,
         "elements": elements_json,
         "groups": project.groups,
         "semantic_groups": project.semantic_groups,
+        "attached_regions": project.attached_regions,
         "animations": project.animations,
         "export_settings": project.export_settings,
     })
@@ -1018,7 +1027,10 @@ fn generate_forge_like_layout_java(
         _ => "new ResourceLocation(namespace, path)",
     };
 
-    let has_overlay = project.elements.iter().any(|e| e.layer == Layer::Overlay);
+    let has_overlay = project
+        .elements
+        .iter()
+        .any(|e| e.visible && e.layer == Layer::Overlay);
     let overlay_field = if has_overlay {
         "private final ResourceLocation overlay;\n    "
     } else {
@@ -1035,12 +1047,20 @@ fn generate_forge_like_layout_java(
         ""
     };
     let load_layout_body = if has_overlay {
-        r#"            ResourceLocation overlayId = data.textures.overlay != null ? resource(namespace, data.textures.overlay) : null;
-            GuiLayout layout = new GuiLayout(data.elements, data.animations, bgId, overlayId);
+        r#"            int visualOffsetX = data.textures.visualOffsetXOrDefault();
+            int visualOffsetY = data.textures.visualOffsetYOrDefault();
+            int backgroundWidth = data.visualBounds != null ? data.visualBounds.width : WIDTH;
+            int backgroundHeight = data.visualBounds != null ? data.visualBounds.height : HEIGHT;
+            ResourceLocation overlayId = data.textures.overlay != null ? resource(namespace, data.textures.overlay) : null;
+            GuiLayout layout = new GuiLayout(data.elements, data.animations, bgId, visualOffsetX, visualOffsetY, backgroundWidth, backgroundHeight, overlayId);
             layout.namespace = namespace;
             return layout;"#
     } else {
-        r#"            GuiLayout layout = new GuiLayout(data.elements, data.animations, bgId);
+        r#"            int visualOffsetX = data.textures.visualOffsetXOrDefault();
+            int visualOffsetY = data.textures.visualOffsetYOrDefault();
+            int backgroundWidth = data.visualBounds != null ? data.visualBounds.width : WIDTH;
+            int backgroundHeight = data.visualBounds != null ? data.visualBounds.height : HEIGHT;
+            GuiLayout layout = new GuiLayout(data.elements, data.animations, bgId, visualOffsetX, visualOffsetY, backgroundWidth, backgroundHeight);
             layout.namespace = namespace;
             return layout;"#
     };
@@ -1048,7 +1068,7 @@ fn generate_forge_like_layout_java(
         r#"
     public void renderOverlay(GuiGraphics graphics, int left, int top) {
         if (overlay != null) {
-            graphics.blit(overlay, left, top, 0, 0, WIDTH, HEIGHT, WIDTH, HEIGHT);
+            graphics.blit(overlay, left + visualOffsetX, top + visualOffsetY, 0, 0, backgroundWidth, backgroundHeight, backgroundWidth, backgroundHeight);
         }
     }
 "#
@@ -1110,12 +1130,20 @@ public final class GuiLayout {{
     private final List<Animation> animations;
     private final ResourceLocation texture;
     {overlay_field}
+    private final int visualOffsetX;
+    private final int visualOffsetY;
+    private final int backgroundWidth;
+    private final int backgroundHeight;
     private String namespace;
 
-    private GuiLayout(List<Element> elements, List<Animation> animations, ResourceLocation texture{overlay_ctor}) {{
+    private GuiLayout(List<Element> elements, List<Animation> animations, ResourceLocation texture, int visualOffsetX, int visualOffsetY, int backgroundWidth, int backgroundHeight{overlay_ctor}) {{
         this.elements = elements == null ? List.of() : elements;
         this.animations = animations == null ? List.of() : animations;
         this.texture = texture;
+        this.visualOffsetX = visualOffsetX;
+        this.visualOffsetY = visualOffsetY;
+        this.backgroundWidth = backgroundWidth;
+        this.backgroundHeight = backgroundHeight;
         {overlay_assign}
     }}
 
@@ -1139,7 +1167,7 @@ public final class GuiLayout {{
     }}
 
     public void renderTexture(GuiGraphics graphics, int left, int top) {{
-        graphics.blit(texture, left, top, 0, 0, WIDTH, HEIGHT, WIDTH, HEIGHT);
+        graphics.blit(texture, left + visualOffsetX, top + visualOffsetY, 0, 0, backgroundWidth, backgroundHeight, backgroundWidth, backgroundHeight);
     }}
 {overlay_render}
     public void renderStaticElements(GuiGraphics graphics, int left, int top) {{
@@ -1194,6 +1222,8 @@ public final class GuiLayout {{
     }}
 
     private static final class LayoutData {{
+        @SerializedName("visual_bounds")
+        VisualBounds visualBounds;
         TexturesData textures;
         List<Element> elements;
         List<Animation> animations;
@@ -1202,6 +1232,20 @@ public final class GuiLayout {{
     private static final class TexturesData {{
         String background;
         String overlay;
+        @SerializedName("visual_offset_x")
+        Integer visualOffsetX;
+        @SerializedName("visual_offset_y")
+        Integer visualOffsetY;
+
+        int visualOffsetXOrDefault() {{ return visualOffsetX == null ? 0 : visualOffsetX; }}
+        int visualOffsetYOrDefault() {{ return visualOffsetY == null ? 0 : visualOffsetY; }}
+    }}
+
+    private static final class VisualBounds {{
+        int x;
+        int y;
+        int width;
+        int height;
     }}
 
     private static final class Element {{
@@ -1265,7 +1309,10 @@ public final class GuiLayout {{
 }
 
 fn generate_fabric_layout_java(export: &SanitizedExport, project: &Project) -> String {
-    let has_overlay = project.elements.iter().any(|e| e.layer == Layer::Overlay);
+    let has_overlay = project
+        .elements
+        .iter()
+        .any(|e| e.visible && e.layer == Layer::Overlay);
     let overlay_field = if has_overlay {
         "private final Identifier overlay;\n    "
     } else {
@@ -1282,15 +1329,15 @@ fn generate_fabric_layout_java(export: &SanitizedExport, project: &Project) -> S
         ""
     };
     let layout_ctor_args = if has_overlay {
-        "data.elements, data.animations, bgId, overlayId"
+        "data.elements, data.animations, bgId, visualOffsetX, visualOffsetY, backgroundWidth, backgroundHeight, overlayId"
     } else {
-        "data.elements, data.animations, bgId"
+        "data.elements, data.animations, bgId, visualOffsetX, visualOffsetY, backgroundWidth, backgroundHeight"
     };
     let overlay_render = if has_overlay {
         r#"
     public void renderOverlay(DrawContext context, int left, int top) {
         if (overlay != null) {
-            context.drawTexture(overlay, left, top, 0, 0, WIDTH, HEIGHT, WIDTH, HEIGHT);
+            context.drawTexture(overlay, left + visualOffsetX, top + visualOffsetY, 0, 0, backgroundWidth, backgroundHeight, backgroundWidth, backgroundHeight);
         }
     }
 "#
@@ -1351,12 +1398,20 @@ public final class GuiLayout {{
     private final List<Animation> animations;
     private final Identifier texture;
     {overlay_field}
+    private final int visualOffsetX;
+    private final int visualOffsetY;
+    private final int backgroundWidth;
+    private final int backgroundHeight;
     private String namespace;
 
-    private GuiLayout(List<Element> elements, List<Animation> animations, Identifier texture{overlay_ctor}) {{
+    private GuiLayout(List<Element> elements, List<Animation> animations, Identifier texture, int visualOffsetX, int visualOffsetY, int backgroundWidth, int backgroundHeight{overlay_ctor}) {{
         this.elements = elements == null ? List.of() : elements;
         this.animations = animations == null ? List.of() : animations;
         this.texture = texture;
+        this.visualOffsetX = visualOffsetX;
+        this.visualOffsetY = visualOffsetY;
+        this.backgroundWidth = backgroundWidth;
+        this.backgroundHeight = backgroundHeight;
         {overlay_assign}
     }}
 
@@ -1373,6 +1428,10 @@ public final class GuiLayout {{
             Gson gson = new Gson();
             LayoutData data = gson.fromJson(reader, new TypeToken<LayoutData>() {{}}.getType());
             Identifier bgId = resource(namespace, data.textures.background);
+            int visualOffsetX = data.textures.visualOffsetXOrDefault();
+            int visualOffsetY = data.textures.visualOffsetYOrDefault();
+            int backgroundWidth = data.visualBounds != null ? data.visualBounds.width : WIDTH;
+            int backgroundHeight = data.visualBounds != null ? data.visualBounds.height : HEIGHT;
             Identifier overlayId = data.textures.overlay != null ? resource(namespace, data.textures.overlay) : null;
             GuiLayout layout = new GuiLayout({layout_ctor_args});
             layout.namespace = namespace;
@@ -1383,7 +1442,7 @@ public final class GuiLayout {{
     }}
 
     public void renderTexture(DrawContext context, int left, int top) {{
-        context.drawTexture(texture, left, top, 0, 0, WIDTH, HEIGHT, WIDTH, HEIGHT);
+        context.drawTexture(texture, left + visualOffsetX, top + visualOffsetY, 0, 0, backgroundWidth, backgroundHeight, backgroundWidth, backgroundHeight);
     }}
 {overlay_render}
     public void renderStaticElements(DrawContext context, int left, int top) {{
@@ -1438,6 +1497,8 @@ public final class GuiLayout {{
     }}
 
     private static final class LayoutData {{
+        @SerializedName("visual_bounds")
+        VisualBounds visualBounds;
         TexturesData textures;
         List<Element> elements;
         List<Animation> animations;
@@ -1446,6 +1507,20 @@ public final class GuiLayout {{
     private static final class TexturesData {{
         String background;
         String overlay;
+        @SerializedName("visual_offset_x")
+        Integer visualOffsetX;
+        @SerializedName("visual_offset_y")
+        Integer visualOffsetY;
+
+        int visualOffsetXOrDefault() {{ return visualOffsetX == null ? 0 : visualOffsetX; }}
+        int visualOffsetYOrDefault() {{ return visualOffsetY == null ? 0 : visualOffsetY; }}
+    }}
+
+    private static final class VisualBounds {{
+        int x;
+        int y;
+        int width;
+        int height;
     }}
 
     private static final class Element {{
@@ -1893,8 +1968,8 @@ mod tests {
     use super::*;
     use crate::animation::{Animation, AnimationType};
     use crate::project::{
-        Element, ElementType, FillDirection, Layer, ModTarget, SemanticGroup, SemanticGroupKind,
-        Size, SlotRole, UvRect,
+        AttachedRegion, AttachedRegionAnchor, AttachedRegionState, Element, ElementType,
+        FillDirection, Layer, ModTarget, SemanticGroup, SemanticGroupKind, Size, SlotRole, UvRect,
     };
     use image::{Rgba, RgbaImage};
     use std::collections::HashMap;
@@ -2311,6 +2386,41 @@ mod tests {
 
         assert_eq!(layout["semantic_groups"][0]["id"], "machine_buffer");
         assert_eq!(layout["export_settings"]["codegen_mode"], "modular");
+    }
+
+    #[test]
+    fn layout_json_includes_visual_bounds_offsets_and_attached_regions() {
+        let mut project = Project::new("Returns", 100, 80, ModTarget::Forge);
+        project.attached_regions.push(AttachedRegion {
+            id: "returns_pocket".to_string(),
+            anchor: AttachedRegionAnchor::Right,
+            x: 100,
+            y: 18,
+            width: 54,
+            height: 72,
+            state: AttachedRegionState::Static,
+            kind: Some("returns_pocket".to_string()),
+            semantic_group: Some("food_returns".to_string()),
+            visible: true,
+        });
+
+        let layout = layout_json_value(
+            &project,
+            serde_json::json!({ "background": "textures/gui/returns_gui.png" }),
+        );
+
+        assert_eq!(layout["visual_bounds"]["x"], 0);
+        assert_eq!(layout["visual_bounds"]["y"], 0);
+        assert_eq!(layout["visual_bounds"]["width"], 154);
+        assert_eq!(layout["visual_bounds"]["height"], 90);
+        assert_eq!(layout["textures"]["visual_offset_x"], 0);
+        assert_eq!(layout["textures"]["visual_offset_y"], 0);
+        assert_eq!(layout["attached_regions"][0]["id"], "returns_pocket");
+        assert_eq!(layout["attached_regions"][0]["kind"], "returns_pocket");
+        assert_eq!(
+            layout["attached_regions"][0]["semantic_group"],
+            "food_returns"
+        );
     }
 
     #[test]
@@ -2774,7 +2884,9 @@ mod tests {
         assert!(layout.contains("new ResourceLocation(namespace, path)"));
         assert!(!layout.contains("net.minecraft.client.gui.DrawContext"));
         assert!(!layout.contains("switch (animation.directionOrDefault()) {{"));
-        assert!(layout.contains("new GuiLayout(data.elements, data.animations, bgId);"));
+        assert!(layout.contains(
+            "new GuiLayout(data.elements, data.animations, bgId, visualOffsetX, visualOffsetY, backgroundWidth, backgroundHeight);"
+        ));
         assert!(!layout.contains("overlayId"));
 
         let layout_json = read(&asset_dir.join("gui/123_furnace_gui_layout.json"));
@@ -2782,6 +2894,76 @@ mod tests {
         assert!(layout_json.contains("\"textures/widgets/panel.png\""));
 
         let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn generated_runtime_draws_background_at_visual_offset_but_keeps_main_size() {
+        let output_dir = TempExportDir::new("visual-offset-runtime");
+        let config = ExportConfig {
+            mod_id: "testmod".to_string(),
+            package: "com.example".to_string(),
+            class_name: "VisualOffsetGui".to_string(),
+            output_dir: output_dir.path().to_string_lossy().to_string(),
+            settings_override: None,
+            overwrite: false,
+        };
+        let mut project = Project::new("Visual Offset", 100, 80, ModTarget::Forge);
+        project.texture_data.insert(
+            "textures/widgets/panel.png".to_string(),
+            png_bytes_with_size(32, 32, [0xd7, 0xa3, 0x39, 0xff]),
+        );
+        project
+            .assets
+            .push("textures/widgets/panel.png".to_string());
+        project.elements.push(Element {
+            id: "flair".to_string(),
+            element_type: ElementType::Texture,
+            x: 84,
+            y: -16,
+            width: Some(32),
+            height: Some(32),
+            size: None,
+            asset: Some("textures/widgets/panel.png".to_string()),
+            icon: None,
+            icon_uv: None,
+            tooltip: None,
+            direction: None,
+            content: None,
+            font: None,
+            color: None,
+            shadow: None,
+            animation: None,
+            visible: true,
+            uv: None,
+            layer: Layer::Background,
+            slot_role: None,
+            slot_index: None,
+            inventory_group: None,
+            scroll_binding: None,
+            scroll_min: None,
+            scroll_max: None,
+            visible_rows: None,
+            total_rows: None,
+            columns: None,
+            target_group: None,
+            binding: None,
+            dock: None,
+            open_width: None,
+            open_height: None,
+            attached_region: None,
+        });
+
+        export_project(&project, &config, "forge").unwrap();
+        let java_dir = output_dir.path().join("src/main/java/com/example");
+        let screen = read(&java_dir.join("VisualOffsetGuiScreen.java"));
+        let layout = read(&java_dir.join("GuiLayout.java"));
+
+        assert!(screen.contains("this.imageWidth = 100;"));
+        assert!(screen.contains("this.imageHeight = 80;"));
+        assert!(layout.contains("left + visualOffsetX"));
+        assert!(layout.contains("top + visualOffsetY"));
+        assert!(layout.contains("backgroundWidth"));
+        assert!(layout.contains("backgroundHeight"));
     }
 
     #[test]
