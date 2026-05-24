@@ -80,8 +80,9 @@ exporting a project.
 7. Verify after each major step:
    - Call `element_list` after adding/moving elements.
    - Call `animation_list` after creating and binding animations.
-   - Call `project_screenshot` after major layout changes when visual inspection
-     is available.
+   - Call `project_render` after major layout changes when visual inspection
+     is available; `project_screenshot` remains a backward-compatible deprecated
+     alias.
    - Call `project_export_preview` before export.
    - Treat preview warnings as actionable. Fix semantic slot-count mismatches by
      aligning `slot_count`, slot roles, and `inventory_group`; fix scrollbar

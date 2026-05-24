@@ -528,6 +528,7 @@ fn is_mutating_tool(tool_name: &str) -> bool {
             | "project_get_active"
             | "project_export_preview"
             | "project_export"
+            | "project_render"
             | "project_screenshot"
             | "element_list"
             | "group_list"
@@ -574,8 +575,26 @@ fn get_tool_definitions() -> Vec<serde_json::Value> {
             export_props(),
         ),
         td(
+            "project_render",
+            "Render the current project to a PNG image and return compact metadata",
+            project_props(&[
+                (
+                    "output_path",
+                    "string",
+                    "Optional PNG path to write; temp file is used when omitted",
+                    false,
+                ),
+                (
+                    "include_data_url",
+                    "boolean",
+                    "Include data:image/png;base64 payload; defaults to false",
+                    false,
+                ),
+            ]),
+        ),
+        td(
             "project_screenshot",
-            "Render the current project to a PNG screenshot and return compact metadata",
+            "Deprecated alias for project_render; renders the current project to a PNG image",
             project_props(&[
                 (
                     "output_path",
@@ -1136,7 +1155,7 @@ fn execute_tool(
         "project_save_as" => project_save_as(&mut sessions, project_id, args),
         "project_export_preview" => project_export_preview(&sessions, project_id, args),
         "project_export" => project_export(&sessions, project_id, args),
-        "project_screenshot" => project_screenshot(&sessions, project_id, args),
+        "project_render" | "project_screenshot" => project_render(&sessions, project_id, args),
         "project_summary" => project_summary(&sessions, project_id),
         "project_export_settings_update" => {
             project_export_settings_update(&mut sessions, project_id, args)
@@ -2440,18 +2459,18 @@ fn asset_remove(
     Ok(serde_json::json!({ "removed": removed_texture || removed_asset }))
 }
 
-fn project_screenshot(
+fn project_render(
     sessions: &ProjectSessionManager,
     project_id: Option<&str>,
     args: &serde_json::Value,
 ) -> Result<serde_json::Value, String> {
-    let project = &sessions.resolve(project_id)?.project;
-    let png = crate::texture::composite_project_preview(project)?;
+    let session = sessions.resolve(project_id)?;
+    let png = crate::texture::composite_project_preview(&session.project)?;
     let path = optional_string(args, "output_path")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| {
             std::env::temp_dir().join(format!(
-                "mc-gui-crafter-screenshot-{}.png",
+                "mc-gui-crafter-render-{}.png",
                 uuid::Uuid::new_v4()
             ))
         });
@@ -2464,19 +2483,19 @@ fn project_screenshot(
     }
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
-            .map_err(|error| format!("Failed to create screenshot directory: {error}"))?;
+            .map_err(|error| format!("Failed to create render directory: {error}"))?;
     }
-    std::fs::write(&path, &png)
-        .map_err(|error| format!("Failed to write screenshot PNG: {error}"))?;
+    std::fs::write(&path, &png).map_err(|error| format!("Failed to write render PNG: {error}"))?;
 
     let image = image::load_from_memory(&png)
-        .map_err(|error| format!("Failed to inspect screenshot PNG: {error}"))?;
+        .map_err(|error| format!("Failed to inspect render PNG: {error}"))?;
     let mut metadata = compact_asset_metadata_with_dimensions(
         path.to_string_lossy().as_ref(),
         &png,
         image.width(),
         image.height(),
     );
+    metadata["project_id"] = serde_json::json!(session.id);
     metadata["path"] = serde_json::json!(path.to_string_lossy().to_string());
     if optional_bool(args, "include_data_url")?.unwrap_or(false) {
         metadata["data_url"] = serde_json::json!(data_url_for_png(&png));
@@ -2893,6 +2912,28 @@ mod tests {
         assert!(tools
             .iter()
             .any(|tool| tool["name"] == "project_export_settings_update"));
+    }
+
+    #[test]
+    fn tools_list_exposes_project_render_as_preferred_visual_tool() {
+        let tools = get_tool_definitions();
+        let names = tools
+            .iter()
+            .filter_map(|tool| tool["name"].as_str())
+            .collect::<Vec<_>>();
+
+        assert!(names.contains(&"project_render"));
+        assert!(names.contains(&"project_screenshot"));
+
+        let render = tools
+            .iter()
+            .find(|tool| tool["name"] == "project_render")
+            .expect("project_render should be listed");
+        assert!(render["description"].as_str().unwrap().contains("Render"));
+        assert!(render["inputSchema"]["properties"]
+            .as_object()
+            .unwrap()
+            .contains_key("include_data_url"));
     }
 
     #[test]
@@ -4021,6 +4062,55 @@ mod tests {
         assert!(value.get("data_url").is_none());
         assert!(output_path.path().exists());
         assert_eq!(value["path"], output_path.path_string());
+    }
+
+    #[test]
+    fn project_render_writes_compact_png_metadata() {
+        let state = test_state();
+        let project_id = {
+            let mut sessions = state.sessions.lock().unwrap();
+            let mut project = Project::new("Render", 64, 32, ModTarget::Forge);
+            project.elements.push(
+                parse_element_arg(&serde_json::json!({
+                    "id": "slot_a",
+                    "type": "slot",
+                    "x": 8,
+                    "y": 8,
+                    "size": 18
+                }))
+                .unwrap(),
+            );
+            sessions.create_session(project)
+        };
+        let output_path = TempPath::new("mc-gui-crafter-render-test", "png");
+        let output_path_string = output_path.path_string();
+
+        let response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "render",
+                "method": "tools/call",
+                "params": {
+                    "name": "project_render",
+                    "arguments": {
+                        "project_id": project_id,
+                        "output_path": output_path_string
+                    }
+                }
+            }),
+            &state,
+        );
+
+        assert!(response["error"].is_null(), "{response:#}");
+        let value = tool_text_value(&response);
+        assert_eq!(value["project_id"], project_id);
+        assert_eq!(value["width"], 64);
+        assert_eq!(value["height"], 32);
+        assert!(value["bytes"].as_u64().unwrap() > 0);
+        assert_eq!(value["sha256"].as_str().unwrap().len(), 64);
+        assert!(value.get("data_url").is_none());
+        assert_eq!(value["path"], output_path.path_string());
+        assert!(output_path.path().exists());
     }
 
     #[test]

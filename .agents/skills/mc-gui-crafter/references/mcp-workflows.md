@@ -159,7 +159,7 @@ changes:
 
 ```json
 {
-  "name": "project_screenshot",
+  "name": "project_render",
   "arguments": {
     "output_path": "/tmp/alloy-smelter-preview.png",
     "include_data_url": false
@@ -167,9 +167,19 @@ changes:
 }
 ```
 
-`project_screenshot` returns compact metadata by default: `path`, `width`,
-`height`, `bytes`, and `sha256`. Set `include_data_url` only if the client cannot
-open local files.
+Use project-specific output paths when saving visual artifacts:
+
+```json
+{
+  "project_id": "11111111-2222-3333-4444-555555555555",
+  "output_path": "docs/mcgui/screenshots/example.png"
+}
+```
+
+`project_render` returns compact metadata by default: `project_id`, `path`,
+`width`, `height`, `bytes`, and `sha256`. Set `include_data_url` only if the
+client cannot open local files. `project_screenshot` remains available as a
+deprecated alias.
 
 7. Save the project if the user asked for a `.mcgui` artifact. New MCP-created
 projects need `project_save_as` because they do not have a path yet.

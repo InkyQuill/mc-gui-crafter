@@ -495,16 +495,16 @@ Button and toggle-button elements using the generated button texture are visible
 in the editor and baked into the exported GUI texture. Their `content` labels are
 rendered by the generated Java screen classes.
 
-### Screenshots
+### Visual Verification
 
-Use `project_screenshot` after major layout changes when visual inspection is
-available. The default response is compact metadata: `path`, `width`, `height`,
-`bytes`, and `sha256`. Request `include_data_url` only when the client cannot open
-local files.
+Use `project_render` after meaningful visual edits. It writes a PNG and returns
+compact metadata: `project_id`, `path`, `width`, `height`, `bytes`, and
+`sha256`. Set `include_data_url: true` only when the caller explicitly needs the
+PNG payload. `project_screenshot` remains available as a deprecated alias.
 
 ```json
 {
-  "name": "project_screenshot",
+  "name": "project_render",
   "arguments": {
     "output_path": "/tmp/mcgui-preview.png",
     "include_data_url": false
@@ -591,7 +591,8 @@ as UI-driven edits.
 | `project_save_as` | Save a new or existing project session to a `.mcgui` path |
 | `project_export_preview` | Preview generated export files, warnings, and validation errors |
 | `project_export` | Write generated mod files to disk |
-| `project_screenshot` | Render a compact PNG preview of the project |
+| `project_render` | Render a compact PNG preview of the project |
+| `project_screenshot` | Deprecated alias for `project_render` |
 | `project_summary` | Get project metadata and session summary |
 | `project_export_settings_update` | Update default simple/modular codegen settings |
 | `project_semantic_groups_update` | Replace project semantic group definitions |
