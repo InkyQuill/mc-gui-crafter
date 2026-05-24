@@ -501,6 +501,7 @@ mod tests {
             dock: None,
             open_width: None,
             open_height: None,
+            attached_region: None,
         }
     }
 
@@ -629,6 +630,7 @@ mod tests {
             dock: None,
             open_width: None,
             open_height: None,
+            attached_region: None,
         });
 
         let atlas = composite_atlas_for_layer(&project, Layer::Background).unwrap();
@@ -703,6 +705,7 @@ mod tests {
                 dock: None,
                 open_width: None,
                 open_height: None,
+                attached_region: None,
             });
 
             let atlas = composite_atlas_for_layer(&project, Layer::Background).unwrap();
@@ -785,6 +788,7 @@ mod tests {
             dock: None,
             open_width: None,
             open_height: None,
+            attached_region: None,
         });
         project.elements.push(Element {
             id: "toggle".into(),
@@ -821,6 +825,7 @@ mod tests {
             dock: None,
             open_width: None,
             open_height: None,
+            attached_region: None,
         });
 
         let png = composite_atlas_for_layer(&project, Layer::Background).unwrap();
@@ -867,6 +872,7 @@ mod tests {
             dock: None,
             open_width: None,
             open_height: None,
+            attached_region: None,
         });
 
         let png = composite_atlas_for_layer(&project, Layer::Background).unwrap();

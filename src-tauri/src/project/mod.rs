@@ -187,6 +187,55 @@ pub struct UvRect {
     pub height: u32,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum AttachedRegionAnchor {
+    #[serde(alias = "Left")]
+    Left,
+    #[serde(alias = "Right")]
+    Right,
+    #[serde(alias = "Top")]
+    Top,
+    #[serde(alias = "Bottom")]
+    Bottom,
+    #[serde(alias = "Free")]
+    Free,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum AttachedRegionState {
+    #[serde(alias = "Static")]
+    Static,
+    #[serde(alias = "Toggleable")]
+    Toggleable,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AttachedRegion {
+    pub id: String,
+    pub anchor: AttachedRegionAnchor,
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+    pub state: AttachedRegionState,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub semantic_group: Option<String>,
+    #[serde(default = "default_true", skip_serializing_if = "is_true")]
+    pub visible: bool,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct VisualBounds {
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct GlyphInfo {
     pub x: u32,
@@ -307,6 +356,8 @@ pub struct Element {
     pub open_width: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub open_height: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attached_region: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -328,6 +379,8 @@ pub struct Project {
     pub assets: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub semantic_groups: Vec<SemanticGroup>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attached_regions: Vec<AttachedRegion>,
     #[serde(default)]
     pub export_settings: ProjectExportSettings,
     #[serde(skip)]
@@ -532,6 +585,7 @@ impl Project {
             animations: Vec::new(),
             assets: Vec::new(),
             semantic_groups: Vec::new(),
+            attached_regions: Vec::new(),
             export_settings: ProjectExportSettings::default(),
             project_path: None,
             is_dirty: true,
@@ -546,6 +600,46 @@ impl Project {
 
     pub fn find_element_mut(&mut self, id: &str) -> Option<&mut Element> {
         self.elements.iter_mut().find(|e| e.id == id)
+    }
+
+    pub fn find_attached_region(&self, id: &str) -> Option<&AttachedRegion> {
+        self.attached_regions.iter().find(|region| region.id == id)
+    }
+
+    pub fn find_attached_region_mut(&mut self, id: &str) -> Option<&mut AttachedRegion> {
+        self.attached_regions
+            .iter_mut()
+            .find(|region| region.id == id)
+    }
+
+    pub fn visual_bounds(&self) -> VisualBounds {
+        let mut min_x = 0_i32;
+        let mut min_y = 0_i32;
+        let mut max_x = self.gui_size.width as i32;
+        let mut max_y = self.gui_size.height as i32;
+
+        for element in self.elements.iter().filter(|element| element.visible) {
+            let width = element.width.or(element.size).unwrap_or(16) as i32;
+            let height = element.height.or(element.size).unwrap_or(16) as i32;
+            min_x = min_x.min(element.x);
+            min_y = min_y.min(element.y);
+            max_x = max_x.max(element.x.saturating_add(width));
+            max_y = max_y.max(element.y.saturating_add(height));
+        }
+
+        for region in self.attached_regions.iter().filter(|region| region.visible) {
+            min_x = min_x.min(region.x);
+            min_y = min_y.min(region.y);
+            max_x = max_x.max(region.x.saturating_add(region.width as i32));
+            max_y = max_y.max(region.y.saturating_add(region.height as i32));
+        }
+
+        VisualBounds {
+            x: min_x,
+            y: min_y,
+            width: (max_x - min_x).max(1) as u32,
+            height: (max_y - min_y).max(1) as u32,
+        }
     }
 
     pub fn remove_element(&mut self, id: &str) -> Option<Element> {
@@ -665,6 +759,7 @@ mod tests {
             dock: None,
             open_width: None,
             open_height: None,
+            attached_region: None,
         }
     }
 
@@ -679,6 +774,16 @@ mod tests {
                 width: 16,
                 height: 16,
             }),
+            ..sample_element_defaults()
+        }
+    }
+
+    fn base_element_for_test(id: &str, element_type: ElementType, x: i32, y: i32) -> Element {
+        Element {
+            id: id.to_string(),
+            element_type,
+            x,
+            y,
             ..sample_element_defaults()
         }
     }
@@ -777,6 +882,7 @@ mod tests {
             dock: None,
             open_width: None,
             open_height: None,
+            attached_region: None,
             ..sample_element_defaults()
         };
         let value = serde_json::to_value(&element).unwrap();
@@ -805,6 +911,7 @@ mod tests {
             dock: None,
             open_width: None,
             open_height: None,
+            attached_region: None,
             ..sample_element_defaults()
         };
         let value = serde_json::to_value(&element).unwrap();
@@ -902,6 +1009,122 @@ mod tests {
     }
 
     #[test]
+    fn project_defaults_attached_regions_to_empty() {
+        let json = r#"{
+            "name": "Legacy",
+            "gui_size": { "width": 176, "height": 166 },
+            "mod_target": "forge",
+            "elements": [],
+            "groups": [],
+            "animations": [],
+            "assets": []
+        }"#;
+
+        let project: Project = serde_json::from_str(json).unwrap();
+
+        assert!(project.attached_regions.is_empty());
+    }
+
+    #[test]
+    fn attached_region_and_element_membership_round_trip() {
+        let mut project = Project::new("Attached", 100, 200, ModTarget::Forge);
+        project.attached_regions.push(AttachedRegion {
+            id: "returns_pocket".into(),
+            anchor: AttachedRegionAnchor::Right,
+            x: 100,
+            y: 18,
+            width: 54,
+            height: 72,
+            state: AttachedRegionState::Static,
+            kind: Some("returns_pocket".into()),
+            semantic_group: Some("food_returns".into()),
+            visible: true,
+        });
+        let mut element = base_element_for_test("returns_0", ElementType::Slot, 108, 26);
+        element.attached_region = Some("returns_pocket".into());
+        project.elements.push(element);
+
+        let json = serde_json::to_string(&project).unwrap();
+        let loaded: Project = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(loaded.attached_regions.len(), 1);
+        assert_eq!(
+            loaded.attached_regions[0].anchor,
+            AttachedRegionAnchor::Right
+        );
+        assert_eq!(
+            loaded.attached_regions[0].state,
+            AttachedRegionState::Static
+        );
+        assert_eq!(
+            loaded.elements[0].attached_region.as_deref(),
+            Some("returns_pocket")
+        );
+    }
+
+    #[test]
+    fn visual_bounds_include_main_negative_elements_and_regions() {
+        let mut project = Project::new("Visual", 100, 200, ModTarget::Forge);
+        let mut flair = base_element_for_test("flair", ElementType::Texture, 84, -16);
+        flair.width = Some(32);
+        flair.height = Some(32);
+        project.elements.push(flair);
+        project.attached_regions.push(AttachedRegion {
+            id: "side".into(),
+            anchor: AttachedRegionAnchor::Right,
+            x: 100,
+            y: 20,
+            width: 44,
+            height: 80,
+            state: AttachedRegionState::Static,
+            kind: Some("side_controls".into()),
+            semantic_group: None,
+            visible: true,
+        });
+
+        let bounds = project.visual_bounds();
+
+        assert_eq!(bounds.x, 0);
+        assert_eq!(bounds.y, -16);
+        assert_eq!(bounds.width, 144);
+        assert_eq!(bounds.height, 216);
+    }
+
+    #[test]
+    fn visual_bounds_ignore_hidden_elements_and_regions() {
+        let mut project = Project::new("Hidden Visual", 100, 200, ModTarget::Forge);
+        let mut hidden = base_element_for_test("hidden", ElementType::Texture, -40, -40);
+        hidden.width = Some(20);
+        hidden.height = Some(20);
+        hidden.visible = false;
+        project.elements.push(hidden);
+        project.attached_regions.push(AttachedRegion {
+            id: "hidden_region".into(),
+            anchor: AttachedRegionAnchor::Left,
+            x: -60,
+            y: 0,
+            width: 20,
+            height: 20,
+            state: AttachedRegionState::Static,
+            kind: None,
+            semantic_group: None,
+            visible: false,
+        });
+
+        let bounds = project.visual_bounds();
+
+        assert_eq!(
+            bounds,
+            VisualBounds {
+                x: 0,
+                y: 0,
+                width: 100,
+                height: 200
+            }
+        );
+    }
+
+    #[test]
     fn project_export_settings_defaults_missing_codegen_mode() {
         let json = r#"{
             "name": "Partial",
@@ -959,6 +1182,7 @@ mod tests {
             dock: None,
             open_width: None,
             open_height: None,
+            attached_region: None,
         };
 
         let value = serde_json::to_value(&element).unwrap();

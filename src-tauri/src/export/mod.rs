@@ -1949,6 +1949,7 @@ mod tests {
                     dock: None,
                     open_width: None,
                     open_height: None,
+                    attached_region: None,
                 },
                 Element {
                     id: "slot_1".to_string(),
@@ -1985,6 +1986,7 @@ mod tests {
                     dock: None,
                     open_width: None,
                     open_height: None,
+                    attached_region: None,
                 },
                 Element {
                     id: "progress_arrow".to_string(),
@@ -2021,6 +2023,7 @@ mod tests {
                     dock: None,
                     open_width: None,
                     open_height: None,
+                    attached_region: None,
                 },
             ],
             groups: Vec::new(),
@@ -2038,6 +2041,7 @@ mod tests {
             }],
             assets: vec![texture_asset],
             semantic_groups: Vec::new(),
+            attached_regions: Vec::new(),
             export_settings: crate::project::ProjectExportSettings::default(),
             project_path: None,
             is_dirty: true,
@@ -2083,6 +2087,7 @@ mod tests {
             dock: None,
             open_width: None,
             open_height: None,
+            attached_region: None,
         });
         if let Some(progress) = project
             .elements
@@ -2206,6 +2211,7 @@ mod tests {
             dock: None,
             open_width: None,
             open_height: None,
+            attached_region: None,
         }
     }
 
@@ -2250,6 +2256,7 @@ mod tests {
             dock: None,
             open_width: None,
             open_height: None,
+            attached_region: None,
         }
     }
 
@@ -2289,6 +2296,7 @@ mod tests {
             dock: None,
             open_width: None,
             open_height: None,
+            attached_region: None,
         }
     }
 
@@ -3277,6 +3285,7 @@ mod tests {
             dock: None,
             open_width: None,
             open_height: None,
+            attached_region: None,
         });
         project.animations.push(Animation {
             id: "burn_time".to_string(),

@@ -174,6 +174,7 @@ fn base_element(id: &str, element_type: ElementType, x: i32, y: i32) -> Element 
         dock: None,
         open_width: None,
         open_height: None,
+        attached_region: None,
     }
 }
 
@@ -408,6 +409,7 @@ fn furnace() -> Template {
                 dock: None,
                 open_width: None,
                 open_height: None,
+                attached_region: None,
             },
             Element {
                 id: "input_slot".into(),
@@ -444,6 +446,7 @@ fn furnace() -> Template {
                 dock: None,
                 open_width: None,
                 open_height: None,
+                attached_region: None,
             },
             Element {
                 id: "fuel_slot".into(),
@@ -480,6 +483,7 @@ fn furnace() -> Template {
                 dock: None,
                 open_width: None,
                 open_height: None,
+                attached_region: None,
             },
             Element {
                 id: "output_slot".into(),
@@ -516,6 +520,7 @@ fn furnace() -> Template {
                 dock: None,
                 open_width: None,
                 open_height: None,
+                attached_region: None,
             },
             Element {
                 id: "progress_arrow".into(),
@@ -552,6 +557,7 @@ fn furnace() -> Template {
                 dock: None,
                 open_width: None,
                 open_height: None,
+                attached_region: None,
             },
             Element {
                 id: "title".into(),
@@ -588,6 +594,7 @@ fn furnace() -> Template {
                 dock: None,
                 open_width: None,
                 open_height: None,
+                attached_region: None,
             },
         ],
         groups: vec![],
@@ -631,6 +638,7 @@ fn crafting_3x3() -> Template {
         dock: None,
         open_width: None,
         open_height: None,
+        attached_region: None,
     }];
 
     for row in 0..3 {
@@ -670,6 +678,7 @@ fn crafting_3x3() -> Template {
                 dock: None,
                 open_width: None,
                 open_height: None,
+                attached_region: None,
             });
         }
     }
@@ -709,6 +718,7 @@ fn crafting_3x3() -> Template {
         dock: None,
         open_width: None,
         open_height: None,
+        attached_region: None,
     });
 
     elements.push(Element {
@@ -746,6 +756,7 @@ fn crafting_3x3() -> Template {
         dock: None,
         open_width: None,
         open_height: None,
+        attached_region: None,
     });
 
     Template {
@@ -795,6 +806,7 @@ fn chest_9x3() -> Template {
         dock: None,
         open_width: None,
         open_height: None,
+        attached_region: None,
     }];
 
     for row in 0..3 {
@@ -834,6 +846,7 @@ fn chest_9x3() -> Template {
                 dock: None,
                 open_width: None,
                 open_height: None,
+                attached_region: None,
             });
         }
     }
@@ -885,6 +898,7 @@ fn chest_9x6() -> Template {
         dock: None,
         open_width: None,
         open_height: None,
+        attached_region: None,
     }];
 
     for row in 0..6 {
@@ -924,6 +938,7 @@ fn chest_9x6() -> Template {
                 dock: None,
                 open_width: None,
                 open_height: None,
+                attached_region: None,
             });
         }
     }
@@ -984,6 +999,7 @@ fn advanced_machine() -> Template {
                 dock: None,
                 open_width: None,
                 open_height: None,
+                attached_region: None,
             },
             Element {
                 id: "title".into(),
@@ -1020,6 +1036,7 @@ fn advanced_machine() -> Template {
                 dock: None,
                 open_width: None,
                 open_height: None,
+                attached_region: None,
             },
             Element {
                 id: "input_slot".into(),
@@ -1056,6 +1073,7 @@ fn advanced_machine() -> Template {
                 dock: None,
                 open_width: None,
                 open_height: None,
+                attached_region: None,
             },
             Element {
                 id: "fuel_slot".into(),
@@ -1092,6 +1110,7 @@ fn advanced_machine() -> Template {
                 dock: None,
                 open_width: None,
                 open_height: None,
+                attached_region: None,
             },
             Element {
                 id: "output_slot".into(),
@@ -1128,6 +1147,7 @@ fn advanced_machine() -> Template {
                 dock: None,
                 open_width: None,
                 open_height: None,
+                attached_region: None,
             },
             Element {
                 id: "progress_arrow".into(),
@@ -1164,6 +1184,7 @@ fn advanced_machine() -> Template {
                 dock: None,
                 open_width: None,
                 open_height: None,
+                attached_region: None,
             },
             Element {
                 id: "fluid_tank_left".into(),
@@ -1200,6 +1221,7 @@ fn advanced_machine() -> Template {
                 dock: None,
                 open_width: None,
                 open_height: None,
+                attached_region: None,
             },
             Element {
                 id: "fluid_tank_right".into(),
@@ -1236,6 +1258,7 @@ fn advanced_machine() -> Template {
                 dock: None,
                 open_width: None,
                 open_height: None,
+                attached_region: None,
             },
             Element {
                 id: "energy_bar".into(),
@@ -1272,6 +1295,7 @@ fn advanced_machine() -> Template {
                 dock: None,
                 open_width: None,
                 open_height: None,
+                attached_region: None,
             },
         ],
         groups: vec![],
@@ -1423,6 +1447,7 @@ fn fluid_tank() -> Template {
                 dock: None,
                 open_width: None,
                 open_height: None,
+                attached_region: None,
             },
             Element {
                 id: "title".into(),
@@ -1459,6 +1484,7 @@ fn fluid_tank() -> Template {
                 dock: None,
                 open_width: None,
                 open_height: None,
+                attached_region: None,
             },
             Element {
                 id: "fluid_fill".into(),
@@ -1495,6 +1521,7 @@ fn fluid_tank() -> Template {
                 dock: None,
                 open_width: None,
                 open_height: None,
+                attached_region: None,
             },
             Element {
                 id: "input_fluid_slot".into(),
@@ -1531,6 +1558,7 @@ fn fluid_tank() -> Template {
                 dock: None,
                 open_width: None,
                 open_height: None,
+                attached_region: None,
             },
             Element {
                 id: "output_fluid_slot".into(),
@@ -1567,6 +1595,7 @@ fn fluid_tank() -> Template {
                 dock: None,
                 open_width: None,
                 open_height: None,
+                attached_region: None,
             },
             Element {
                 id: "capacity_text".into(),
@@ -1603,6 +1632,7 @@ fn fluid_tank() -> Template {
                 dock: None,
                 open_width: None,
                 open_height: None,
+                attached_region: None,
             },
         ],
         groups: vec![],
@@ -1647,6 +1677,7 @@ fn brewing_stand() -> Template {
             dock: None,
             open_width: None,
             open_height: None,
+            attached_region: None,
         },
         Element {
             id: "title".into(),
@@ -1683,6 +1714,7 @@ fn brewing_stand() -> Template {
             dock: None,
             open_width: None,
             open_height: None,
+            attached_region: None,
         },
         Element {
             id: "ingredient_slot".into(),
@@ -1719,6 +1751,7 @@ fn brewing_stand() -> Template {
             dock: None,
             open_width: None,
             open_height: None,
+            attached_region: None,
         },
         Element {
             id: "blaze_slot".into(),
@@ -1755,6 +1788,7 @@ fn brewing_stand() -> Template {
             dock: None,
             open_width: None,
             open_height: None,
+            attached_region: None,
         },
     ];
 
@@ -1795,6 +1829,7 @@ fn brewing_stand() -> Template {
             dock: None,
             open_width: None,
             open_height: None,
+            attached_region: None,
         });
         elements.push(Element {
             id: format!("bubble_{i}"),
@@ -1831,6 +1866,7 @@ fn brewing_stand() -> Template {
             dock: None,
             open_width: None,
             open_height: None,
+            attached_region: None,
         });
     }
 
@@ -1869,6 +1905,7 @@ fn brewing_stand() -> Template {
         dock: None,
         open_width: None,
         open_height: None,
+        attached_region: None,
     });
 
     Template {
@@ -1925,6 +1962,7 @@ fn anvil() -> Template {
                 dock: None,
                 open_width: None,
                 open_height: None,
+                attached_region: None,
             },
             Element {
                 id: "title".into(),
@@ -1961,6 +1999,7 @@ fn anvil() -> Template {
                 dock: None,
                 open_width: None,
                 open_height: None,
+                attached_region: None,
             },
             Element {
                 id: "input_slot_1".into(),
@@ -1997,6 +2036,7 @@ fn anvil() -> Template {
                 dock: None,
                 open_width: None,
                 open_height: None,
+                attached_region: None,
             },
             Element {
                 id: "input_slot_2".into(),
@@ -2033,6 +2073,7 @@ fn anvil() -> Template {
                 dock: None,
                 open_width: None,
                 open_height: None,
+                attached_region: None,
             },
             Element {
                 id: "output_slot".into(),
@@ -2069,6 +2110,7 @@ fn anvil() -> Template {
                 dock: None,
                 open_width: None,
                 open_height: None,
+                attached_region: None,
             },
             Element {
                 id: "cost_text".into(),
@@ -2105,6 +2147,7 @@ fn anvil() -> Template {
                 dock: None,
                 open_width: None,
                 open_height: None,
+                attached_region: None,
             },
             Element {
                 id: "progress_arrow".into(),
@@ -2141,6 +2184,7 @@ fn anvil() -> Template {
                 dock: None,
                 open_width: None,
                 open_height: None,
+                attached_region: None,
             },
         ],
         groups: vec![],
@@ -2184,6 +2228,7 @@ fn custom_grid_default() -> Template {
         dock: None,
         open_width: None,
         open_height: None,
+        attached_region: None,
     }];
 
     for row in 0..3 {
@@ -2223,6 +2268,7 @@ fn custom_grid_default() -> Template {
                 dock: None,
                 open_width: None,
                 open_height: None,
+                attached_region: None,
             });
         }
     }
@@ -2262,6 +2308,7 @@ fn custom_grid_default() -> Template {
         dock: None,
         open_width: None,
         open_height: None,
+        attached_region: None,
     });
 
     elements.push(Element {
@@ -2299,6 +2346,7 @@ fn custom_grid_default() -> Template {
         dock: None,
         open_width: None,
         open_height: None,
+        attached_region: None,
     });
 
     Template {

@@ -1584,6 +1584,7 @@ mod tests {
             dock: None,
             open_width: None,
             open_height: None,
+            attached_region: None,
         }
     }
 

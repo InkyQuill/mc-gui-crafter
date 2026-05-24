@@ -255,6 +255,7 @@ mod tests {
             dock: None,
             open_width: None,
             open_height: None,
+            attached_region: None,
         });
         project.groups.push(Group {
             id: "group_1".to_string(),
