@@ -715,6 +715,26 @@ fn get_tool_definitions() -> Vec<serde_json::Value> {
             ]),
         ),
         td(
+            "element_update_many",
+            "Update multiple elements atomically in one project revision",
+            project_schema(vec![(
+                "updates",
+                serde_json::json!({
+                    "type": "array",
+                    "description": "Element update patches",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "id": { "type": "string" },
+                            "changes": { "type": "object" }
+                        },
+                        "required": ["id", "changes"]
+                    }
+                }),
+                true,
+            )]),
+        ),
+        td(
             "element_resize",
             "Resize an element",
             project_props(&[
@@ -1204,6 +1224,7 @@ fn execute_tool(
         "slot_grid_add" => slot_grid_add(&mut sessions, project_id, args),
         "element_move" => element_move(&mut sessions, project_id, args),
         "element_update" => element_update(&mut sessions, project_id, args),
+        "element_update_many" => element_update_many(&mut sessions, project_id, args),
         "element_resize" => element_resize(&mut sessions, project_id, args),
         "element_reorder" => element_reorder(&mut sessions, project_id, args),
         "element_remove" => element_remove(&mut sessions, project_id, args),
@@ -1798,6 +1819,43 @@ fn validate_new_element_ids(
     Ok(())
 }
 
+#[derive(Debug)]
+struct ElementPatch {
+    id: String,
+    changes: serde_json::Map<String, serde_json::Value>,
+}
+
+fn parse_element_patches(args: &serde_json::Value) -> Result<Vec<ElementPatch>, String> {
+    let updates = args
+        .get("updates")
+        .and_then(|value| value.as_array())
+        .ok_or("Missing updates")?;
+    if updates.is_empty() {
+        return Err("updates array cannot be empty".to_string());
+    }
+
+    let mut ids = HashSet::new();
+    let mut patches = Vec::with_capacity(updates.len());
+    for update in updates {
+        let object = update.as_object().ok_or("Each update must be an object")?;
+        let id = object
+            .get("id")
+            .and_then(|value| value.as_str())
+            .ok_or("Each update requires an id")?
+            .to_string();
+        if !ids.insert(id.clone()) {
+            return Err(format!("Duplicate element update id: {id}"));
+        }
+        let changes = object
+            .get("changes")
+            .and_then(|value| value.as_object())
+            .ok_or("Each update requires object changes")?
+            .clone();
+        patches.push(ElementPatch { id, changes });
+    }
+    Ok(patches)
+}
+
 fn element_move(
     sessions: &mut ProjectSessionManager,
     project_id: Option<&str>,
@@ -1827,6 +1885,23 @@ fn element_move(
     Ok(serde_json::to_value(element).unwrap())
 }
 
+fn apply_element_changes(
+    current: &Element,
+    changes: &serde_json::Map<String, serde_json::Value>,
+) -> Result<Element, String> {
+    let mut value = serde_json::to_value(current).map_err(|error| error.to_string())?;
+    let target = value
+        .as_object_mut()
+        .ok_or("Element payload must be an object")?;
+    for (key, value) in changes {
+        if key == "id" || key == "type" {
+            continue;
+        }
+        target.insert(key.clone(), value.clone());
+    }
+    serde_json::from_value(value).map_err(|error| format!("Invalid element update: {error}"))
+}
+
 fn element_update(
     sessions: &mut ProjectSessionManager,
     project_id: Option<&str>,
@@ -1843,18 +1918,7 @@ fn element_update(
         .project
         .find_element(id)
         .ok_or("Element not found")?;
-    let mut value = serde_json::to_value(current).map_err(|error| error.to_string())?;
-    let target = value
-        .as_object_mut()
-        .ok_or("Element payload must be an object")?;
-    for (key, value) in changes {
-        if key == "id" || key == "type" {
-            continue;
-        }
-        target.insert(key.clone(), value.clone());
-    }
-    let updated: Element = serde_json::from_value(value)
-        .map_err(|error| format!("Invalid element update: {error}"))?;
+    let updated = apply_element_changes(current, changes)?;
     if &updated == current {
         return Ok(serde_json::to_value(current).unwrap());
     }
@@ -1866,6 +1930,59 @@ fn element_update(
         .ok_or("Element not found")? = updated.clone();
     sessions.mark_changed(project_id)?;
     Ok(serde_json::to_value(updated).unwrap())
+}
+
+fn element_update_many(
+    sessions: &mut ProjectSessionManager,
+    project_id: Option<&str>,
+    args: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let patches = parse_element_patches(args)?;
+    let (session_id, updated, changed_count) = {
+        let session = sessions.resolve(project_id)?;
+        let mut updated = Vec::with_capacity(patches.len());
+        for patch in &patches {
+            let current = session
+                .project
+                .find_element(&patch.id)
+                .ok_or_else(|| format!("Element not found: {}", patch.id))?;
+            updated.push(apply_element_changes(current, &patch.changes)?);
+        }
+        let changed_count = updated
+            .iter()
+            .filter(|element| {
+                session
+                    .project
+                    .find_element(&element.id)
+                    .is_some_and(|current| current != *element)
+            })
+            .count();
+        (session.id.clone(), updated, changed_count)
+    };
+
+    if changed_count == 0 {
+        return Ok(serde_json::json!({
+            "project_id": session_id,
+            "updated_count": 0,
+            "results": updated.iter().map(element_for_mcp).collect::<Vec<_>>()
+        }));
+    }
+
+    sessions.record_history(project_id)?;
+    let session = sessions.resolve_mut(project_id)?;
+    for element in &updated {
+        *session
+            .project
+            .find_element_mut(&element.id)
+            .ok_or_else(|| format!("Element not found: {}", element.id))? = element.clone();
+    }
+    sessions.mark_changed(project_id)?;
+
+    Ok(serde_json::json!({
+        "project_id": session_id,
+        "updated_count": changed_count,
+        "results": updated.iter().map(element_for_mcp).collect::<Vec<_>>()
+    }))
 }
 
 fn element_resize(
@@ -3121,6 +3238,17 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert!(names.contains(&"group_upsert"));
+    }
+
+    #[test]
+    fn tools_list_exposes_element_update_many() {
+        let tools = get_tool_definitions();
+        let names = tools
+            .iter()
+            .filter_map(|tool| tool["name"].as_str())
+            .collect::<Vec<_>>();
+
+        assert!(names.contains(&"element_update_many"));
     }
 
     #[test]
@@ -4586,6 +4714,252 @@ mod tests {
         let text = response["result"]["content"][0]["text"].as_str().unwrap();
         let value: serde_json::Value = serde_json::from_str(text).unwrap();
         assert_eq!(value["elements"][0]["layer"], "background");
+    }
+
+    #[test]
+    fn element_update_many_updates_multiple_elements_in_one_revision() {
+        let state = test_state();
+        let project_id = {
+            let mut sessions = state.sessions.lock().unwrap();
+            let mut project = Project::new("Update Many", 176, 166, ModTarget::Forge);
+            for (id, x) in [("a", 8), ("b", 26)] {
+                project.elements.push(
+                    parse_element_arg(&serde_json::json!({
+                        "id": id,
+                        "type": "slot",
+                        "x": x,
+                        "y": 18,
+                        "size": 18
+                    }))
+                    .unwrap(),
+                );
+            }
+            sessions.create_session(project)
+        };
+
+        let response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "update-many",
+                "method": "tools/call",
+                "params": {
+                    "name": "element_update_many",
+                    "arguments": {
+                        "project_id": project_id,
+                        "updates": [
+                            { "id": "a", "changes": { "x": 10, "y": 20 } },
+                            { "id": "b", "changes": { "x": 30, "y": 40, "slot_index": 7 } }
+                        ]
+                    }
+                }
+            }),
+            &state,
+        );
+
+        assert!(response["error"].is_null(), "{response:#}");
+        let value = tool_text_value(&response);
+        assert_eq!(value["project_id"], project_id);
+        assert_eq!(value["updated_count"], 2);
+        assert_eq!(value["results"].as_array().unwrap().len(), 2);
+
+        let sessions = state.sessions.lock().unwrap();
+        let session = sessions.resolve(Some(&project_id)).unwrap();
+        assert_eq!(session.project.find_element("a").unwrap().x, 10);
+        assert_eq!(
+            session.project.find_element("b").unwrap().slot_index,
+            Some(7)
+        );
+        assert_eq!(session.revision, 1);
+    }
+
+    #[test]
+    fn element_update_many_counts_only_changed_elements() {
+        let state = test_state();
+        let project_id = {
+            let mut sessions = state.sessions.lock().unwrap();
+            let mut project = Project::new("Update Many Count", 176, 166, ModTarget::Forge);
+            for (id, x) in [("a", 8), ("b", 26)] {
+                project.elements.push(
+                    parse_element_arg(&serde_json::json!({
+                        "id": id,
+                        "type": "slot",
+                        "x": x,
+                        "y": 18,
+                        "size": 18
+                    }))
+                    .unwrap(),
+                );
+            }
+            sessions.create_session(project)
+        };
+
+        let response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "update-many-count",
+                "method": "tools/call",
+                "params": {
+                    "name": "element_update_many",
+                    "arguments": {
+                        "project_id": project_id,
+                        "updates": [
+                            { "id": "a", "changes": { "x": 8, "y": 18 } },
+                            { "id": "b", "changes": { "x": 30, "y": 40 } }
+                        ]
+                    }
+                }
+            }),
+            &state,
+        );
+
+        assert!(response["error"].is_null(), "{response:#}");
+        let value = tool_text_value(&response);
+        assert_eq!(value["updated_count"], 1);
+        assert_eq!(value["results"].as_array().unwrap().len(), 2);
+
+        let sessions = state.sessions.lock().unwrap();
+        let session = sessions.resolve(Some(&project_id)).unwrap();
+        assert_eq!(session.project.find_element("a").unwrap().x, 8);
+        assert_eq!(session.project.find_element("b").unwrap().x, 30);
+        assert_eq!(session.revision, 1);
+    }
+
+    #[test]
+    fn element_update_many_strict_failure_is_atomic() {
+        let state = test_state();
+        let project_id = {
+            let mut sessions = state.sessions.lock().unwrap();
+            let mut project = Project::new("Update Many Atomic", 176, 166, ModTarget::Forge);
+            project.elements.push(
+                parse_element_arg(&serde_json::json!({
+                    "id": "a",
+                    "type": "slot",
+                    "x": 8,
+                    "y": 18,
+                    "size": 18
+                }))
+                .unwrap(),
+            );
+            sessions.create_session(project)
+        };
+
+        let response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "update-many-bad",
+                "method": "tools/call",
+                "params": {
+                    "name": "element_update_many",
+                    "arguments": {
+                        "project_id": project_id,
+                        "updates": [
+                            { "id": "a", "changes": { "x": 10 } },
+                            { "id": "missing", "changes": { "x": 30 } }
+                        ]
+                    }
+                }
+            }),
+            &state,
+        );
+
+        assert!(response["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("Element not found: missing"));
+        let sessions = state.sessions.lock().unwrap();
+        let session = sessions.resolve(Some(&project_id)).unwrap();
+        assert_eq!(session.project.find_element("a").unwrap().x, 8);
+        assert_eq!(session.revision, 0);
+    }
+
+    #[test]
+    fn element_update_many_no_op_does_not_change_revision() {
+        let state = test_state();
+        let project_id = {
+            let mut sessions = state.sessions.lock().unwrap();
+            let mut project = Project::new("Update Many Noop", 176, 166, ModTarget::Forge);
+            project.elements.push(
+                parse_element_arg(&serde_json::json!({
+                    "id": "a",
+                    "type": "slot",
+                    "x": 8,
+                    "y": 18,
+                    "size": 18
+                }))
+                .unwrap(),
+            );
+            sessions.create_session(project)
+        };
+        let before = mutation_snapshot_for(&state, &project_id);
+
+        let response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "update-many-noop",
+                "method": "tools/call",
+                "params": {
+                    "name": "element_update_many",
+                    "arguments": {
+                        "project_id": project_id,
+                        "updates": [
+                            { "id": "a", "changes": { "x": 8, "y": 18 } }
+                        ]
+                    }
+                }
+            }),
+            &state,
+        );
+
+        assert!(response["error"].is_null(), "{response:#}");
+        assert_eq!(mutation_snapshot_for(&state, &project_id), before);
+    }
+
+    #[test]
+    fn element_update_many_rejects_duplicate_ids_without_mutation() {
+        let state = test_state();
+        let project_id = {
+            let mut sessions = state.sessions.lock().unwrap();
+            let mut project = Project::new("Update Many Duplicate", 176, 166, ModTarget::Forge);
+            project.elements.push(
+                parse_element_arg(&serde_json::json!({
+                    "id": "a",
+                    "type": "slot",
+                    "x": 8,
+                    "y": 18,
+                    "size": 18
+                }))
+                .unwrap(),
+            );
+            sessions.create_session(project)
+        };
+
+        let response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "update-many-duplicate",
+                "method": "tools/call",
+                "params": {
+                    "name": "element_update_many",
+                    "arguments": {
+                        "project_id": project_id,
+                        "updates": [
+                            { "id": "a", "changes": { "x": 10 } },
+                            { "id": "a", "changes": { "y": 20 } }
+                        ]
+                    }
+                }
+            }),
+            &state,
+        );
+
+        assert!(response["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("Duplicate element update id: a"));
+        let sessions = state.sessions.lock().unwrap();
+        let session = sessions.resolve(Some(&project_id)).unwrap();
+        assert_eq!(session.project.find_element("a").unwrap().x, 8);
+        assert_eq!(session.revision, 0);
     }
 
     #[test]

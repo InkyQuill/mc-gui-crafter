@@ -271,6 +271,11 @@ a title, progress arrow, energy bar, and button together:
 `element_add_many` is atomic: if any element payload is invalid or conflicts with
 an existing ID, no elements are added.
 
+### `element_update_many`
+
+Applies multiple `element_update`-style patches atomically in one revision. If
+any element is missing or any patch is invalid, no element is changed.
+
 Button and toggle-button icons can use a standalone PNG or an atlas region. Keep
 `content` as label, accessibility, and fallback metadata even when the visible
 control is icon-only:
@@ -617,6 +622,7 @@ explicitly after resizing.
 | `slot_grid_add` | Create a grouped grid of slot elements with semantic metadata |
 | `element_move` | Move an element |
 | `element_update` | Update element fields |
+| `element_update_many` | Update multiple elements atomically |
 | `element_resize` | Resize an element |
 | `element_reorder` | Move an element to a z-order index |
 | `element_remove` | Remove an element |
