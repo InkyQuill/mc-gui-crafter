@@ -9,90 +9,124 @@ fn is_true(value: &bool) -> bool {
     *value
 }
 
+macro_rules! iterable_enum {
+    (
+        $(#[$enum_meta:meta])*
+        pub enum $name:ident {
+            $(
+                $(#[$variant_meta:meta])*
+                $variant:ident
+            ),+ $(,)?
+        }
+    ) => {
+        $(#[$enum_meta])*
+        pub enum $name {
+            $(
+                $(#[$variant_meta])*
+                $variant,
+            )+
+        }
+
+        impl $name {
+            pub fn variants() -> impl Iterator<Item = Self> {
+                [$(Self::$variant),+].into_iter()
+            }
+        }
+    };
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Size {
     pub width: u32,
     pub height: u32,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "snake_case")]
-pub enum ModTarget {
-    #[serde(alias = "Forge")]
-    Forge,
-    #[serde(alias = "Fabric")]
-    Fabric,
-    #[serde(rename = "neoforge", alias = "NeoForge", alias = "neo_forge")]
-    NeoForge,
+iterable_enum! {
+    #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+    #[serde(rename_all = "snake_case")]
+    pub enum ModTarget {
+        #[serde(alias = "Forge")]
+        Forge,
+        #[serde(alias = "Fabric")]
+        Fabric,
+        #[serde(rename = "neoforge", alias = "NeoForge", alias = "neo_forge")]
+        NeoForge,
+    }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "snake_case")]
-pub enum ElementType {
-    #[serde(alias = "Texture")]
-    Texture,
-    #[serde(alias = "Slot")]
-    Slot,
-    #[serde(alias = "Progress")]
-    Progress,
-    #[serde(alias = "Text")]
-    Text,
-    #[serde(alias = "FluidTank")]
-    FluidTank,
-    #[serde(alias = "EnergyBar")]
-    EnergyBar,
-    #[serde(alias = "Scrollbar")]
-    Scrollbar,
-    #[serde(alias = "Button")]
-    Button,
-    #[serde(alias = "ToggleButton")]
-    ToggleButton,
-    #[serde(alias = "TextInput")]
-    TextInput,
-    #[serde(alias = "Tab")]
-    Tab,
-    #[serde(alias = "Panel")]
-    Panel,
-    #[serde(alias = "VirtualSlotCell")]
-    VirtualSlotCell,
+iterable_enum! {
+    #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+    #[serde(rename_all = "snake_case")]
+    pub enum ElementType {
+        #[serde(alias = "Texture")]
+        Texture,
+        #[serde(alias = "Slot")]
+        Slot,
+        #[serde(alias = "Progress")]
+        Progress,
+        #[serde(alias = "Text")]
+        Text,
+        #[serde(alias = "FluidTank")]
+        FluidTank,
+        #[serde(alias = "EnergyBar")]
+        EnergyBar,
+        #[serde(alias = "Scrollbar")]
+        Scrollbar,
+        #[serde(alias = "Button")]
+        Button,
+        #[serde(alias = "ToggleButton")]
+        ToggleButton,
+        #[serde(alias = "TextInput")]
+        TextInput,
+        #[serde(alias = "Tab")]
+        Tab,
+        #[serde(alias = "Panel")]
+        Panel,
+        #[serde(alias = "VirtualSlotCell")]
+        VirtualSlotCell,
+    }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "snake_case")]
-pub enum SlotRole {
-    #[serde(alias = "Machine")]
-    Machine,
-    #[serde(alias = "PlayerInventory")]
-    PlayerInventory,
-    #[serde(alias = "Hotbar")]
-    Hotbar,
-    #[serde(alias = "ScrollableInventory")]
-    ScrollableInventory,
-    #[serde(alias = "VirtualStorage")]
-    VirtualStorage,
-    #[serde(alias = "Upgrade")]
-    Upgrade,
-    #[serde(alias = "UpgradeSettings")]
-    UpgradeSettings,
-    #[serde(alias = "Filter")]
-    Filter,
-    #[serde(alias = "Ghost")]
-    Ghost,
-    #[serde(alias = "Offhand")]
-    Offhand,
+iterable_enum! {
+    #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+    #[serde(rename_all = "snake_case")]
+    pub enum SlotRole {
+        #[serde(alias = "Machine")]
+        Machine,
+        #[serde(alias = "PlayerInventory")]
+        PlayerInventory,
+        #[serde(alias = "Hotbar")]
+        Hotbar,
+        #[serde(alias = "ScrollableInventory")]
+        ScrollableInventory,
+        #[serde(alias = "VirtualStorage")]
+        VirtualStorage,
+        #[serde(alias = "Upgrade")]
+        Upgrade,
+        #[serde(alias = "UpgradeSettings")]
+        UpgradeSettings,
+        #[serde(alias = "Filter")]
+        Filter,
+        #[serde(alias = "Ghost")]
+        Ghost,
+        #[serde(alias = "Offhand")]
+        Offhand,
+    }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "snake_case")]
-pub enum SemanticGroupKind {
-    FixedSlots,
-    VirtualSlotGrid,
-    PlayerInventory,
-    Hotbar,
-    UpgradeSlots,
-    UpgradePanel,
-    SearchField,
-    ControlButtons,
+iterable_enum! {
+    #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+    #[serde(rename_all = "snake_case")]
+    pub enum SemanticGroupKind {
+        FixedSlots,
+        VirtualSlotGrid,
+        PlayerInventory,
+        Hotbar,
+        UpgradeSlots,
+        UpgradePanel,
+        SearchField,
+        ControlButtons,
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -117,12 +151,14 @@ pub struct SemanticGroup {
     pub dynamic_height: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum CodegenMode {
-    #[default]
-    Simple,
-    Modular,
+iterable_enum! {
+    #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+    #[serde(rename_all = "snake_case")]
+    pub enum CodegenMode {
+        #[default]
+        Simple,
+        Modular,
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -155,26 +191,30 @@ impl ProjectExportSettings {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "snake_case")]
-pub enum FillDirection {
-    #[serde(alias = "LeftToRight")]
-    LeftToRight,
-    #[serde(alias = "RightToLeft")]
-    RightToLeft,
-    #[serde(alias = "BottomToTop")]
-    BottomToTop,
-    #[serde(alias = "TopToBottom")]
-    TopToBottom,
+iterable_enum! {
+    #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+    #[serde(rename_all = "snake_case")]
+    pub enum FillDirection {
+        #[serde(alias = "LeftToRight")]
+        LeftToRight,
+        #[serde(alias = "RightToLeft")]
+        RightToLeft,
+        #[serde(alias = "BottomToTop")]
+        BottomToTop,
+        #[serde(alias = "TopToBottom")]
+        TopToBottom,
+    }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum Layer {
-    #[default]
-    Background,
-    Overlay,
-    Animatable,
+iterable_enum! {
+    #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+    #[serde(rename_all = "snake_case")]
+    pub enum Layer {
+        #[default]
+        Background,
+        Overlay,
+        Animatable,
+    }
 }
 
 fn is_default_layer(layer: &Layer) -> bool {
@@ -189,28 +229,32 @@ pub struct UvRect {
     pub height: u32,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "snake_case")]
-pub enum AttachedRegionAnchor {
-    #[serde(alias = "Left")]
-    Left,
-    #[serde(alias = "Right")]
-    Right,
-    #[serde(alias = "Top")]
-    Top,
-    #[serde(alias = "Bottom")]
-    Bottom,
-    #[serde(alias = "Free")]
-    Free,
+iterable_enum! {
+    #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+    #[serde(rename_all = "snake_case")]
+    pub enum AttachedRegionAnchor {
+        #[serde(alias = "Left")]
+        Left,
+        #[serde(alias = "Right")]
+        Right,
+        #[serde(alias = "Top")]
+        Top,
+        #[serde(alias = "Bottom")]
+        Bottom,
+        #[serde(alias = "Free")]
+        Free,
+    }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "snake_case")]
-pub enum AttachedRegionState {
-    #[serde(alias = "Static")]
-    Static,
-    #[serde(alias = "Toggleable")]
-    Toggleable,
+iterable_enum! {
+    #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+    #[serde(rename_all = "snake_case")]
+    pub enum AttachedRegionState {
+        #[serde(alias = "Static")]
+        Static,
+        #[serde(alias = "Toggleable")]
+        Toggleable,
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

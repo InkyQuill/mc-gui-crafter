@@ -588,6 +588,13 @@ Tools that read or mutate project data accept optional `project_id`. When
 edits are visible in the current GUI instance and use the same undo/redo stacks
 as UI-driven edits.
 
+### `schema_discover`
+
+Call this before authoring unfamiliar projects. It returns accepted enum values,
+editable element fields, export settings, attached-region values, layer values,
+progress direction values, and notes about default fields that may be omitted
+from serialized project JSON.
+
 ### `project_resize`
 
 Changes `gui_size` only. It does not move, scale, clamp, or delete elements,
@@ -595,6 +602,12 @@ including elements outside the new bounds. Agents should move affected elements
 explicitly after resizing.
 
 ## Available Tools
+
+### Discovery
+
+| Tool | Description |
+|------|-------------|
+| `schema_discover` | Return accepted enum values, editable fields, export settings, and serialization defaults |
 
 ### Project Sessions
 

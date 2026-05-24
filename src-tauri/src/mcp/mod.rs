@@ -9,18 +9,15 @@ use tauri::{AppHandle, Emitter, Manager};
 
 use crate::animation::Animation;
 use crate::project::{
-    AttachedRegion, CodegenMode, Element, ModTarget, Project, ProjectSessionManager, SemanticGroup,
+    AttachedRegion, AttachedRegionAnchor, AttachedRegionState, CodegenMode, Element, ElementType,
+    FillDirection, Layer, ModTarget, Project, ProjectExportSettings, ProjectSessionManager,
+    SemanticGroup, SemanticGroupKind, SlotRole,
 };
 use crate::{templates, AppState};
 
 const MCP_PATH: &str = "/mcp";
 const SERVER_NAME: &str = "mc-gui-crafter";
 const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
-const SLOT_ROLE_DESCRIPTION: &str = "Accepted values: machine, player_inventory, hotbar, scrollable_inventory, virtual_storage, upgrade, upgrade_settings, filter, ghost, offhand.";
-const SEMANTIC_GROUP_KIND_DESCRIPTION: &str = "Accepted values: fixed_slots, virtual_slot_grid, player_inventory, hotbar, upgrade_slots, upgrade_panel, search_field, control_buttons.";
-const ATTACHED_REGION_ANCHOR_DESCRIPTION: &str =
-    "Attached region anchor. Accepted values: left, right, top, bottom, free.";
-const ATTACHED_REGION_STATE_DESCRIPTION: &str = "Attached region state. Accepted values: static, toggleable. Toggleable is metadata only in this release.";
 
 pub struct McpServerHandle {
     address: SocketAddr,
@@ -537,6 +534,7 @@ fn is_mutating_tool(tool_name: &str) -> bool {
             | "asset_list"
             | "asset_get_data_url"
             | "gui_template_list"
+            | "schema_discover"
     )
 }
 
@@ -545,12 +543,12 @@ fn get_tool_definitions() -> Vec<serde_json::Value> {
         td(
             "project_new",
             "Create a new GUI project",
-            props(&[
-                ("name", "string", "Project name", true),
-                ("width", "integer", "GUI width", false),
-                ("height", "integer", "GUI height", false),
-                ("template", "string", "Template name", false),
-                ("mod_target", "string", "forge, fabric, or neoforge", false),
+            object_schema(vec![
+                ("name", string_schema("Project name"), true),
+                ("width", string_type_schema("integer", "GUI width"), false),
+                ("height", string_type_schema("integer", "GUI height"), false),
+                ("template", string_schema("Template name"), false),
+                ("mod_target", string_schema(mod_target_description()), false),
             ]),
         ),
         td(
@@ -636,18 +634,20 @@ fn get_tool_definitions() -> Vec<serde_json::Value> {
         td(
             "project_export_settings_update",
             "Update project code generation/export settings",
-            project_props(&[
-                ("codegen_mode", "string", "simple or modular", false),
+            project_schema(vec![
+                (
+                    "codegen_mode",
+                    string_schema(codegen_mode_description()),
+                    false,
+                ),
                 (
                     "generate_runtime_helpers",
-                    "boolean",
-                    "Generate runtime helper hooks",
+                    string_type_schema("boolean", "Generate runtime helper hooks"),
                     false,
                 ),
                 (
                     "generate_semantic_registry",
-                    "boolean",
-                    "Generate semantic registry in modular mode",
+                    string_type_schema("boolean", "Generate semantic registry in modular mode"),
                     false,
                 ),
             ]),
@@ -665,6 +665,11 @@ fn get_tool_definitions() -> Vec<serde_json::Value> {
         td(
             "project_get_active",
             "Get active project session and project",
+            props(&[]),
+        ),
+        td(
+            "schema_discover",
+            "Return accepted MCP enum values, editable fields, defaults, and alpha schema notes",
             props(&[]),
         ),
         td(
@@ -898,35 +903,50 @@ fn project_props(items: &[(&str, &str, &str, bool)]) -> serde_json::Value {
     props(&with_project)
 }
 
+fn string_schema(description: impl Into<String>) -> serde_json::Value {
+    string_type_schema("string", description)
+}
+
+fn string_type_schema(typ: &str, description: impl Into<String>) -> serde_json::Value {
+    serde_json::json!({ "type": typ, "description": description.into() })
+}
+
 fn export_props() -> serde_json::Value {
-    project_props(&[
-        ("target", "string", "forge, fabric, or neoforge", true),
-        ("mod_id", "string", "Minecraft mod id", true),
-        ("package", "string", "Java package name", true),
-        ("class_name", "string", "Generated Screen class name", true),
+    project_schema(vec![
+        ("target", string_schema(mod_target_description()), true),
+        ("mod_id", string_schema("Minecraft mod id"), true),
+        ("package", string_schema("Java package name"), true),
         (
-            "output_dir",
-            "string",
-            "Directory where export files are written",
+            "class_name",
+            string_schema("Generated Screen class name"),
             true,
         ),
-        ("codegen_mode", "string", "simple or modular", false),
+        (
+            "output_dir",
+            string_schema("Directory where export files are written"),
+            true,
+        ),
+        (
+            "codegen_mode",
+            string_schema(codegen_mode_description()),
+            false,
+        ),
         (
             "generate_runtime_helpers",
-            "boolean",
-            "Generate runtime helper hooks",
+            string_type_schema("boolean", "Generate runtime helper hooks"),
             false,
         ),
         (
             "generate_semantic_registry",
-            "boolean",
-            "Generate semantic registry in modular mode",
+            string_type_schema("boolean", "Generate semantic registry in modular mode"),
             false,
         ),
         (
             "overwrite",
-            "boolean",
-            "Allow overwriting planned generated files without existing-file warnings",
+            string_type_schema(
+                "boolean",
+                "Allow overwriting planned generated files without existing-file warnings",
+            ),
             false,
         ),
     ])
@@ -942,7 +962,7 @@ fn semantic_groups_props() -> serde_json::Value {
                 "type": "object",
                 "properties": {
                     "id": { "type": "string", "description": "Semantic group ID" },
-                    "kind": { "type": "string", "description": SEMANTIC_GROUP_KIND_DESCRIPTION },
+                    "kind": { "type": "string", "description": semantic_group_kind_description() },
                     "columns": { "type": "integer", "description": "Grid column count" },
                     "visible_rows": { "type": "integer", "description": "Visible row count" },
                     "total_rows": { "type": "integer", "description": "Total row count" },
@@ -1014,7 +1034,7 @@ fn slot_grid_props() -> serde_json::Value {
         ),
         (
             "slot_role",
-            serde_json::json!({ "type": "string", "description": SLOT_ROLE_DESCRIPTION }),
+            serde_json::json!({ "type": "string", "description": slot_role_description() }),
             false,
         ),
         (
@@ -1034,7 +1054,7 @@ fn slot_grid_props() -> serde_json::Value {
         ),
         (
             "semantic_group_kind",
-            serde_json::json!({ "type": "string", "description": SEMANTIC_GROUP_KIND_DESCRIPTION }),
+            serde_json::json!({ "type": "string", "description": semantic_group_kind_description() }),
             false,
         ),
         (
@@ -1059,7 +1079,7 @@ fn attached_region_props(require_region: bool) -> serde_json::Value {
         ),
         (
             "anchor",
-            serde_json::json!({ "type": "string", "description": ATTACHED_REGION_ANCHOR_DESCRIPTION }),
+            serde_json::json!({ "type": "string", "description": attached_region_anchor_description() }),
             require_region,
         ),
         (
@@ -1084,7 +1104,7 @@ fn attached_region_props(require_region: bool) -> serde_json::Value {
         ),
         (
             "state",
-            serde_json::json!({ "type": "string", "description": format!("{ATTACHED_REGION_STATE_DESCRIPTION} Defaults to static when omitted.") }),
+            serde_json::json!({ "type": "string", "description": format!("{} Defaults to static when omitted.", attached_region_state_description()) }),
             false,
         ),
         (
@@ -1120,7 +1140,7 @@ fn attached_region_update_props() -> serde_json::Value {
                 "properties": {
                     "anchor": {
                         "type": "string",
-                        "description": ATTACHED_REGION_ANCHOR_DESCRIPTION
+                        "description": attached_region_anchor_description()
                     },
                     "x": {
                         "type": "integer",
@@ -1140,7 +1160,7 @@ fn attached_region_update_props() -> serde_json::Value {
                     },
                     "state": {
                         "type": "string",
-                        "description": ATTACHED_REGION_STATE_DESCRIPTION
+                        "description": attached_region_state_description()
                     },
                     "kind": {
                         "type": "string",
@@ -1195,6 +1215,212 @@ fn project_schema(items: Vec<(&str, serde_json::Value, bool)>) -> serde_json::Va
     serde_json::json!({ "type": "object", "properties": properties, "required": required })
 }
 
+fn object_schema(items: Vec<(&str, serde_json::Value, bool)>) -> serde_json::Value {
+    let mut required = Vec::new();
+    let mut properties = serde_json::Map::new();
+    for (name, schema, is_required) in items {
+        properties.insert(name.to_string(), schema);
+        if is_required {
+            required.push(name.to_string());
+        }
+    }
+    serde_json::json!({ "type": "object", "properties": properties, "required": required })
+}
+
+fn serde_values<T: Serialize>(values: impl IntoIterator<Item = T>) -> serde_json::Value {
+    serde_json::to_value(values.into_iter().collect::<Vec<_>>()).unwrap()
+}
+
+fn serde_variant_names<T: Serialize>(values: impl IntoIterator<Item = T>) -> Vec<String> {
+    values
+        .into_iter()
+        .map(|value| {
+            serde_json::to_value(value)
+                .unwrap()
+                .as_str()
+                .unwrap()
+                .to_string()
+        })
+        .collect()
+}
+
+fn accepted_values_sentence<T: Serialize>(values: impl IntoIterator<Item = T>) -> String {
+    format!(
+        "Accepted values: {}.",
+        serde_variant_names(values).join(", ")
+    )
+}
+
+fn mod_target_description() -> String {
+    accepted_values_sentence(ModTarget::variants())
+}
+
+fn codegen_mode_description() -> String {
+    accepted_values_sentence(CodegenMode::variants())
+}
+
+fn slot_role_description() -> String {
+    accepted_values_sentence(SlotRole::variants())
+}
+
+fn semantic_group_kind_description() -> String {
+    accepted_values_sentence(SemanticGroupKind::variants())
+}
+
+fn attached_region_anchor_description() -> String {
+    format!(
+        "Attached region anchor. {}",
+        accepted_values_sentence(AttachedRegionAnchor::variants())
+    )
+}
+
+fn attached_region_state_description() -> String {
+    format!(
+        "Attached region state. {} Toggleable is metadata only in this release.",
+        accepted_values_sentence(AttachedRegionState::variants())
+    )
+}
+
+fn schema_discover() -> serde_json::Value {
+    let export_defaults = ProjectExportSettings::default();
+
+    serde_json::json!({
+        "mod_targets": serde_values(ModTarget::variants()),
+        "element_types": serde_values(ElementType::variants()),
+        "slot_roles": serde_values(SlotRole::variants()),
+        "semantic_group_kinds": serde_values(SemanticGroupKind::variants()),
+        "attached_region_anchors": serde_values(AttachedRegionAnchor::variants()),
+        "attached_region_states": serde_values(AttachedRegionState::variants()),
+        "fill_directions": serde_values(FillDirection::variants()),
+        "layers": serde_values(Layer::variants()),
+        "export_settings": {
+            "codegen_modes": serde_values(CodegenMode::variants()),
+            "codegen_mode_default": serde_json::to_value(&export_defaults.codegen_mode).unwrap(),
+            "generate_runtime_helpers_default": export_defaults.generate_runtime_helpers,
+            "generate_semantic_registry_default": export_defaults.generate_semantic_registry
+        },
+        "editable_element_fields": [
+            "x",
+            "y",
+            "width",
+            "height",
+            "size",
+            "asset",
+            "icon",
+            "icon_uv",
+            "tooltip",
+            "direction",
+            "content",
+            "font",
+            "color",
+            "shadow",
+            "animation",
+            "visible",
+            "uv",
+            "layer",
+            "slot_role",
+            "slot_index",
+            "inventory_group",
+            "scroll_binding",
+            "scroll_min",
+            "scroll_max",
+            "visible_rows",
+            "total_rows",
+            "columns",
+            "target_group",
+            "binding",
+            "dock",
+            "open_width",
+            "open_height",
+            "attached_region"
+        ],
+        "serialization_defaults": schema_serialization_defaults()
+    })
+}
+
+fn schema_serialization_defaults() -> serde_json::Value {
+    let element = serde_json::to_value(schema_default_element()).unwrap();
+    let semantic_group = serde_json::to_value(schema_default_semantic_group()).unwrap();
+    let attached_region = serde_json::to_value(schema_default_attached_region()).unwrap();
+
+    serde_json::json!({
+        "layer_background_omitted_in_project_json": element.get("layer").is_none(),
+        "visible_true_omitted": element.get("visible").is_none(),
+        "dynamic_height_false_omitted": semantic_group.get("dynamic_height").is_none(),
+        "attached_region_visible_true_omitted": attached_region.get("visible").is_none()
+    })
+}
+
+fn schema_default_element() -> Element {
+    Element {
+        id: "schema_default_element".to_string(),
+        element_type: ElementType::Slot,
+        x: 0,
+        y: 0,
+        width: None,
+        height: None,
+        size: None,
+        asset: None,
+        icon: None,
+        icon_uv: None,
+        tooltip: None,
+        direction: None,
+        content: None,
+        font: None,
+        color: None,
+        shadow: None,
+        animation: None,
+        visible: true,
+        uv: None,
+        layer: Layer::Background,
+        slot_role: None,
+        slot_index: None,
+        inventory_group: None,
+        scroll_binding: None,
+        scroll_min: None,
+        scroll_max: None,
+        visible_rows: None,
+        total_rows: None,
+        columns: None,
+        target_group: None,
+        binding: None,
+        dock: None,
+        open_width: None,
+        open_height: None,
+        attached_region: None,
+    }
+}
+
+fn schema_default_semantic_group() -> SemanticGroup {
+    SemanticGroup {
+        id: "schema_default_group".to_string(),
+        kind: SemanticGroupKind::FixedSlots,
+        columns: None,
+        visible_rows: None,
+        total_rows: None,
+        slot_count: None,
+        member_ids: Vec::new(),
+        data_source: None,
+        scroll_binding: None,
+        dynamic_height: false,
+    }
+}
+
+fn schema_default_attached_region() -> AttachedRegion {
+    AttachedRegion {
+        id: "schema_default_region".to_string(),
+        anchor: AttachedRegionAnchor::Right,
+        x: 0,
+        y: 0,
+        width: 1,
+        height: 1,
+        state: AttachedRegionState::Static,
+        kind: None,
+        semantic_group: None,
+        visible: true,
+    }
+}
+
 fn execute_tool(
     name: &str,
     args: &serde_json::Value,
@@ -1222,6 +1448,7 @@ fn execute_tool(
         }
         "project_list_sessions" => Ok(serde_json::json!({ "sessions": sessions.list_sessions() })),
         "project_get_active" => project_get_active(&sessions),
+        "schema_discover" => Ok(schema_discover()),
         "project_undo" => Ok(serde_json::to_value(sessions.undo(project_id)?).unwrap()),
         "project_redo" => Ok(serde_json::to_value(sessions.redo(project_id)?).unwrap()),
         "element_add" => element_add(&mut sessions, project_id, args),
@@ -3258,6 +3485,119 @@ mod tests {
     }
 
     #[test]
+    fn tools_list_exposes_schema_discover() {
+        let tools = get_tool_definitions();
+        let names = tools
+            .iter()
+            .filter_map(|tool| tool["name"].as_str())
+            .collect::<Vec<_>>();
+
+        assert!(names.contains(&"schema_discover"));
+    }
+
+    #[test]
+    fn schema_discover_returns_agent_authoring_enums_and_defaults() {
+        let state = test_state();
+        let response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "schema",
+                "method": "tools/call",
+                "params": {
+                    "name": "schema_discover",
+                    "arguments": {}
+                }
+            }),
+            &state,
+        );
+
+        assert!(response["error"].is_null(), "{response:#}");
+        let value = tool_text_value(&response);
+        assert_eq!(value["mod_targets"], serde_values(ModTarget::variants()));
+        assert_eq!(
+            value["element_types"],
+            serde_values(ElementType::variants())
+        );
+        assert_eq!(value["slot_roles"], serde_values(SlotRole::variants()));
+        assert_eq!(
+            value["semantic_group_kinds"],
+            serde_values(SemanticGroupKind::variants())
+        );
+        assert_eq!(
+            value["attached_region_anchors"],
+            serde_values(AttachedRegionAnchor::variants())
+        );
+        assert_eq!(
+            value["attached_region_states"],
+            serde_values(AttachedRegionState::variants())
+        );
+        assert_eq!(
+            value["fill_directions"],
+            serde_values(FillDirection::variants())
+        );
+        assert_eq!(value["layers"], serde_values(Layer::variants()));
+        assert_eq!(
+            value["export_settings"]["codegen_modes"],
+            serde_values(CodegenMode::variants())
+        );
+        let export_defaults = ProjectExportSettings::default();
+        assert_eq!(
+            value["export_settings"]["codegen_mode_default"],
+            serde_json::to_value(&export_defaults.codegen_mode).unwrap()
+        );
+        assert_eq!(
+            value["export_settings"]["generate_runtime_helpers_default"],
+            export_defaults.generate_runtime_helpers
+        );
+        assert_eq!(
+            value["export_settings"]["generate_semantic_registry_default"],
+            export_defaults.generate_semantic_registry
+        );
+        assert_eq!(
+            value["editable_element_fields"],
+            serde_json::json!([
+                "x",
+                "y",
+                "width",
+                "height",
+                "size",
+                "asset",
+                "icon",
+                "icon_uv",
+                "tooltip",
+                "direction",
+                "content",
+                "font",
+                "color",
+                "shadow",
+                "animation",
+                "visible",
+                "uv",
+                "layer",
+                "slot_role",
+                "slot_index",
+                "inventory_group",
+                "scroll_binding",
+                "scroll_min",
+                "scroll_max",
+                "visible_rows",
+                "total_rows",
+                "columns",
+                "target_group",
+                "binding",
+                "dock",
+                "open_width",
+                "open_height",
+                "attached_region"
+            ])
+        );
+        assert_eq!(
+            value["serialization_defaults"],
+            schema_serialization_defaults()
+        );
+    }
+
+    #[test]
     fn tools_list_exposes_alpha_ergonomics_tools() {
         let tools = get_tool_definitions();
         let names = tools
@@ -3343,14 +3683,14 @@ mod tests {
         ] {
             assert!(changes["properties"].get(field).is_some(), "{field}");
         }
-        assert!(changes["properties"]["anchor"]["description"]
-            .as_str()
-            .unwrap()
-            .contains("left"));
-        assert!(changes["properties"]["state"]["description"]
-            .as_str()
-            .unwrap()
-            .contains("toggleable"));
+        assert_eq!(
+            changes["properties"]["anchor"]["description"],
+            attached_region_anchor_description()
+        );
+        assert_eq!(
+            changes["properties"]["state"]["description"],
+            attached_region_state_description()
+        );
     }
 
     #[test]
@@ -3659,6 +3999,36 @@ mod tests {
         assert!(properties.contains_key("generate_runtime_helpers"));
         assert!(properties.contains_key("generate_semantic_registry"));
         assert!(properties.contains_key("overwrite"));
+        assert_eq!(
+            properties["target"]["description"],
+            mod_target_description()
+        );
+        assert_eq!(
+            properties["codegen_mode"]["description"],
+            codegen_mode_description()
+        );
+    }
+
+    #[test]
+    fn tool_schemas_generate_mod_target_and_codegen_descriptions() {
+        let tools = get_tool_definitions();
+        let project_new = tools
+            .iter()
+            .find(|tool| tool["name"] == "project_new")
+            .unwrap();
+        let settings_update = tools
+            .iter()
+            .find(|tool| tool["name"] == "project_export_settings_update")
+            .unwrap();
+
+        assert_eq!(
+            project_new["inputSchema"]["properties"]["mod_target"]["description"],
+            mod_target_description()
+        );
+        assert_eq!(
+            settings_update["inputSchema"]["properties"]["codegen_mode"]["description"],
+            codegen_mode_description()
+        );
     }
 
     #[test]

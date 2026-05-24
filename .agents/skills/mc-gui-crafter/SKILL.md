@@ -18,6 +18,8 @@ exporting a project.
 1. Discover the current surface:
    - Call `gui_template_list`.
    - Prefer an existing template over manually recreating common vanilla layouts.
+   - When unsure about enum values or editable fields, call `schema_discover`
+     instead of guessing.
    - If editing an existing session, call `project_get_active`, `project_summary`,
      `element_list`, `animation_list`, and `asset_list` first.
 
