@@ -1,23 +1,26 @@
 use crate::project::{Element, ElementType, Layer, Project};
 use image::{GenericImageView, Rgba, RgbaImage};
 
-pub fn composite_atlas_for_layer(project: &Project, layer: Layer) -> Result<Vec<u8>, String> {
-    let bounds = project.visual_bounds();
-    let w = bounds.width;
-    let h = bounds.height;
+const MAX_COMPOSITE_DIMENSION: u32 = 4096;
+const MAX_COMPOSITE_PIXELS: u64 = 16_777_216;
 
-    let mut img = RgbaImage::new(w, h);
+pub fn composite_atlas_for_layer(project: &Project, layer: Layer) -> Result<Vec<u8>, String> {
     let has_elements = project
         .elements
         .iter()
         .any(|el| el.visible && el.layer == layer && is_baked_atlas_element(el));
 
     if !has_elements {
-        let mut buf = Vec::new();
-        img.write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::Png)
-            .map_err(|e| format!("Failed to encode PNG: {e}"))?;
-        return Ok(buf);
+        validate_composite_size("atlas", project.gui_size.width, project.gui_size.height)?;
+        return encode_png(RgbaImage::new(
+            project.gui_size.width,
+            project.gui_size.height,
+        ));
     }
+
+    let bounds = project.visual_bounds();
+    validate_composite_size("atlas", bounds.width, bounds.height)?;
+    let mut img = RgbaImage::new(bounds.width, bounds.height);
 
     for el in &project.elements {
         if !el.visible || el.layer != layer || !is_baked_atlas_element(el) {
@@ -36,6 +39,7 @@ pub fn composite_atlas_for_layer(project: &Project, layer: Layer) -> Result<Vec<
 
 pub fn composite_project_preview(project: &Project) -> Result<Vec<u8>, String> {
     let bounds = project.visual_bounds();
+    validate_composite_size("preview", bounds.width, bounds.height)?;
     let mut preview = RgbaImage::new(bounds.width, bounds.height);
 
     for layer in [Layer::Background, Layer::Overlay, Layer::Animatable] {
@@ -60,6 +64,20 @@ pub fn composite_project_preview(project: &Project) -> Result<Vec<u8>, String> {
     }
 
     encode_png(preview)
+}
+
+fn validate_composite_size(label: &str, width: u32, height: u32) -> Result<(), String> {
+    let pixels = u64::from(width) * u64::from(height);
+    if width > MAX_COMPOSITE_DIMENSION
+        || height > MAX_COMPOSITE_DIMENSION
+        || pixels > MAX_COMPOSITE_PIXELS
+    {
+        return Err(format!(
+            "Cannot render {label}: unrenderable {label} size {width}x{height}; maximum dimension is {MAX_COMPOSITE_DIMENSION} and maximum pixels is {MAX_COMPOSITE_PIXELS}"
+        ));
+    }
+
+    Ok(())
 }
 
 fn is_baked_atlas_element(element: &Element) -> bool {
@@ -94,9 +112,8 @@ fn overlay_baked_element(
             overlay_button(img, project, element, offset_x, offset_y)?;
         }
         ElementType::Scrollbar => {
-            let w = element.width.or(element.size).unwrap_or(12);
-            let h = element.height.or(element.size).unwrap_or(54);
-            let data = generated_scrollbar(w, h)?;
+            let size = element.render_size();
+            let data = generated_scrollbar(size.width, size.height)?;
             overlay_texture_data(
                 img,
                 element,
@@ -174,8 +191,9 @@ fn overlay_button_icon(
     if source.width() == 0 || source.height() == 0 {
         return Ok(());
     }
-    let element_w = element.width.or(element.size).unwrap_or(20);
-    let element_h = element.height.or(element.size).unwrap_or(20);
+    let element_size = element.render_size();
+    let element_w = element_size.width;
+    let element_h = element_size.height;
     if element_w == 0 || element_h == 0 {
         return Ok(());
     }
@@ -226,8 +244,7 @@ fn overlay_texture_data(
         .map_err(|e| format!("Failed to load texture '{}': {e}", asset_name))?
         .to_rgba8();
 
-    let tw = element.width.or(element.size).unwrap_or(tex.width());
-    let th = element.height.or(element.size).unwrap_or(tex.height());
+    let (tw, th) = texture_target_size(element, &tex);
 
     let source = cropped_source(&tex, element.uv.as_ref());
     if source.width() == 0 || source.height() == 0 {
@@ -242,6 +259,18 @@ fn overlay_texture_data(
         i64::from(element.y) - i64::from(offset_y),
     );
     Ok(())
+}
+
+fn texture_target_size(element: &Element, tex: &RgbaImage) -> (u32, u32) {
+    if element.element_type == ElementType::Texture {
+        (
+            element.width.or(element.size).unwrap_or(tex.width()),
+            element.height.or(element.size).unwrap_or(tex.height()),
+        )
+    } else {
+        let size = element.render_size();
+        (size.width, size.height)
+    }
 }
 
 fn overlay_png(img: &mut RgbaImage, png: &[u8], x: i64, y: i64, label: &str) -> Result<(), String> {
@@ -660,6 +689,37 @@ mod tests {
         let image = image::load_from_memory(&atlas).unwrap().to_rgba8();
 
         assert_eq!(image.dimensions(), (100, 80));
+    }
+
+    #[test]
+    fn composite_atlas_rejects_unrenderable_visual_bounds() {
+        let mut project = Project::new("Huge", 4097, 1, ModTarget::Forge);
+        project.elements.push(button_element("button", 0, 0));
+
+        let err = composite_atlas_for_layer(&project, Layer::Background).unwrap_err();
+
+        assert!(err.contains("unrenderable atlas size 4097x20"));
+    }
+
+    #[test]
+    fn empty_layer_atlas_uses_main_gui_size_not_expanded_visual_bounds() {
+        let mut project = Project::new("Empty Overlay", 100, 80, ModTarget::Forge);
+        project.texture_data.insert(
+            "textures/flair.png".into(),
+            test_png(32, 32, Rgba([0xd7, 0xa3, 0x39, 0xff])),
+        );
+        let mut flair = button_element("flair", 120, 0);
+        flair.element_type = ElementType::Texture;
+        flair.width = Some(32);
+        flair.height = Some(32);
+        flair.asset = Some("textures/flair.png".into());
+        project.elements.push(flair);
+
+        let atlas = composite_atlas_for_layer(&project, Layer::Overlay).unwrap();
+        let image = image::load_from_memory(&atlas).unwrap().to_rgba8();
+
+        assert_eq!(image.dimensions(), (100, 80));
+        assert!(image.pixels().all(|pixel| pixel.0 == [0, 0, 0, 0]));
     }
 
     #[test]

@@ -360,6 +360,25 @@ pub struct Element {
     pub attached_region: Option<String>,
 }
 
+impl Element {
+    pub fn render_size(&self) -> Size {
+        let (default_width, default_height) = match self.element_type {
+            ElementType::Slot | ElementType::VirtualSlotCell => (18, 18),
+            ElementType::Button | ElementType::ToggleButton => (20, 20),
+            ElementType::Scrollbar => (12, 54),
+            // Texture compositing uses the source PNG dimensions when no explicit size is
+            // provided, but visual bounds cannot decode project texture_data without I/O.
+            ElementType::Texture => (16, 16),
+            _ => (16, 16),
+        };
+
+        Size {
+            width: self.width.or(self.size).unwrap_or(default_width),
+            height: self.height.or(self.size).unwrap_or(default_height),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Group {
     pub id: String,
@@ -621,8 +640,9 @@ impl Project {
         for element in self.elements.iter().filter(|element| element.visible) {
             let x = i64::from(element.x);
             let y = i64::from(element.y);
-            let width = i64::from(element.width.or(element.size).unwrap_or(16));
-            let height = i64::from(element.height.or(element.size).unwrap_or(16));
+            let size = element.render_size();
+            let width = i64::from(size.width);
+            let height = i64::from(size.height);
             min_x = min_x.min(x);
             min_y = min_y.min(y);
             max_x = max_x.max(x + width);
@@ -1151,6 +1171,32 @@ mod tests {
         assert_eq!(bounds.x, 0);
         assert_eq!(bounds.width, u32::MAX);
         assert_eq!(bounds.height, 1);
+    }
+
+    #[test]
+    fn visual_bounds_use_render_defaults_for_slot_and_scrollbar() {
+        let mut slot_project = Project::new("Slot Visual", 10, 10, ModTarget::Forge);
+        slot_project
+            .elements
+            .push(base_element_for_test("slot", ElementType::Slot, 10, 0));
+
+        let slot_bounds = slot_project.visual_bounds();
+
+        assert_eq!(slot_bounds.width, 28);
+        assert_eq!(slot_bounds.height, 18);
+
+        let mut scrollbar_project = Project::new("Scrollbar Visual", 10, 10, ModTarget::Forge);
+        scrollbar_project.elements.push(base_element_for_test(
+            "scrollbar",
+            ElementType::Scrollbar,
+            10,
+            10,
+        ));
+
+        let scrollbar_bounds = scrollbar_project.visual_bounds();
+
+        assert_eq!(scrollbar_bounds.width, 22);
+        assert_eq!(scrollbar_bounds.height, 64);
     }
 
     #[test]
