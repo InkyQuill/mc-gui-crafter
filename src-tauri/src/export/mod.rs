@@ -651,6 +651,9 @@ fn element_binds_scrollbar(
 fn referenced_texture_assets(project: &Project) -> Vec<Cow<'_, str>> {
     let mut assets = Vec::new();
     for element in &project.elements {
+        if !element.visible {
+            continue;
+        }
         if let Some(asset) = element.asset.as_deref() {
             if !assets.iter().any(|known: &Cow<'_, str>| known == asset) {
                 assets.push(Cow::Borrowed(asset));
@@ -1070,7 +1073,7 @@ fn generate_forge_like_layout_java(
             if (element.texture != null) {
                 ResourceLocation spriteTexture = resource(namespace, element.texture);
                 switch (direction) {
-                    case "right_to_left" -> graphics.blit(spriteTexture, x + width - Math.round(width * ratio), y, 0, 0, Math.round(width * ratio), height, width, height);
+                    case "right_to_left" -> graphics.blit(spriteTexture, x + width - Math.round(width * ratio), y, width - Math.round(width * ratio), 0, Math.round(width * ratio), height, width, height);
                     case "bottom_to_top" -> graphics.blit(spriteTexture, x, y + height - Math.round(height * ratio), 0, height - Math.round(height * ratio), width, Math.round(height * ratio), width, height);
                     case "top_to_bottom" -> graphics.blit(spriteTexture, x, y, 0, 0, width, Math.round(height * ratio), width, height);
                     default -> graphics.blit(spriteTexture, x, y, 0, 0, Math.round(width * ratio), height, width, height);
@@ -1312,7 +1315,7 @@ fn generate_fabric_layout_java(export: &SanitizedExport, project: &Project) -> S
             if (element.texture != null) {
                 Identifier spriteTexture = resource(namespace, element.texture);
                 switch (direction) {
-                    case "right_to_left" -> context.drawTexture(spriteTexture, x + width - Math.round(width * ratio), y, 0, 0, Math.round(width * ratio), height, width, height);
+                    case "right_to_left" -> context.drawTexture(spriteTexture, x + width - Math.round(width * ratio), y, width - Math.round(width * ratio), 0, Math.round(width * ratio), height, width, height);
                     case "bottom_to_top" -> context.drawTexture(spriteTexture, x, y + height - Math.round(height * ratio), 0, height - Math.round(height * ratio), width, Math.round(height * ratio), width, height);
                     case "top_to_bottom" -> context.drawTexture(spriteTexture, x, y, 0, 0, width, Math.round(height * ratio), width, height);
                     default -> context.drawTexture(spriteTexture, x, y, 0, 0, Math.round(width * ratio), height, width, height);
@@ -2836,6 +2839,8 @@ mod tests {
             .contains("ResourceLocation spriteTexture = resource(namespace, element.texture);"));
         assert!(layout.contains("if (element.texture != null)"));
         assert!(layout.contains("graphics.blit(spriteTexture"));
+        assert!(layout
+            .contains("width - Math.round(width * ratio), 0, Math.round(width * ratio), height"));
         assert!(layout.contains(
             "String direction = element.directionOrDefault(animation.directionOrDefault());"
         ));
@@ -3316,6 +3321,8 @@ mod tests {
         let layout = read(&java_dir.join("GuiLayout.java"));
         assert!(layout.contains("net.minecraft.client.gui.DrawContext"));
         assert!(layout.contains("Identifier.of(namespace, path)"));
+        assert!(layout
+            .contains("width - Math.round(width * ratio), 0, Math.round(width * ratio), height"));
         assert!(layout.contains(
             "String direction = element.directionOrDefault(animation.directionOrDefault());"
         ));
@@ -3416,6 +3423,40 @@ mod tests {
             path.ends_with("src/main/resources/assets/testmod/textures/icons/start.png")
         }));
         let _ = fs::remove_dir_all(output_dir);
+    }
+
+    #[test]
+    fn export_ignores_missing_texture_references_on_hidden_elements() {
+        let output_dir = TempExportDir::new("hidden-missing-texture");
+        let mut project = sample_project(ModTarget::Forge);
+        project.elements.push(Element {
+            asset: Some("textures/missing/hidden.png".to_string()),
+            visible: false,
+            ..button_element("hidden_missing_texture", ElementType::Texture, 12, 42, None)
+        });
+        project.elements.push(Element {
+            icon: Some("textures/missing/hidden_icon.png".to_string()),
+            visible: false,
+            ..button_element(
+                "hidden_missing_icon",
+                ElementType::Button,
+                36,
+                42,
+                Some("Hidden"),
+            )
+        });
+        let config = ExportConfig {
+            mod_id: "testmod".to_string(),
+            package: "com.example".to_string(),
+            class_name: "HiddenMissingGui".to_string(),
+            output_dir: output_dir.path().to_string_lossy().to_string(),
+            settings_override: None,
+            overwrite: false,
+        };
+
+        export_project(&project, &config, "forge").unwrap();
+
+        let _ = fs::remove_dir_all(output_dir.path());
     }
 
     #[test]
