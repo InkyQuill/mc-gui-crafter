@@ -322,7 +322,7 @@ export class GuiRenderer {
       // Check resize handles on selected element first
       if (editor.tool === "select" && editor.selectedElementId && !shiftHeld) {
         const selEl = project.elementById(editor.selectedElementId);
-        if (selEl) {
+        if (selEl && (selEl.visible ?? true)) {
           const corner = this.hitTestHandle(selEl, gui.x, gui.y);
           if (corner) {
             const bounds = project.getElementBounds(editor.selectedElementId)!;
@@ -334,6 +334,7 @@ export class GuiRenderer {
 
       // Find clicked element: higher layers first, then later elements within the same layer.
       const sortedForHit = project.elements
+        .filter(el => el.visible ?? true)
         .map((el, index) => ({ el, index }))
         .sort((a, b) => {
           const aLayer = LAYER_ORDER[a.el.layer ?? "background"] ?? 0;
@@ -602,6 +603,7 @@ export class GuiRenderer {
     });
 
     for (const el of sorted) {
+      if (el.visible === false) continue;
       let g: Container | null = null;
       try {
         g = this.drawElement(el);

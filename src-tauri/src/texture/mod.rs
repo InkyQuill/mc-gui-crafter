@@ -9,7 +9,7 @@ pub fn composite_atlas_for_layer(project: &Project, layer: Layer) -> Result<Vec<
     let has_elements = project
         .elements
         .iter()
-        .any(|el| el.layer == layer && is_baked_atlas_element(el));
+        .any(|el| el.visible && el.layer == layer && is_baked_atlas_element(el));
 
     if !has_elements {
         let mut buf = Vec::new();
@@ -19,7 +19,7 @@ pub fn composite_atlas_for_layer(project: &Project, layer: Layer) -> Result<Vec<
     }
 
     for el in &project.elements {
-        if el.layer != layer || !is_baked_atlas_element(el) {
+        if !el.visible || el.layer != layer || !is_baked_atlas_element(el) {
             continue;
         }
 
@@ -927,6 +927,39 @@ mod tests {
         assert_eq!(image.get_pixel(0, 0).0, [0x11, 0x22, 0x33, 0xff]);
         assert_eq!(image.get_pixel(1, 1).0, [0x44, 0xaa, 0x66, 0xff]);
         assert_eq!(image.get_pixel(2, 2).0, [0xe9, 0xa2, 0x3b, 0xff]);
+    }
+
+    #[test]
+    fn background_export_skips_hidden_baked_elements() {
+        let mut project = Project::new("Hidden Baked", 2, 2, ModTarget::Forge);
+        project.texture_data.insert(
+            "textures/visible.png".into(),
+            test_png(2, 2, Rgba([0x11, 0x22, 0x33, 0xff])),
+        );
+        project.texture_data.insert(
+            "textures/hidden.png".into(),
+            test_png(1, 1, Rgba([0xff, 0x00, 0xff, 0xff])),
+        );
+
+        let mut visible = button_element("visible", 0, 0);
+        visible.element_type = ElementType::Texture;
+        visible.width = Some(2);
+        visible.height = Some(2);
+        visible.asset = Some("textures/visible.png".into());
+        project.elements.push(visible);
+
+        let mut hidden = button_element("hidden", 0, 0);
+        hidden.element_type = ElementType::Texture;
+        hidden.width = Some(1);
+        hidden.height = Some(1);
+        hidden.asset = Some("textures/hidden.png".into());
+        hidden.visible = false;
+        project.elements.push(hidden);
+
+        let png = composite_atlas_for_layer(&project, Layer::Background).unwrap();
+        let image = image::load_from_memory(&png).unwrap().to_rgba8();
+
+        assert_eq!(image.get_pixel(0, 0).0, [0x11, 0x22, 0x33, 0xff]);
     }
 
     #[test]

@@ -141,8 +141,8 @@
   {:else}
     {#snippet elementRow(el: Element, nested = false)}
       {@const idx = project.elements.indexOf(el)}
-      {@const isLast = idx === 0}
-      {@const isFirst = idx === project.elements.length - 1}
+      {@const isBackmost = idx === 0}
+      {@const isFrontmost = idx === project.elements.length - 1}
       <div class="layer-row" class:nested>
         <button
           class="layer-item"
@@ -159,13 +159,13 @@
         <div class="layer-actions">
           <button
             class="reorder-btn"
-            disabled={isFirst}
+            disabled={isBackmost}
             onclick={() => project.moveElementDown(el.id)}
             title="Move down (send backward)"
           >↓</button>
           <button
             class="reorder-btn"
-            disabled={isLast}
+            disabled={isFrontmost}
             onclick={() => project.moveElementUp(el.id)}
             title="Move up (bring forward)"
           >↑</button>

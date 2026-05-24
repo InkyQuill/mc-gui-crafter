@@ -1066,16 +1066,17 @@ fn generate_forge_like_layout_java(
             int width = element.widthOrDefault(22);
             int height = element.heightOrDefault(15);
             float ratio = animation.normalize(value);
+            String direction = element.directionOrDefault(animation.directionOrDefault());
             if (element.texture != null) {
                 ResourceLocation spriteTexture = resource(namespace, element.texture);
-                switch (animation.directionOrDefault()) {
+                switch (direction) {
                     case "right_to_left" -> graphics.blit(spriteTexture, x + width - Math.round(width * ratio), y, 0, 0, Math.round(width * ratio), height, width, height);
                     case "bottom_to_top" -> graphics.blit(spriteTexture, x, y + height - Math.round(height * ratio), 0, height - Math.round(height * ratio), width, Math.round(height * ratio), width, height);
                     case "top_to_bottom" -> graphics.blit(spriteTexture, x, y, 0, 0, width, Math.round(height * ratio), width, height);
                     default -> graphics.blit(spriteTexture, x, y, 0, 0, Math.round(width * ratio), height, width, height);
                 }
             } else {
-                switch (animation.directionOrDefault()) {
+                switch (direction) {
                     case "right_to_left" -> graphics.fill(x + width - Math.round(width * ratio), y, x + width, y + height, 0xFFE9A23B);
                     case "bottom_to_top" -> graphics.fill(x, y + height - Math.round(height * ratio), x + width, y + height, 0xFF3B82E9);
                     case "top_to_bottom" -> graphics.fill(x, y, x + width, y + Math.round(height * ratio), 0xFF3B82E9);
@@ -1215,6 +1216,7 @@ public final class GuiLayout {{
         Boolean visible;
         String texture;
         String icon;
+        String direction;
 
         boolean isVisible() {{ return visible == null || visible; }}
         int widthOrDefault(int fallback) {{ return width == null ? fallback : width; }}
@@ -1222,6 +1224,7 @@ public final class GuiLayout {{
         int sizeOrDefault() {{ return size == null ? 18 : size; }}
         String contentOrEmpty() {{ return content == null ? "" : content; }}
         boolean hasIcon() {{ return icon != null && !icon.isEmpty(); }}
+        String directionOrDefault(String fallback) {{ return direction == null ? fallback : direction; }}
         int colorOrDefault() {{ return color == null ? 0x404040 : color; }}
         boolean shadowOrDefault() {{ return shadow != null && shadow; }}
     }}
@@ -1305,16 +1308,17 @@ fn generate_fabric_layout_java(export: &SanitizedExport, project: &Project) -> S
             int width = element.widthOrDefault(22);
             int height = element.heightOrDefault(15);
             float ratio = animation.normalize(value);
+            String direction = element.directionOrDefault(animation.directionOrDefault());
             if (element.texture != null) {
                 Identifier spriteTexture = resource(namespace, element.texture);
-                switch (animation.directionOrDefault()) {
+                switch (direction) {
                     case "right_to_left" -> context.drawTexture(spriteTexture, x + width - Math.round(width * ratio), y, 0, 0, Math.round(width * ratio), height, width, height);
                     case "bottom_to_top" -> context.drawTexture(spriteTexture, x, y + height - Math.round(height * ratio), 0, height - Math.round(height * ratio), width, Math.round(height * ratio), width, height);
                     case "top_to_bottom" -> context.drawTexture(spriteTexture, x, y, 0, 0, width, Math.round(height * ratio), width, height);
                     default -> context.drawTexture(spriteTexture, x, y, 0, 0, Math.round(width * ratio), height, width, height);
                 }
             } else {
-                switch (animation.directionOrDefault()) {
+                switch (direction) {
                     case "right_to_left" -> context.fill(x + width - Math.round(width * ratio), y, x + width, y + height, 0xFFE9A23B);
                     case "bottom_to_top" -> context.fill(x, y + height - Math.round(height * ratio), x + width, y + height, 0xFF3B82E9);
                     case "top_to_bottom" -> context.fill(x, y, x + width, y + Math.round(height * ratio), 0xFF3B82E9);
@@ -1456,6 +1460,7 @@ public final class GuiLayout {{
         Boolean visible;
         String texture;
         String icon;
+        String direction;
 
         boolean isVisible() {{ return visible == null || visible; }}
         int widthOrDefault(int fallback) {{ return width == null ? fallback : width; }}
@@ -1463,6 +1468,7 @@ public final class GuiLayout {{
         int sizeOrDefault() {{ return size == null ? 18 : size; }}
         String contentOrEmpty() {{ return content == null ? "" : content; }}
         boolean hasIcon() {{ return icon != null && !icon.isEmpty(); }}
+        String directionOrDefault(String fallback) {{ return direction == null ? fallback : direction; }}
         int colorOrDefault() {{ return color == null ? 0x404040 : color; }}
         boolean shadowOrDefault() {{ return shadow != null && shadow; }}
     }}
@@ -2830,6 +2836,10 @@ mod tests {
             .contains("ResourceLocation spriteTexture = resource(namespace, element.texture);"));
         assert!(layout.contains("if (element.texture != null)"));
         assert!(layout.contains("graphics.blit(spriteTexture"));
+        assert!(layout.contains(
+            "String direction = element.directionOrDefault(animation.directionOrDefault());"
+        ));
+        assert!(layout.contains("String direction;"));
         assert!(!layout.contains("switch (animation.directionOrDefault()) {{"));
     }
 
@@ -2853,6 +2863,56 @@ mod tests {
 
         assert_eq!(sprite.dimensions(), (24, 16));
         assert_eq!(sprite.get_pixel(0, 0).0, [240, 180, 40, 255]);
+    }
+
+    #[test]
+    fn animatable_sprite_export_crops_progress_uv_region() {
+        let output_dir = TempExportDir::new("animatable-progress-uv");
+        let config = ExportConfig {
+            mod_id: "testmod".to_string(),
+            package: "com.example".to_string(),
+            class_name: "LayeredGui".to_string(),
+            output_dir: output_dir.path().to_string_lossy().to_string(),
+            settings_override: None,
+            overwrite: false,
+        };
+        let mut project = layered_project(ModTarget::Forge);
+        let mut atlas = RgbaImage::from_pixel(16, 8, Rgba([0x10, 0x20, 0x30, 0xff]));
+        for x in 8..16 {
+            for y in 0..8 {
+                atlas.put_pixel(x, y, Rgba([0xf0, 0xb4, 0x28, 0xff]));
+            }
+        }
+        let mut bytes = Vec::new();
+        atlas
+            .write_to(
+                &mut std::io::Cursor::new(&mut bytes),
+                image::ImageFormat::Png,
+            )
+            .unwrap();
+        project
+            .texture_data
+            .insert("textures/widgets/progress.png".into(), bytes);
+        let progress = project
+            .elements
+            .iter_mut()
+            .find(|element| element.id == "progress_arrow")
+            .unwrap();
+        progress.asset = Some("textures/widgets/progress.png".into());
+        progress.uv = Some(UvRect {
+            x: 8,
+            y: 0,
+            width: 8,
+            height: 8,
+        });
+
+        export_project(&project, &config, "forge").unwrap();
+        let sprite_path = output_dir
+            .path()
+            .join("src/main/resources/assets/testmod/textures/gui/progress_arrow.png");
+        let sprite = image::open(sprite_path).unwrap().to_rgba8();
+
+        assert_eq!(sprite.get_pixel(0, 0).0, [0xf0, 0xb4, 0x28, 0xff]);
     }
 
     #[test]
@@ -3256,6 +3316,10 @@ mod tests {
         let layout = read(&java_dir.join("GuiLayout.java"));
         assert!(layout.contains("net.minecraft.client.gui.DrawContext"));
         assert!(layout.contains("Identifier.of(namespace, path)"));
+        assert!(layout.contains(
+            "String direction = element.directionOrDefault(animation.directionOrDefault());"
+        ));
+        assert!(layout.contains("String direction;"));
         assert!(!layout.contains("net.minecraft.resources.ResourceLocation"));
         assert!(!layout.contains("switch (animation.directionOrDefault()) {{"));
         assert!(dir.join("src/main/resources/fabric.mod.json").exists());

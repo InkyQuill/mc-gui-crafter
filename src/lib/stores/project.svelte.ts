@@ -415,8 +415,8 @@ export class ProjectStore {
 
   async moveElementUp(id: string) {
     const idx = this.elements.findIndex(e => e.id === id);
-    if (idx > 0) {
-      await api.elementReorder(id, idx - 1, this.activeProjectId ?? undefined);
+    if (idx >= 0 && idx < this.elements.length - 1) {
+      await api.elementReorder(id, idx + 1, this.activeProjectId ?? undefined);
       await this.refreshSessions();
       await this.hydrateActiveProject();
     }
@@ -424,8 +424,8 @@ export class ProjectStore {
 
   async moveElementDown(id: string) {
     const idx = this.elements.findIndex(e => e.id === id);
-    if (idx < this.elements.length - 1) {
-      await api.elementReorder(id, idx + 1, this.activeProjectId ?? undefined);
+    if (idx > 0) {
+      await api.elementReorder(id, idx - 1, this.activeProjectId ?? undefined);
       await this.refreshSessions();
       await this.hydrateActiveProject();
     }
