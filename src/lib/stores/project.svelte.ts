@@ -1,6 +1,7 @@
 import type {
   ActiveProjectPayload,
   Animation,
+  AttachedRegion,
   Element,
   ElementType,
   FontAsset,
@@ -11,6 +12,7 @@ import type {
   ProjectSessionSummary,
   SemanticGroup,
   Size,
+  VisualBounds,
 } from "../types";
 import * as api from "../api";
 import { SvelteMap } from "svelte/reactivity";
@@ -41,6 +43,7 @@ export class ProjectStore {
   assets = $state<string[]>([]);
   fonts = $state<FontAsset[]>([]);
   semanticGroups = $state<SemanticGroup[]>([]);
+  attachedRegions = $state<AttachedRegion[]>([]);
   exportSettings = $state<ProjectExportSettings>({ ...DEFAULT_EXPORT_SETTINGS });
   fontRenderData = new SvelteMap<string, FontRenderData>();
   fontRenderDataVersion = $state(0);
@@ -73,8 +76,47 @@ export class ProjectStore {
     };
   }
 
+  get visualBounds(): VisualBounds {
+    let minX = 0;
+    let minY = 0;
+    let maxX = this.guiSize.width;
+    let maxY = this.guiSize.height;
+
+    for (const el of this.elements) {
+      if (el.visible === false) continue;
+      const size = this.elementVisualSize(el);
+      minX = Math.min(minX, el.x);
+      minY = Math.min(minY, el.y);
+      maxX = Math.max(maxX, el.x + size.width);
+      maxY = Math.max(maxY, el.y + size.height);
+    }
+
+    for (const region of this.attachedRegions) {
+      if (region.visible === false) continue;
+      minX = Math.min(minX, region.x);
+      minY = Math.min(minY, region.y);
+      maxX = Math.max(maxX, region.x + region.width);
+      maxY = Math.max(maxY, region.y + region.height);
+    }
+
+    return {
+      x: minX,
+      y: minY,
+      width: Math.max(1, maxX - minX),
+      height: Math.max(1, maxY - minY),
+    };
+  }
+
   elementById(id: string): Element | undefined {
     return this.elements.find(e => e.id === id);
+  }
+
+  attachedRegionById(id: string): AttachedRegion | undefined {
+    return this.attachedRegions.find(region => region.id === id);
+  }
+
+  elementsForAttachedRegion(id: string): Element[] {
+    return this.elements.filter(element => element.attached_region === id);
   }
 
   groupById(id: string): Group | undefined {
@@ -87,7 +129,9 @@ export class ProjectStore {
 
   movementIdsForElement(id: string): string[] {
     const group = this.groupForElement(id);
-    const ids = group ? group.elements : [id];
+    const regionId = this.elementById(id)?.attached_region;
+    const regionIds = regionId ? this.elementsForAttachedRegion(regionId).map(element => element.id) : [];
+    const ids = group ? group.elements : regionIds.length > 0 ? regionIds : [id];
     return ids.filter((elementId, index) => ids.indexOf(elementId) === index && this.elementById(elementId));
   }
 
@@ -365,6 +409,69 @@ export class ProjectStore {
     await this.hydrateActiveProject();
   }
 
+  async createAttachedRegion(region: AttachedRegion): Promise<AttachedRegion> {
+    const created = await api.attachedRegionCreate(region, this.activeProjectId ?? undefined);
+    this.attachedRegions = [...this.attachedRegions, created];
+    this.isDirty = true;
+    await this.refreshSessions();
+    this.bumpRenderVersion();
+    return created;
+  }
+
+  async updateAttachedRegion(id: string, changes: Partial<AttachedRegion>): Promise<AttachedRegion> {
+    const before = this.attachedRegionById(id);
+    const updated = await api.attachedRegionUpdate(id, changes, this.activeProjectId ?? undefined);
+    this.attachedRegions = this.attachedRegions.map(region => region.id === id ? updated : region);
+    if (!before || JSON.stringify(before) !== JSON.stringify(updated)) {
+      this.isDirty = true;
+    }
+    await this.refreshSessions();
+    this.bumpRenderVersion();
+    return updated;
+  }
+
+  async removeAttachedRegion(id: string): Promise<void> {
+    const removed = await api.attachedRegionRemove(id, this.activeProjectId ?? undefined);
+    if (!removed) return;
+
+    this.attachedRegions = this.attachedRegions.filter(region => region.id !== id);
+    this.elements = this.elements.map(element =>
+      element.attached_region === id ? { ...element, attached_region: null } : element,
+    );
+    this.isDirty = true;
+    await this.refreshSessions();
+    this.bumpRenderVersion();
+  }
+
+  async moveAttachedRegionWithElements(id: string, x: number, y: number): Promise<void> {
+    const old = this.attachedRegionById(id);
+    if (!old) return;
+
+    const updated = await api.attachedRegionMoveWithElements(id, x, y, this.activeProjectId ?? undefined);
+    const dx = updated.x - old.x;
+    const dy = updated.y - old.y;
+    this.attachedRegions = this.attachedRegions.map(region => region.id === id ? updated : region);
+    const movedIds = this.moveAttachedRegionElementsLocal(id, dx, dy);
+    if (dx !== 0 || dy !== 0 || JSON.stringify(old) !== JSON.stringify(updated)) {
+      this.isDirty = true;
+    }
+    this.refreshGroupPositionsForElements(movedIds);
+    await this.refreshSessions();
+    this.bumpRenderVersion();
+  }
+
+  previewMoveAttachedRegionWithElements(id: string, x: number, y: number): void {
+    const old = this.attachedRegionById(id);
+    if (!old) return;
+
+    const dx = x - old.x;
+    const dy = y - old.y;
+    this.attachedRegions = this.attachedRegions.map(region => region.id === id ? { ...region, x, y } : region);
+    const movedIds = this.moveAttachedRegionElementsLocal(id, dx, dy);
+    this.refreshGroupPositionsForElements(movedIds);
+    this.bumpRenderVersion();
+  }
+
   async createGroup(elementIds: Iterable<string>) {
     const elementIdList = [...elementIds];
     const ids = elementIdList.filter((id, index) => elementIdList.indexOf(id) === index && this.elementById(id));
@@ -578,6 +685,7 @@ export class ProjectStore {
     this.assets = project.assets;
     this.fonts = project.fonts ?? [];
     this.semanticGroups = project.semantic_groups ?? [];
+    this.attachedRegions = project.attached_regions ?? [];
     this.exportSettings = project.export_settings ?? { ...DEFAULT_EXPORT_SETTINGS };
     this.invalidateFontRenderData();
     this.projectPath = payload.summary.path ?? project.project_path ?? null;
@@ -661,6 +769,7 @@ export class ProjectStore {
     this.assets = [];
     this.fonts = [];
     this.semanticGroups = [];
+    this.attachedRegions = [];
     this.exportSettings = { ...DEFAULT_EXPORT_SETTINGS };
     this.invalidateFontRenderData();
     this.projectPath = null;
@@ -673,6 +782,41 @@ export class ProjectStore {
   private bumpRenderVersion() {
     this.renderVersion += 1;
   }
+
+  private elementVisualSize(element: Element): { width: number; height: number } {
+    const defaultSize = (() => {
+      switch (element.type) {
+        case "slot":
+        case "virtual_slot_cell":
+          return { width: 18, height: 18 };
+        case "button":
+        case "toggle_button":
+          return { width: 20, height: 20 };
+        case "scrollbar":
+          return { width: 12, height: 54 };
+        default:
+          return { width: 16, height: 16 };
+      }
+    })();
+
+    return {
+      width: element.width ?? element.size ?? defaultSize.width,
+      height: element.height ?? element.size ?? defaultSize.height,
+    };
+  }
+
+  private moveAttachedRegionElementsLocal(id: string, dx: number, dy: number): string[] {
+    if (dx === 0 && dy === 0) return [];
+
+    const movedIds: string[] = [];
+    this.elements = this.elements.map(element => {
+      if (element.attached_region !== id) return element;
+      movedIds.push(element.id);
+      return { ...element, x: element.x + dx, y: element.y + dy };
+    });
+    return movedIds;
+  }
+
   startAutoSave(intervalMs = 60000) {
     this.stopAutoSave();
     this.autoSaveTimer = setInterval(() => {

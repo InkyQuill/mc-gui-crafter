@@ -2,6 +2,7 @@ import type {
   ActiveProjectPayload,
   Animation,
   AppConfig,
+  AttachedRegion,
   Element,
   EditorLayoutConfig,
   FontAsset,
@@ -527,6 +528,77 @@ async function mockInvoke(cmd: string, args?: Record<string, unknown>): Promise<
       }
       return clone(session.project.semantic_groups ?? []);
     }
+    case "attached_region_create": {
+      const session = mockSession(args?.project_id);
+      const region = clone(args?.region as AttachedRegion);
+      if ((session.project.attached_regions ?? []).some(existing => existing.id === region.id)) {
+        throw `Attached region already exists: ${region.id}`;
+      }
+      const previous = clone(session.project);
+      session.project.attached_regions = [...(session.project.attached_regions ?? []), region];
+      markMockChanged(session, previous);
+      return clone(region);
+    }
+    case "attached_region_update": {
+      const session = mockSession(args?.project_id);
+      const id = String(args?.id);
+      const regions = session.project.attached_regions ?? [];
+      const index = regions.findIndex(region => region.id === id);
+      if (index === -1) throw `Attached region not found: ${id}`;
+
+      const current = regions[index];
+      const updated: AttachedRegion = { ...current, ...(args?.changes as Partial<AttachedRegion>), id: current.id };
+      if (JSON.stringify(updated) !== JSON.stringify(current)) {
+        const previous = clone(session.project);
+        session.project.attached_regions = regions.map(region => region.id === id ? clone(updated) : region);
+        markMockChanged(session, previous);
+      }
+      return clone(updated);
+    }
+    case "attached_region_remove": {
+      const session = mockSession(args?.project_id);
+      const id = String(args?.id);
+      if (!(session.project.attached_regions ?? []).some(region => region.id === id)) return false;
+
+      const previous = clone(session.project);
+      session.project.attached_regions = (session.project.attached_regions ?? []).filter(region => region.id !== id);
+      for (const element of session.project.elements) {
+        if (element.attached_region === id) element.attached_region = null;
+      }
+      markMockChanged(session, previous);
+      return true;
+    }
+    case "attached_region_list": {
+      const session = mockSession(args?.project_id);
+      return clone(session.project.attached_regions ?? []);
+    }
+    case "attached_region_move_with_elements": {
+      const session = mockSession(args?.project_id);
+      const id = String(args?.id);
+      const x = Number(args?.x);
+      const y = Number(args?.y);
+      const region = (session.project.attached_regions ?? []).find(existing => existing.id === id);
+      if (!region) throw `Attached region not found: ${id}`;
+      if (region.x === x && region.y === y) return clone(region);
+
+      const dx = x - region.x;
+      const dy = y - region.y;
+      const previous = clone(session.project);
+      const movedChildIds: string[] = [];
+      const updated: AttachedRegion = { ...region, x, y };
+      session.project.attached_regions = (session.project.attached_regions ?? []).map(existing =>
+        existing.id === id ? updated : existing,
+      );
+      for (const element of session.project.elements) {
+        if (element.attached_region !== id) continue;
+        element.x += dx;
+        element.y += dy;
+        movedChildIds.push(element.id);
+      }
+      refreshMockGroupPositions(session, movedChildIds);
+      markMockChanged(session, previous);
+      return clone(updated);
+    }
     case "element_add": {
       const session = mockSession(args?.project_id);
       const previous = clone(session.project);
@@ -930,6 +1002,31 @@ export async function projectExportSettingsUpdate(settings: ProjectExportSetting
 export async function projectSemanticGroupsUpdate(groups: SemanticGroup[], projectId?: string): Promise<SemanticGroup[]> {
   const invoke = await getInvoke();
   return invoke("project_semantic_groups_update", { projectId, groups }) as Promise<SemanticGroup[]>;
+}
+
+export async function attachedRegionCreate(region: AttachedRegion, projectId?: string): Promise<AttachedRegion> {
+  const invoke = await getInvoke();
+  return invoke("attached_region_create", { region, project_id: projectId }) as Promise<AttachedRegion>;
+}
+
+export async function attachedRegionUpdate(id: string, changes: Partial<AttachedRegion>, projectId?: string): Promise<AttachedRegion> {
+  const invoke = await getInvoke();
+  return invoke("attached_region_update", { id, changes, project_id: projectId }) as Promise<AttachedRegion>;
+}
+
+export async function attachedRegionRemove(id: string, projectId?: string): Promise<boolean> {
+  const invoke = await getInvoke();
+  return invoke("attached_region_remove", { id, project_id: projectId }) as Promise<boolean>;
+}
+
+export async function attachedRegionList(projectId?: string): Promise<AttachedRegion[]> {
+  const invoke = await getInvoke();
+  return invoke("attached_region_list", { project_id: projectId }) as Promise<AttachedRegion[]>;
+}
+
+export async function attachedRegionMoveWithElements(id: string, x: number, y: number, projectId?: string): Promise<AttachedRegion> {
+  const invoke = await getInvoke();
+  return invoke("attached_region_move_with_elements", { id, x, y, project_id: projectId }) as Promise<AttachedRegion>;
 }
 
 export async function elementAdd(element: Element, projectId?: string): Promise<Element> {

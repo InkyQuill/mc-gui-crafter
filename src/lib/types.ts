@@ -75,6 +75,29 @@ export interface SemanticGroup {
   dynamic_height?: boolean;
 }
 
+export type AttachedRegionAnchor = "left" | "right" | "top" | "bottom" | "free";
+export type AttachedRegionState = "static" | "toggleable";
+
+export interface VisualBounds {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface AttachedRegion {
+  id: string;
+  anchor: AttachedRegionAnchor;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  state: AttachedRegionState;
+  kind?: string | null;
+  semantic_group?: string | null;
+  visible?: boolean;
+}
+
 export type CodegenMode = "simple" | "modular";
 
 export interface ProjectExportSettings {
@@ -130,6 +153,7 @@ export interface Element {
   dock?: string;
   open_width?: number;
   open_height?: number;
+  attached_region?: string | null;
 }
 
 export interface Group {
@@ -224,6 +248,7 @@ export interface ProjectData {
   is_dirty?: boolean;
   fonts?: FontAsset[];
   semantic_groups?: SemanticGroup[];
+  attached_regions?: AttachedRegion[];
   export_settings?: ProjectExportSettings;
 }
 
