@@ -1457,6 +1457,7 @@ fn schema_default_attached_region() -> AttachedRegion {
         kind: None,
         semantic_group: None,
         visible: true,
+        state_owned: Vec::new(),
     }
 }
 
@@ -1936,6 +1937,7 @@ fn slot_grid_add(
         x,
         y,
         elements: element_ids,
+        state_owned: Vec::new(),
     });
     let semantic_group = match (semantic_group_kind, inventory_group.clone()) {
         (Some(kind), Some(inventory_group)) => Some(SemanticGroup {
@@ -2419,6 +2421,7 @@ fn group_upsert(
         x,
         y,
         elements: element_ids,
+        state_owned: Vec::new(),
     };
     let mut next_groups = Vec::new();
     let mut target_applied = false;
@@ -3554,6 +3557,7 @@ mod tests {
                 x: 8,
                 y: 18,
                 elements: vec!["a".to_string(), "b".to_string()],
+                state_owned: Vec::new(),
             });
             sessions.create_session(project)
         };
@@ -3609,6 +3613,7 @@ mod tests {
             kind: Some("returns_pocket".to_string()),
             semantic_group: Some("food_returns".to_string()),
             visible: true,
+            state_owned: Vec::new(),
         });
         state.sessions.lock().unwrap().create_session(project)
     }
@@ -4143,6 +4148,7 @@ mod tests {
                 x: 8,
                 y: 18,
                 elements: vec!["a".to_string(), "b".to_string()],
+                state_owned: Vec::new(),
             });
             sessions.create_session(project)
         };
@@ -4192,6 +4198,7 @@ mod tests {
                 x: 99,
                 y: 77,
                 elements: vec!["a".to_string(), "b".to_string()],
+                state_owned: Vec::new(),
             });
             sessions.create_session(project)
         };
@@ -4252,12 +4259,14 @@ mod tests {
                 x: 8,
                 y: 18,
                 elements: vec!["a".to_string(), "b".to_string()],
+                state_owned: Vec::new(),
             });
             project.groups.push(crate::project::Group {
                 id: "g2".to_string(),
                 x: 44,
                 y: 18,
                 elements: vec!["c".to_string(), "d".to_string()],
+                state_owned: Vec::new(),
             });
             sessions.create_session(project)
         };
@@ -5483,6 +5492,7 @@ mod tests {
                 x: 108,
                 y: 26,
                 elements: vec!["returns_0".to_string(), "returns_1".to_string()],
+                state_owned: Vec::new(),
             });
         }
 
@@ -6310,6 +6320,7 @@ mod tests {
             x: 1,
             y: 2,
             elements: vec!["other_a".to_string(), "other_b".to_string()],
+            state_owned: Vec::new(),
         }];
         {
             let mut sessions = state.sessions.lock().unwrap();

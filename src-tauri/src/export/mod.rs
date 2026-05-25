@@ -2375,6 +2375,8 @@ mod tests {
                 },
             ],
             groups: Vec::new(),
+            states: Vec::new(),
+            state_overrides: HashMap::new(),
             animations: vec![Animation {
                 id: "cook_progress".to_string(),
                 animation_type: AnimationType::Fill,
@@ -2713,6 +2715,7 @@ mod tests {
             kind: Some("returns_pocket".to_string()),
             semantic_group: Some("food_returns".to_string()),
             visible: true,
+            state_owned: Vec::new(),
         });
 
         let layout = layout_json_value(
@@ -3650,6 +3653,7 @@ mod tests {
             kind: Some("returns_pocket".to_string()),
             semantic_group: Some("food_returns".to_string()),
             visible: true,
+            state_owned: Vec::new(),
         });
 
         export_project(&project, &config, "forge").unwrap();

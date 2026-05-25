@@ -268,6 +268,7 @@ mod tests {
             x: 1,
             y: 2,
             elements: vec!["texture_1".to_string()],
+            state_owned: Vec::new(),
         });
         project.animations.push(Animation {
             id: "fill_1".to_string(),

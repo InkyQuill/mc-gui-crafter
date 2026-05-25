@@ -1905,6 +1905,7 @@ mod tests {
             kind: Some(id.to_string()),
             semantic_group: Some("food_returns".to_string()),
             visible: true,
+            state_owned: Vec::new(),
         }
     }
 
@@ -2532,6 +2533,7 @@ mod tests {
                 x: 8,
                 y: 18,
                 elements: vec!["slot_1".to_string(), "slot_2".to_string()],
+                state_owned: Vec::new(),
             });
         }
 
@@ -2674,6 +2676,7 @@ mod tests {
                 kind: Some("returns_pocket".to_string()),
                 semantic_group: Some("food_returns".to_string()),
                 visible: true,
+                state_owned: Vec::new(),
             },
         )
         .unwrap();
@@ -2910,6 +2913,7 @@ mod tests {
                     kind: Some("returns_pocket".to_string()),
                     semantic_group: Some("food_returns".to_string()),
                     visible: true,
+                    state_owned: Vec::new(),
                 });
             let mut slot = sample_element("returns_0", 108, 26);
             slot.attached_region = Some("returns_pocket".to_string());
@@ -2955,6 +2959,7 @@ mod tests {
                 x: 108,
                 y: 26,
                 elements: vec!["slot_1".to_string(), "returns_0".to_string()],
+                state_owned: Vec::new(),
             });
         }
 

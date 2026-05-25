@@ -305,6 +305,7 @@ fn group_for_slots(id: &str, x: i32, y: i32, elements: &[Element]) -> Option<Gro
         x,
         y,
         elements: element_ids,
+        state_owned: Vec::new(),
     })
 }
 
