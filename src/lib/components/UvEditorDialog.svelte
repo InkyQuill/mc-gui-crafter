@@ -52,6 +52,7 @@
   let imageWrapEl: HTMLDivElement | undefined = $state();
   let imageNaturalWidth = $state(1);
   let imageNaturalHeight = $state(1);
+  let hasImageDimensions = $state(false);
   let zoom = $state(4);
 
   let dataUrl = $derived(selectedAsset ? project.getAssetDataUrl(selectedAsset) : undefined);
@@ -88,6 +89,7 @@
   }
 
   function clampNineSlice(next: NineSlice): NineSlice {
+    if (!hasImageDimensions) return { ...next };
     const width = Math.max(1, imageNaturalWidth);
     const height = Math.max(1, imageNaturalHeight);
     const left = clampNumber(next.left, 0, Math.max(0, width - 1));
@@ -219,6 +221,7 @@
                 const image = event.currentTarget as HTMLImageElement;
                 imageNaturalWidth = image.naturalWidth;
                 imageNaturalHeight = image.naturalHeight;
+                hasImageDimensions = true;
                 rect = clampRect(rect);
                 guide = clampNineSlice(guide);
               }}
