@@ -324,7 +324,9 @@ fn validate_nine_slice_guides(
     source_width: u32,
     source_height: u32,
 ) -> Result<(), String> {
-    if guides.left + guides.right >= source_width || guides.top + guides.bottom >= source_height {
+    let horizontal_guides = u64::from(guides.left) + u64::from(guides.right);
+    let vertical_guides = u64::from(guides.top) + u64::from(guides.bottom);
+    if horizontal_guides >= u64::from(source_width) || vertical_guides >= u64::from(source_height) {
         return Err("Nine-slice guides leave no center region".to_string());
     }
     Ok(())
@@ -525,11 +527,12 @@ fn cropped_source(tex: &RgbaImage, uv: Option<&crate::project::UvRect>) -> RgbaI
 }
 
 pub fn composite_single_element(element: &Element, project: &Project) -> Result<Vec<u8>, String> {
-    let w = element.width.unwrap_or(16);
-    let h = element.height.unwrap_or(16);
-
     if let Some(asset_name) = sprite_asset_name(element, project) {
         if let Some(data) = project.texture_data.get(asset_name) {
+            let tex = image::load_from_memory(data)
+                .map_err(|e| format!("Failed to load texture '{}': {e}", asset_name))?
+                .to_rgba8();
+            let (w, h) = texture_target_size(element, &tex);
             let mut img = RgbaImage::new(w, h);
             overlay_texture_data(
                 &mut img, project, element, data, asset_name, element.x, element.y,
@@ -538,6 +541,8 @@ pub fn composite_single_element(element: &Element, project: &Project) -> Result<
         }
     }
 
+    let w = element.width.unwrap_or(16);
+    let h = element.height.unwrap_or(16);
     let color = match element.element_type {
         ElementType::Progress => Rgba([0xE9, 0xA2, 0x3B, 0xFF]),
         ElementType::FluidTank => Rgba([0x3B, 0x82, 0xE9, 0xFF]),
@@ -760,6 +765,120 @@ mod tests {
         element.height = Some(height);
         element.asset = Some(asset.to_string());
         element
+    }
+
+    #[test]
+    fn validate_nine_slice_guides_rejects_large_values_without_panicking() {
+        let guides = NineSlice {
+            left: u32::MAX,
+            right: 1,
+            top: 0,
+            bottom: 0,
+            edge_mode: NineSliceMode::Tile,
+            center_mode: NineSliceMode::Tile,
+        };
+
+        let result = std::panic::catch_unwind(|| validate_nine_slice_guides(&guides, 3, 3));
+
+        assert!(matches!(
+            result,
+            Ok(Err(error)) if error == "Nine-slice guides leave no center region"
+        ));
+    }
+
+    #[test]
+    fn composite_single_element_uses_natural_texture_size_when_dimensions_are_omitted() {
+        let asset = "textures/gui/large_single.png";
+        let mut project = Project::new("Single Natural Texture", 1, 1, ModTarget::Forge);
+        project.texture_data.insert(
+            asset.into(),
+            grid_png(24, 20, |x, y| Rgba([x as u8, y as u8, 0, 0xff])),
+        );
+        let mut element = button_element("single", 0, 0);
+        element.element_type = ElementType::Texture;
+        element.width = None;
+        element.height = None;
+        element.asset = Some(asset.into());
+
+        let png = composite_single_element(&element, &project).unwrap();
+        let image = image::load_from_memory(&png).unwrap().to_rgba8();
+
+        assert_eq!(image.dimensions(), (24, 20));
+        assert_eq!(image.get_pixel(23, 19).0, [23, 19, 0, 0xff]);
+    }
+
+    #[test]
+    fn composite_atlas_tiles_nine_slice_center_across_partial_repeat() {
+        let asset = "textures/gui/tiled_panel.png";
+        let mut project = Project::new("Nine Slice Tile Partial", 7, 7, ModTarget::Forge);
+        project.texture_data.insert(
+            asset.into(),
+            grid_png(4, 4, |x, y| Rgba([x as u8, y as u8, 0, 0xff])),
+        );
+        let mut panel = texture_element("panel", asset, 7, 7);
+        panel.render_mode = TextureRenderMode::NineSlice;
+        panel.nine_slice = Some(test_nine_slice(NineSliceMode::Tile, NineSliceMode::Tile));
+        project.elements.push(panel);
+
+        let atlas = composite_atlas_for_layer(&project, Layer::Background).unwrap();
+        let image = image::load_from_memory(&atlas).unwrap().to_rgba8();
+
+        assert_eq!(image.get_pixel(5, 5).0, [1, 1, 0, 0xff]);
+    }
+
+    #[test]
+    fn composite_atlas_allows_zero_nine_slice_guides() {
+        let asset = "textures/gui/zero_guides.png";
+        let mut project = Project::new("Nine Slice Zero Guides", 5, 5, ModTarget::Forge);
+        project.texture_data.insert(
+            asset.into(),
+            grid_png(2, 2, |x, y| Rgba([x as u8, y as u8, 0, 0xff])),
+        );
+        let mut panel = texture_element("panel", asset, 5, 5);
+        panel.render_mode = TextureRenderMode::NineSlice;
+        panel.nine_slice = Some(NineSlice {
+            left: 0,
+            right: 0,
+            top: 0,
+            bottom: 0,
+            edge_mode: NineSliceMode::Tile,
+            center_mode: NineSliceMode::Tile,
+        });
+        project.elements.push(panel);
+
+        let atlas = composite_atlas_for_layer(&project, Layer::Background).unwrap();
+        let image = image::load_from_memory(&atlas).unwrap().to_rgba8();
+
+        assert_eq!(image.get_pixel(4, 4).0, [0, 0, 0, 0xff]);
+    }
+
+    #[test]
+    fn composite_atlas_applies_nine_slice_guides_after_uv_crop() {
+        let asset = "textures/gui/uv_panel.png";
+        let mut project = Project::new("Nine Slice UV", 5, 5, ModTarget::Forge);
+        project.texture_data.insert(
+            asset.into(),
+            grid_png(5, 3, |x, y| Rgba([x as u8, y as u8, 0, 0xff])),
+        );
+        let mut panel = texture_element("panel", asset, 5, 5);
+        panel.render_mode = TextureRenderMode::NineSlice;
+        panel.uv = Some(UvRect {
+            x: 1,
+            y: 0,
+            width: 3,
+            height: 3,
+        });
+        panel.nine_slice = Some(test_nine_slice(
+            NineSliceMode::Stretch,
+            NineSliceMode::Stretch,
+        ));
+        project.elements.push(panel);
+
+        let atlas = composite_atlas_for_layer(&project, Layer::Background).unwrap();
+        let image = image::load_from_memory(&atlas).unwrap().to_rgba8();
+
+        assert_eq!(image.get_pixel(0, 0).0, [1, 0, 0, 0xff]);
+        assert_eq!(image.get_pixel(3, 3).0, [2, 1, 0, 0xff]);
     }
 
     #[test]
