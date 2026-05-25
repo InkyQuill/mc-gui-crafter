@@ -523,17 +523,7 @@ pub fn asset_metadata_update(
     project_id: Option<String>,
 ) -> Result<AssetMetadata, String> {
     let mut sessions = state.sessions.lock().unwrap();
-    sessions.record_history(project_id.as_deref())?;
-    let session = sessions.resolve_mut(project_id.as_deref())?;
-    if !session.project.assets.iter().any(|asset| asset == &name) {
-        return Err(format!("Asset not found: {name}"));
-    }
-    session
-        .project
-        .asset_metadata
-        .insert(name, metadata.clone());
-    sessions.mark_changed(project_id.as_deref())?;
-    Ok(metadata)
+    update_asset_metadata_in_session(&mut sessions, project_id.as_deref(), &name, metadata)
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -1739,6 +1729,29 @@ fn update_asset_in_session(
     }))
 }
 
+fn update_asset_metadata_in_session(
+    sessions: &mut crate::project::ProjectSessionManager,
+    project_id: Option<&str>,
+    name: &str,
+    metadata: AssetMetadata,
+) -> Result<AssetMetadata, String> {
+    {
+        let project = &sessions.resolve(project_id)?.project;
+        if !project.assets.iter().any(|asset| asset == name) {
+            return Err(format!("Asset not found: {name}"));
+        }
+    }
+
+    sessions.record_history(project_id)?;
+    let session = sessions.resolve_mut(project_id)?;
+    session
+        .project
+        .asset_metadata
+        .insert(name.to_string(), metadata.clone());
+    sessions.mark_changed(project_id)?;
+    Ok(metadata)
+}
+
 fn decode_png_data_url(data_url: &str) -> Result<Vec<u8>, String> {
     let Some(payload) = data_url.strip_prefix("data:image/png;base64,") else {
         return Err("Invalid asset data URL: expected data:image/png;base64,...".to_string());
@@ -2305,6 +2318,38 @@ mod tests {
             Some(&project_id),
             "textures/missing.png",
             &png_data_url([0, 0, 0, 255]),
+        );
+
+        let summary = session_summary(&sessions, &project_id).unwrap();
+        assert!(result.is_err());
+        assert!(!summary.can_undo);
+        assert!(summary.can_redo);
+    }
+
+    #[test]
+    fn asset_metadata_update_missing_asset_keeps_history_and_redo() {
+        let mut sessions = ProjectSessionManager::default();
+        let project_id =
+            sessions.create_session(Project::new("History", 176, 166, ModTarget::Forge));
+        sessions.record_history(Some(&project_id)).unwrap();
+        sessions
+            .resolve_mut(Some(&project_id))
+            .unwrap()
+            .project
+            .assets
+            .push("textures/slot.png".to_string());
+        sessions.mark_changed(Some(&project_id)).unwrap();
+        sessions.undo(Some(&project_id)).unwrap();
+
+        let result = update_asset_metadata_in_session(
+            &mut sessions,
+            Some(&project_id),
+            "textures/missing.png",
+            AssetMetadata {
+                width: Some(64),
+                height: Some(64),
+                nine_slice: None,
+            },
         );
 
         let summary = session_summary(&sessions, &project_id).unwrap();

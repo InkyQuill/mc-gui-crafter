@@ -1199,9 +1199,7 @@ mod tests {
                         "left": 4,
                         "right": 4,
                         "top": 4,
-                        "bottom": 4,
-                        "edge_mode": "tile",
-                        "center_mode": "tile"
+                        "bottom": 4
                     }
                 }
             }
@@ -1218,6 +1216,20 @@ mod tests {
         assert_eq!(
             metadata.nine_slice.as_ref().unwrap().edge_mode,
             NineSliceMode::Tile
+        );
+        assert_eq!(
+            metadata.nine_slice.as_ref().unwrap().center_mode,
+            NineSliceMode::Tile
+        );
+        let serialized = serde_json::to_value(&project).unwrap();
+        assert_eq!(
+            serialized["asset_metadata"]["textures/gui/panel_atlas.png"]["nine_slice"]["edge_mode"],
+            serde_json::json!("tile")
+        );
+        assert_eq!(
+            serialized["asset_metadata"]["textures/gui/panel_atlas.png"]["nine_slice"]
+                ["center_mode"],
+            serde_json::json!("tile")
         );
     }
 
