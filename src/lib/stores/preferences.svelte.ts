@@ -5,7 +5,7 @@ export interface EditorPreferences {
   minorGridSize: number;
   snapSize: number;
   defaultPreset: string;
-  theme: "dark" | "high_contrast";
+  theme: "light" | "dark" | "high_contrast";
 }
 
 const STORAGE_KEY = "mcgui_preferences";
@@ -21,7 +21,7 @@ const defaults: EditorPreferences = {
 };
 
 function isTheme(value: unknown): value is EditorPreferences["theme"] {
-  return value === "dark" || value === "high_contrast";
+  return value === "light" || value === "dark" || value === "high_contrast";
 }
 
 function numberOrDefault(value: unknown, fallback: number): number {

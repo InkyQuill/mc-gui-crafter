@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::io::{Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
 use std::sync::mpsc;
@@ -7,7 +8,11 @@ use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::animation::Animation;
-use crate::project::{Element, ModTarget, Project, ProjectSessionManager};
+use crate::project::{
+    AssetMetadata, AttachedRegion, AttachedRegionAnchor, AttachedRegionState, CodegenMode, Element,
+    ElementType, FillDirection, Layer, ModTarget, NineSliceMode, Project, ProjectExportSettings,
+    ProjectSessionManager, SemanticGroup, SemanticGroupKind, SlotRole, TextureRenderMode,
+};
 use crate::{templates, AppState};
 
 const MCP_PATH: &str = "/mcp";
@@ -63,9 +68,11 @@ pub struct McpServerStatus {
     pub address: String,
 }
 
-pub fn start_web_server(app_handle: AppHandle) -> Result<McpServerHandle, String> {
-    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
-        .map_err(|error| format!("Failed to bind MCP server: {error}"))?;
+pub fn start_web_server(
+    app_handle: AppHandle,
+    preferred_port: Option<u16>,
+) -> Result<McpServerHandle, String> {
+    let listener = bind_mcp_listener(preferred_port)?;
     listener
         .set_nonblocking(true)
         .map_err(|error| format!("Failed to configure MCP server: {error}"))?;
@@ -94,6 +101,17 @@ pub fn start_web_server(app_handle: AppHandle) -> Result<McpServerHandle, String
     });
 
     Ok(McpServerHandle { address, shutdown })
+}
+
+pub(crate) fn bind_mcp_listener(preferred_port: Option<u16>) -> Result<TcpListener, String> {
+    if let Some(port) = preferred_port {
+        if let Ok(listener) = TcpListener::bind((Ipv4Addr::LOCALHOST, port)) {
+            return Ok(listener);
+        }
+    }
+
+    TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+        .map_err(|error| format!("Failed to bind MCP server: {error}"))
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -379,9 +397,15 @@ fn handle_mcp_method(request: JsonRpcRequest, state: &AppState) -> JsonRpcRespon
                 .cloned()
                 .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
 
+            let snapshot_before = if is_mutating_tool(tool_name) {
+                project_mutation_snapshot(state, &arguments)
+            } else {
+                None
+            };
+
             match execute_tool(tool_name, &arguments, state) {
                 Ok(content) => {
-                    if is_mutating_tool(tool_name) {
+                    if should_emit_project_changed(tool_name, state, &arguments, snapshot_before) {
                         emit_project_changed(state, tool_name);
                     }
                     json_rpc_result(
@@ -430,6 +454,52 @@ fn json_rpc_error(
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ProjectMutationSnapshot {
+    project_id: String,
+    revision: u64,
+    is_dirty: bool,
+    project_path: Option<String>,
+    active_project_id: Option<String>,
+}
+
+fn project_mutation_snapshot(
+    state: &AppState,
+    args: &serde_json::Value,
+) -> Option<ProjectMutationSnapshot> {
+    let sessions = state.sessions.lock().unwrap();
+    let project_id = optional_string(args, "project_id");
+    let active_project_id = sessions
+        .active_session()
+        .ok()
+        .map(|session| session.id.clone());
+    let session = sessions.resolve(project_id.as_deref()).ok()?;
+    Some(ProjectMutationSnapshot {
+        project_id: session.id.clone(),
+        revision: session.revision,
+        is_dirty: session.project.is_dirty,
+        project_path: session.project.project_path.clone(),
+        active_project_id,
+    })
+}
+
+fn should_emit_project_changed(
+    tool_name: &str,
+    state: &AppState,
+    args: &serde_json::Value,
+    snapshot_before: Option<ProjectMutationSnapshot>,
+) -> bool {
+    if !is_mutating_tool(tool_name) {
+        return false;
+    }
+
+    let snapshot_after = project_mutation_snapshot(state, args);
+    match (snapshot_before, snapshot_after) {
+        (Some(before), Some(after)) => before != after,
+        _ => true,
+    }
+}
+
 fn emit_project_changed(state: &AppState, tool_name: &str) {
     let Some(handle) = state.app_handle.lock().unwrap().clone() else {
         return;
@@ -453,12 +523,18 @@ fn is_mutating_tool(tool_name: &str) -> bool {
         "project_summary"
             | "project_list_sessions"
             | "project_get_active"
+            | "project_export_preview"
+            | "project_export"
+            | "project_render"
+            | "project_screenshot"
             | "element_list"
             | "group_list"
+            | "attached_region_list"
             | "animation_list"
             | "asset_list"
             | "asset_get_data_url"
             | "gui_template_list"
+            | "schema_discover"
     )
 }
 
@@ -467,12 +543,12 @@ fn get_tool_definitions() -> Vec<serde_json::Value> {
         td(
             "project_new",
             "Create a new GUI project",
-            props(&[
-                ("name", "string", "Project name", true),
-                ("width", "integer", "GUI width", false),
-                ("height", "integer", "GUI height", false),
-                ("template", "string", "Template name", false),
-                ("mod_target", "string", "forge, fabric, or neoforge", false),
+            object_schema(vec![
+                ("name", string_schema("Project name"), true),
+                ("width", string_type_schema("integer", "GUI width"), false),
+                ("height", string_type_schema("integer", "GUI height"), false),
+                ("template", string_schema("Template name"), false),
+                ("mod_target", string_schema(mod_target_description()), false),
             ]),
         ),
         td(
@@ -482,9 +558,104 @@ fn get_tool_definitions() -> Vec<serde_json::Value> {
         ),
         td("project_save", "Save a project", project_props(&[])),
         td(
+            "project_save_as",
+            "Save a project to a .mcgui path",
+            project_props(&[("path", "string", "Path to write the .mcgui project", true)]),
+        ),
+        td(
+            "project_resize",
+            "Resize the project GUI canvas without moving or scaling elements",
+            project_props(&[
+                (
+                    "width",
+                    "integer",
+                    "New GUI width; must be greater than zero",
+                    true,
+                ),
+                (
+                    "height",
+                    "integer",
+                    "New GUI height; must be greater than zero",
+                    true,
+                ),
+            ]),
+        ),
+        td(
+            "project_export_preview",
+            "Preview generated export files and preflight warnings",
+            export_props(),
+        ),
+        td(
+            "project_export",
+            "Export generated mod files",
+            export_props(),
+        ),
+        td(
+            "project_render",
+            "Render the current project to a PNG image and return compact metadata",
+            project_props(&[
+                (
+                    "output_path",
+                    "string",
+                    "Optional PNG path to write; temp file is used when omitted",
+                    false,
+                ),
+                (
+                    "include_data_url",
+                    "boolean",
+                    "Include data:image/png;base64 payload; defaults to false",
+                    false,
+                ),
+            ]),
+        ),
+        td(
+            "project_screenshot",
+            "Deprecated alias for project_render; renders the current project to a PNG image",
+            project_props(&[
+                (
+                    "output_path",
+                    "string",
+                    "Optional PNG path to write; temp file is used when omitted",
+                    false,
+                ),
+                (
+                    "include_data_url",
+                    "boolean",
+                    "Include data:image/png;base64 payload; defaults to false",
+                    false,
+                ),
+            ]),
+        ),
+        td(
             "project_summary",
             "Get a project summary",
             project_props(&[]),
+        ),
+        td(
+            "project_export_settings_update",
+            "Update project code generation/export settings",
+            project_schema(vec![
+                (
+                    "codegen_mode",
+                    string_schema(codegen_mode_description()),
+                    false,
+                ),
+                (
+                    "generate_runtime_helpers",
+                    string_type_schema("boolean", "Generate runtime helper hooks"),
+                    false,
+                ),
+                (
+                    "generate_semantic_registry",
+                    string_type_schema("boolean", "Generate semantic registry in modular mode"),
+                    false,
+                ),
+            ]),
+        ),
+        td(
+            "project_semantic_groups_update",
+            "Replace project semantic group definitions",
+            semantic_groups_props(),
         ),
         td(
             "project_list_sessions",
@@ -494,6 +665,11 @@ fn get_tool_definitions() -> Vec<serde_json::Value> {
         td(
             "project_get_active",
             "Get active project session and project",
+            props(&[]),
+        ),
+        td(
+            "schema_discover",
+            "Return accepted MCP enum values, editable fields, defaults, and alpha schema notes",
             props(&[]),
         ),
         td(
@@ -517,6 +693,16 @@ fn get_tool_definitions() -> Vec<serde_json::Value> {
             )]),
         ),
         td(
+            "element_add_many",
+            "Add multiple elements atomically",
+            element_add_many_props(),
+        ),
+        td(
+            "slot_grid_add",
+            "Create a grouped grid of slot elements with semantic metadata",
+            slot_grid_props(),
+        ),
+        td(
             "element_move",
             "Move an element",
             project_props(&[
@@ -532,6 +718,26 @@ fn get_tool_definitions() -> Vec<serde_json::Value> {
                 ("id", "string", "Element ID", true),
                 ("changes", "object", "Element fields to update", true),
             ]),
+        ),
+        td(
+            "element_update_many",
+            "Update multiple elements atomically in one project revision",
+            project_schema(vec![(
+                "updates",
+                serde_json::json!({
+                    "type": "array",
+                    "description": "Element update patches",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "id": { "type": "string" },
+                            "changes": { "type": "object" }
+                        },
+                        "required": ["id", "changes"]
+                    }
+                }),
+                true,
+            )]),
         ),
         td(
             "element_resize",
@@ -567,11 +773,53 @@ fn get_tool_definitions() -> Vec<serde_json::Value> {
             ]),
         ),
         td(
+            "group_upsert",
+            "Create or replace a project group membership without ungrouping first",
+            project_props(&[
+                ("group_id", "string", "Group ID", true),
+                (
+                    "element_ids",
+                    "array",
+                    "Replacement element IDs for the group",
+                    true,
+                ),
+            ]),
+        ),
+        td(
             "group_ungroup",
             "Remove a group while keeping its elements",
             project_props(&[("group_id", "string", "Group ID", true)]),
         ),
         td("group_list", "List groups", project_props(&[])),
+        td(
+            "attached_region_add",
+            "Add an attached region",
+            attached_region_props(true),
+        ),
+        td(
+            "attached_region_update",
+            "Update attached region fields",
+            attached_region_update_props(),
+        ),
+        td(
+            "attached_region_remove",
+            "Remove an attached region",
+            project_props(&[("id", "string", "Attached region ID", true)]),
+        ),
+        td(
+            "attached_region_list",
+            "List attached regions",
+            project_props(&[]),
+        ),
+        td(
+            "attached_region_move_with_elements",
+            "Move an attached region and its attached child elements",
+            project_props(&[
+                ("id", "string", "Attached region ID", true),
+                ("x", "integer", "New X", true),
+                ("y", "integer", "New Y", true),
+            ]),
+        ),
         td(
             "animation_create",
             "Create an animation",
@@ -612,7 +860,10 @@ fn get_tool_definitions() -> Vec<serde_json::Value> {
         td(
             "asset_import",
             "Import a PNG asset from disk",
-            project_props(&[("file_path", "string", "PNG path", true)]),
+            project_props(&[
+                ("file_path", "string", "PNG path", true),
+                ("name", "string", "Optional project asset name", false),
+            ]),
         ),
         td(
             "asset_update",
@@ -620,6 +871,14 @@ fn get_tool_definitions() -> Vec<serde_json::Value> {
             project_props(&[
                 ("name", "string", "Asset name", true),
                 ("data_url", "string", "data:image/png;base64,...", true),
+            ]),
+        ),
+        td(
+            "asset_metadata_update",
+            "Update metadata for an existing asset",
+            project_schema(vec![
+                ("name", string_schema("Asset name"), true),
+                ("metadata", asset_metadata_schema(), true),
             ]),
         ),
         td(
@@ -652,6 +911,308 @@ fn project_props(items: &[(&str, &str, &str, bool)]) -> serde_json::Value {
     props(&with_project)
 }
 
+fn string_schema(description: impl Into<String>) -> serde_json::Value {
+    string_type_schema("string", description)
+}
+
+fn string_type_schema(typ: &str, description: impl Into<String>) -> serde_json::Value {
+    serde_json::json!({ "type": typ, "description": description.into() })
+}
+
+fn export_props() -> serde_json::Value {
+    project_schema(vec![
+        ("target", string_schema(mod_target_description()), true),
+        ("mod_id", string_schema("Minecraft mod id"), true),
+        ("package", string_schema("Java package name"), true),
+        (
+            "class_name",
+            string_schema("Generated Screen class name"),
+            true,
+        ),
+        (
+            "output_dir",
+            string_schema("Directory where export files are written"),
+            true,
+        ),
+        (
+            "codegen_mode",
+            string_schema(codegen_mode_description()),
+            false,
+        ),
+        (
+            "generate_runtime_helpers",
+            string_type_schema("boolean", "Generate runtime helper hooks"),
+            false,
+        ),
+        (
+            "generate_semantic_registry",
+            string_type_schema("boolean", "Generate semantic registry in modular mode"),
+            false,
+        ),
+        (
+            "overwrite",
+            string_type_schema(
+                "boolean",
+                "Allow overwriting planned generated files without existing-file warnings",
+            ),
+            false,
+        ),
+    ])
+}
+
+fn semantic_groups_props() -> serde_json::Value {
+    project_schema(vec![(
+        "semantic_groups",
+        serde_json::json!({
+            "type": "array",
+            "description": "Semantic group array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string", "description": "Semantic group ID" },
+                    "kind": { "type": "string", "description": semantic_group_kind_description() },
+                    "columns": { "type": "integer", "description": "Grid column count" },
+                    "visible_rows": { "type": "integer", "description": "Visible row count" },
+                    "total_rows": { "type": "integer", "description": "Total row count" },
+                    "slot_count": { "type": "integer", "description": "Total slot count" },
+                    "member_ids": {
+                        "type": "array",
+                        "description": "Explicit element IDs that belong to this semantic group",
+                        "items": { "type": "string" }
+                    },
+                    "data_source": { "type": "string", "description": "Semantic data source key" },
+                    "scroll_binding": { "type": "string", "description": "Scroll binding ID" },
+                    "dynamic_height": { "type": "boolean", "description": "Whether this group can change height dynamically" }
+                },
+                "required": ["id", "kind"]
+            }
+        }),
+        true,
+    )])
+}
+
+fn asset_metadata_schema() -> serde_json::Value {
+    serde_json::json!({
+        "type": "object",
+        "description": "Asset metadata fields such as dimensions and nine-slice guides",
+        "properties": {
+            "width": { "type": "integer", "description": "Optional asset width in pixels" },
+            "height": { "type": "integer", "description": "Optional asset height in pixels" },
+            "nine_slice": {
+                "type": "object",
+                "description": "Nine-slice guide distances and repeat modes",
+                "properties": {
+                    "left": { "type": "integer", "description": "Fixed left guide width" },
+                    "right": { "type": "integer", "description": "Fixed right guide width" },
+                    "top": { "type": "integer", "description": "Fixed top guide height" },
+                    "bottom": { "type": "integer", "description": "Fixed bottom guide height" },
+                    "edge_mode": { "type": "string", "enum": ["tile", "stretch"], "description": "How nine-slice edges repeat" },
+                    "center_mode": { "type": "string", "enum": ["tile", "stretch"], "description": "How the nine-slice center repeats" }
+                },
+                "required": ["left", "right", "top", "bottom"]
+            }
+        }
+    })
+}
+
+fn element_add_many_props() -> serde_json::Value {
+    project_schema(vec![(
+        "elements",
+        serde_json::json!({
+            "type": "array",
+            "description": "Element objects to add atomically",
+            "items": { "type": "object" }
+        }),
+        true,
+    )])
+}
+
+fn slot_grid_props() -> serde_json::Value {
+    project_schema(vec![
+        (
+            "id_prefix",
+            serde_json::json!({ "type": "string", "description": "Prefix for generated element IDs" }),
+            true,
+        ),
+        (
+            "x",
+            serde_json::json!({ "type": "integer", "description": "Grid origin X" }),
+            true,
+        ),
+        (
+            "y",
+            serde_json::json!({ "type": "integer", "description": "Grid origin Y" }),
+            true,
+        ),
+        (
+            "columns",
+            serde_json::json!({ "type": "integer", "description": "Grid column count" }),
+            true,
+        ),
+        (
+            "rows",
+            serde_json::json!({ "type": "integer", "description": "Grid row count" }),
+            true,
+        ),
+        (
+            "slot_size",
+            serde_json::json!({ "type": "integer", "description": "Slot size; defaults to 18" }),
+            false,
+        ),
+        (
+            "spacing",
+            serde_json::json!({ "type": "integer", "description": "Distance between slot origins; defaults to 18" }),
+            false,
+        ),
+        (
+            "slot_role",
+            serde_json::json!({ "type": "string", "description": slot_role_description() }),
+            false,
+        ),
+        (
+            "inventory_group",
+            serde_json::json!({ "type": "string", "description": "Inventory group ID for generated slots" }),
+            false,
+        ),
+        (
+            "slot_index_start",
+            serde_json::json!({ "type": "integer", "description": "First slot index; defaults to 0" }),
+            false,
+        ),
+        (
+            "group_id",
+            serde_json::json!({ "type": "string", "description": "Optional project group ID" }),
+            false,
+        ),
+        (
+            "semantic_group_kind",
+            serde_json::json!({ "type": "string", "description": semantic_group_kind_description() }),
+            false,
+        ),
+        (
+            "slot_count",
+            serde_json::json!({ "type": "integer", "description": "Semantic total slot count" }),
+            false,
+        ),
+        (
+            "scroll_binding",
+            serde_json::json!({ "type": "string", "description": "Scroll binding ID for generated slots and semantic metadata" }),
+            false,
+        ),
+    ])
+}
+
+fn attached_region_props(require_region: bool) -> serde_json::Value {
+    project_schema(vec![
+        (
+            "id",
+            serde_json::json!({ "type": "string", "description": "Attached region ID" }),
+            require_region,
+        ),
+        (
+            "anchor",
+            serde_json::json!({ "type": "string", "description": attached_region_anchor_description() }),
+            require_region,
+        ),
+        (
+            "x",
+            serde_json::json!({ "type": "integer", "description": "Attached region X" }),
+            require_region,
+        ),
+        (
+            "y",
+            serde_json::json!({ "type": "integer", "description": "Attached region Y" }),
+            require_region,
+        ),
+        (
+            "width",
+            serde_json::json!({ "type": "integer", "description": "Attached region width" }),
+            require_region,
+        ),
+        (
+            "height",
+            serde_json::json!({ "type": "integer", "description": "Attached region height" }),
+            require_region,
+        ),
+        (
+            "state",
+            serde_json::json!({ "type": "string", "description": format!("{} Defaults to static when omitted.", attached_region_state_description()) }),
+            false,
+        ),
+        (
+            "kind",
+            serde_json::json!({ "type": "string", "description": "Attached region kind" }),
+            false,
+        ),
+        (
+            "semantic_group",
+            serde_json::json!({ "type": "string", "description": "Semantic group ID for this attached region" }),
+            false,
+        ),
+        (
+            "visible",
+            serde_json::json!({ "type": "boolean", "description": "Whether this attached region is visible. Defaults to true when omitted." }),
+            false,
+        ),
+    ])
+}
+
+fn attached_region_update_props() -> serde_json::Value {
+    project_schema(vec![
+        (
+            "id",
+            serde_json::json!({ "type": "string", "description": "Attached region ID" }),
+            true,
+        ),
+        (
+            "changes",
+            serde_json::json!({
+                "type": "object",
+                "description": "Attached region fields to update; id cannot be changed.",
+                "properties": {
+                    "anchor": {
+                        "type": "string",
+                        "description": attached_region_anchor_description()
+                    },
+                    "x": {
+                        "type": "integer",
+                        "description": "Attached region X coordinate"
+                    },
+                    "y": {
+                        "type": "integer",
+                        "description": "Attached region Y coordinate"
+                    },
+                    "width": {
+                        "type": "integer",
+                        "description": "Attached region width"
+                    },
+                    "height": {
+                        "type": "integer",
+                        "description": "Attached region height"
+                    },
+                    "state": {
+                        "type": "string",
+                        "description": attached_region_state_description()
+                    },
+                    "kind": {
+                        "type": "string",
+                        "description": "Attached region kind"
+                    },
+                    "semantic_group": {
+                        "type": "string",
+                        "description": "Semantic group ID for this attached region"
+                    },
+                    "visible": {
+                        "type": "boolean",
+                        "description": "Whether this attached region is visible"
+                    }
+                }
+            }),
+            true,
+        ),
+    ])
+}
+
 fn props(items: &[(&str, &str, &str, bool)]) -> serde_json::Value {
     let mut required = Vec::new();
     let mut properties = serde_json::Map::new();
@@ -667,6 +1228,238 @@ fn props(items: &[(&str, &str, &str, bool)]) -> serde_json::Value {
     serde_json::json!({ "type": "object", "properties": properties, "required": required })
 }
 
+fn project_schema(items: Vec<(&str, serde_json::Value, bool)>) -> serde_json::Value {
+    let mut required = Vec::new();
+    let mut properties = serde_json::Map::new();
+    properties.insert(
+        "project_id".to_string(),
+        serde_json::json!({
+            "type": "string",
+            "description": "Optional project session ID; active session is used when omitted"
+        }),
+    );
+    for (name, schema, is_required) in items {
+        properties.insert(name.to_string(), schema);
+        if is_required {
+            required.push(name.to_string());
+        }
+    }
+    serde_json::json!({ "type": "object", "properties": properties, "required": required })
+}
+
+fn object_schema(items: Vec<(&str, serde_json::Value, bool)>) -> serde_json::Value {
+    let mut required = Vec::new();
+    let mut properties = serde_json::Map::new();
+    for (name, schema, is_required) in items {
+        properties.insert(name.to_string(), schema);
+        if is_required {
+            required.push(name.to_string());
+        }
+    }
+    serde_json::json!({ "type": "object", "properties": properties, "required": required })
+}
+
+fn serde_values<T: Serialize>(values: impl IntoIterator<Item = T>) -> serde_json::Value {
+    serde_json::to_value(values.into_iter().collect::<Vec<_>>()).unwrap()
+}
+
+fn serde_variant_names<T: Serialize>(values: impl IntoIterator<Item = T>) -> Vec<String> {
+    values
+        .into_iter()
+        .map(|value| {
+            serde_json::to_value(value)
+                .unwrap()
+                .as_str()
+                .unwrap()
+                .to_string()
+        })
+        .collect()
+}
+
+fn accepted_values_sentence<T: Serialize>(values: impl IntoIterator<Item = T>) -> String {
+    format!(
+        "Accepted values: {}.",
+        serde_variant_names(values).join(", ")
+    )
+}
+
+fn mod_target_description() -> String {
+    accepted_values_sentence(ModTarget::variants())
+}
+
+fn codegen_mode_description() -> String {
+    accepted_values_sentence(CodegenMode::variants())
+}
+
+fn slot_role_description() -> String {
+    accepted_values_sentence(SlotRole::variants())
+}
+
+fn semantic_group_kind_description() -> String {
+    accepted_values_sentence(SemanticGroupKind::variants())
+}
+
+fn attached_region_anchor_description() -> String {
+    format!(
+        "Attached region anchor. {}",
+        accepted_values_sentence(AttachedRegionAnchor::variants())
+    )
+}
+
+fn attached_region_state_description() -> String {
+    format!(
+        "Attached region state. {} Toggleable is metadata only in this release.",
+        accepted_values_sentence(AttachedRegionState::variants())
+    )
+}
+
+fn schema_discover() -> serde_json::Value {
+    let export_defaults = ProjectExportSettings::default();
+
+    serde_json::json!({
+        "mod_targets": serde_values(ModTarget::variants()),
+        "element_types": serde_values(ElementType::variants()),
+        "slot_roles": serde_values(SlotRole::variants()),
+        "semantic_group_kinds": serde_values(SemanticGroupKind::variants()),
+        "attached_region_anchors": serde_values(AttachedRegionAnchor::variants()),
+        "attached_region_states": serde_values(AttachedRegionState::variants()),
+        "fill_directions": serde_values(FillDirection::variants()),
+        "layers": serde_values(Layer::variants()),
+        "texture_render_modes": serde_values(TextureRenderMode::variants()),
+        "nine_slice_modes": serde_values(NineSliceMode::variants()),
+        "export_settings": {
+            "codegen_modes": serde_values(CodegenMode::variants()),
+            "codegen_mode_default": serde_json::to_value(&export_defaults.codegen_mode).unwrap(),
+            "generate_runtime_helpers_default": export_defaults.generate_runtime_helpers,
+            "generate_semantic_registry_default": export_defaults.generate_semantic_registry
+        },
+        "editable_element_fields": [
+            "x",
+            "y",
+            "width",
+            "height",
+            "size",
+            "asset",
+            "icon",
+            "icon_uv",
+            "tooltip",
+            "direction",
+            "content",
+            "font",
+            "color",
+            "shadow",
+            "animation",
+            "visible",
+            "uv",
+            "render_mode",
+            "nine_slice",
+            "layer",
+            "slot_role",
+            "slot_index",
+            "inventory_group",
+            "scroll_binding",
+            "scroll_min",
+            "scroll_max",
+            "visible_rows",
+            "total_rows",
+            "columns",
+            "target_group",
+            "binding",
+            "dock",
+            "open_width",
+            "open_height",
+            "attached_region"
+        ],
+        "asset_metadata_fields": ["width", "height", "nine_slice"],
+        "serialization_defaults": schema_serialization_defaults()
+    })
+}
+
+fn schema_serialization_defaults() -> serde_json::Value {
+    let element = serde_json::to_value(schema_default_element()).unwrap();
+    let semantic_group = serde_json::to_value(schema_default_semantic_group()).unwrap();
+    let attached_region = serde_json::to_value(schema_default_attached_region()).unwrap();
+
+    serde_json::json!({
+        "layer_background_omitted_in_project_json": element.get("layer").is_none(),
+        "visible_true_omitted": element.get("visible").is_none(),
+        "dynamic_height_false_omitted": semantic_group.get("dynamic_height").is_none(),
+        "attached_region_visible_true_omitted": attached_region.get("visible").is_none()
+    })
+}
+
+fn schema_default_element() -> Element {
+    Element {
+        id: "schema_default_element".to_string(),
+        element_type: ElementType::Slot,
+        x: 0,
+        y: 0,
+        width: None,
+        height: None,
+        size: None,
+        asset: None,
+        icon: None,
+        icon_uv: None,
+        tooltip: None,
+        direction: None,
+        content: None,
+        font: None,
+        color: None,
+        shadow: None,
+        animation: None,
+        visible: true,
+        uv: None,
+        render_mode: crate::project::TextureRenderMode::Plain,
+        nine_slice: None,
+        layer: Layer::Background,
+        slot_role: None,
+        slot_index: None,
+        inventory_group: None,
+        scroll_binding: None,
+        scroll_min: None,
+        scroll_max: None,
+        visible_rows: None,
+        total_rows: None,
+        columns: None,
+        target_group: None,
+        binding: None,
+        dock: None,
+        open_width: None,
+        open_height: None,
+        attached_region: None,
+    }
+}
+
+fn schema_default_semantic_group() -> SemanticGroup {
+    SemanticGroup {
+        id: "schema_default_group".to_string(),
+        kind: SemanticGroupKind::FixedSlots,
+        columns: None,
+        visible_rows: None,
+        total_rows: None,
+        slot_count: None,
+        member_ids: Vec::new(),
+        data_source: None,
+        scroll_binding: None,
+        dynamic_height: false,
+    }
+}
+
+fn schema_default_attached_region() -> AttachedRegion {
+    AttachedRegion {
+        id: "schema_default_region".to_string(),
+        anchor: AttachedRegionAnchor::Right,
+        x: 0,
+        y: 0,
+        width: 1,
+        height: 1,
+        state: AttachedRegionState::Static,
+        kind: None,
+        semantic_group: None,
+        visible: true,
+    }
+}
+
 fn execute_tool(
     name: &str,
     args: &serde_json::Value,
@@ -680,26 +1473,55 @@ fn execute_tool(
         "project_new" => project_new(&mut sessions, args),
         "project_open" => project_open(&mut sessions, args),
         "project_save" => project_save(&mut sessions, project_id),
+        "project_save_as" => project_save_as(&mut sessions, project_id, args),
+        "project_resize" => project_resize(&mut sessions, project_id, args),
+        "project_export_preview" => project_export_preview(&sessions, project_id, args),
+        "project_export" => project_export(&sessions, project_id, args),
+        "project_render" | "project_screenshot" => project_render(&sessions, project_id, args),
         "project_summary" => project_summary(&sessions, project_id),
+        "project_export_settings_update" => {
+            project_export_settings_update(&mut sessions, project_id, args)
+        }
+        "project_semantic_groups_update" => {
+            project_semantic_groups_update(&mut sessions, project_id, args)
+        }
         "project_list_sessions" => Ok(serde_json::json!({ "sessions": sessions.list_sessions() })),
         "project_get_active" => project_get_active(&sessions),
+        "schema_discover" => Ok(schema_discover()),
         "project_undo" => Ok(serde_json::to_value(sessions.undo(project_id)?).unwrap()),
         "project_redo" => Ok(serde_json::to_value(sessions.redo(project_id)?).unwrap()),
         "element_add" => element_add(&mut sessions, project_id, args),
+        "element_add_many" => element_add_many(&mut sessions, project_id, args),
+        "slot_grid_add" => slot_grid_add(&mut sessions, project_id, args),
         "element_move" => element_move(&mut sessions, project_id, args),
         "element_update" => element_update(&mut sessions, project_id, args),
+        "element_update_many" => element_update_many(&mut sessions, project_id, args),
         "element_resize" => element_resize(&mut sessions, project_id, args),
         "element_reorder" => element_reorder(&mut sessions, project_id, args),
         "element_remove" => element_remove(&mut sessions, project_id, args),
         "element_list" => {
             let session = sessions.resolve(project_id)?;
-            Ok(serde_json::json!({ "elements": session.project.elements }))
+            let elements = session
+                .project
+                .elements
+                .iter()
+                .map(element_for_mcp)
+                .collect::<Vec<_>>();
+            Ok(serde_json::json!({ "elements": elements }))
         }
         "group_create" => group_create(&mut sessions, project_id, args),
+        "group_upsert" => group_upsert(&mut sessions, project_id, args),
         "group_ungroup" => group_ungroup(&mut sessions, project_id, args),
         "group_list" => {
             let session = sessions.resolve(project_id)?;
             Ok(serde_json::json!({ "groups": session.project.groups }))
+        }
+        "attached_region_add" => attached_region_add(&mut sessions, project_id, args),
+        "attached_region_update" => attached_region_update(&mut sessions, project_id, args),
+        "attached_region_remove" => attached_region_remove(&mut sessions, project_id, args),
+        "attached_region_list" => attached_region_list(&sessions, project_id),
+        "attached_region_move_with_elements" => {
+            attached_region_move_with_elements(&mut sessions, project_id, args)
         }
         "animation_create" => animation_create(&mut sessions, project_id, args),
         "animation_update" => animation_update(&mut sessions, project_id, args),
@@ -712,6 +1534,7 @@ fn execute_tool(
         }
         "asset_import" => asset_import(&mut sessions, project_id, args),
         "asset_update" => asset_update(&mut sessions, project_id, args),
+        "asset_metadata_update" => asset_metadata_update(&mut sessions, project_id, args),
         "asset_remove" => asset_remove(&mut sessions, project_id, args),
         "asset_get_data_url" => asset_get_data_url(&sessions, project_id, args),
         "asset_list" => asset_list(&sessions, project_id),
@@ -748,6 +1571,8 @@ fn project_new(
     let mut project = Project::new(name, width, height, mod_target);
     if let Some(template) = args.get("template").and_then(|value| value.as_str()) {
         templates::apply_template(&mut project, template)?;
+    } else {
+        templates::apply_generated_defaults(&mut project)?;
     }
     let project_id = sessions.create_session(project);
     project_result(sessions, &project_id)
@@ -778,6 +1603,84 @@ fn project_save(
     }))
 }
 
+fn project_save_as(
+    sessions: &mut ProjectSessionManager,
+    project_id: Option<&str>,
+    args: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let path = required_str(args, "path")?.to_string();
+    let session = sessions.resolve_mut(project_id)?;
+    let previous_path = session.project.project_path.clone();
+    session.project.project_path = Some(path.clone());
+    if let Err(error) = crate::format::save_to_mcgui(&session.project) {
+        session.project.project_path = previous_path;
+        return Err(error);
+    }
+    session.project.is_dirty = false;
+    Ok(serde_json::json!({
+        "project_id": session.id,
+        "status": "saved",
+        "path": path,
+        "is_dirty": false,
+    }))
+}
+
+fn project_export_preview(
+    sessions: &ProjectSessionManager,
+    project_id: Option<&str>,
+    args: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let (project, config, target) = export_request(sessions, project_id, args)?;
+    serde_json::to_value(crate::export::preview_export(project, &config, target)?)
+        .map_err(|error| error.to_string())
+}
+
+fn project_export(
+    sessions: &ProjectSessionManager,
+    project_id: Option<&str>,
+    args: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let (project, config, target) = export_request(sessions, project_id, args)?;
+    Ok(serde_json::json!({
+        "files": crate::export::export_project(project, &config, target)?,
+    }))
+}
+
+fn export_request<'a>(
+    sessions: &'a ProjectSessionManager,
+    project_id: Option<&str>,
+    args: &'a serde_json::Value,
+) -> Result<(&'a Project, crate::export::ExportConfig, &'a str), String> {
+    let target = required_str(args, "target")?;
+    let project = &sessions.resolve(project_id)?.project;
+    let config = crate::export::ExportConfig {
+        mod_id: required_str(args, "mod_id")?.to_string(),
+        package: required_str(args, "package")?.to_string(),
+        class_name: required_str(args, "class_name")?.to_string(),
+        output_dir: required_str(args, "output_dir")?.to_string(),
+        settings_override: export_settings_override(project, args)?,
+        overwrite: optional_bool(args, "overwrite")?.unwrap_or(false),
+    };
+    Ok((project, config, target))
+}
+
+fn export_settings_override(
+    project: &Project,
+    args: &serde_json::Value,
+) -> Result<Option<crate::project::ProjectExportSettings>, String> {
+    let has_override = args.get("codegen_mode").is_some()
+        || args.get("generate_runtime_helpers").is_some()
+        || args.get("generate_semantic_registry").is_some();
+    if !has_override {
+        return Ok(None);
+    }
+
+    let mut settings = project.export_settings.clone();
+    apply_export_settings_args(&mut settings, args)?;
+    default_semantic_registry_from_mode_when_unspecified(&mut settings, args);
+    Ok(Some(settings.normalized()))
+}
+
 fn project_summary(
     sessions: &ProjectSessionManager,
     project_id: Option<&str>,
@@ -791,9 +1694,137 @@ fn project_summary(
         "element_count": session.project.elements.len(),
         "is_dirty": session.project.is_dirty,
         "path": session.project.project_path,
+        "export_settings": session.project.export_settings,
         "revision": session.revision,
         "session": sessions.list_sessions().into_iter().find(|summary| summary.id == session.id),
     }))
+}
+
+fn project_resize(
+    sessions: &mut ProjectSessionManager,
+    project_id: Option<&str>,
+    args: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let width = required_u32(args, "width")?;
+    let height = required_u32(args, "height")?;
+    if width == 0 || height == 0 {
+        return Err("Project dimensions must be greater than zero".to_string());
+    }
+
+    let session = sessions.resolve(project_id)?;
+    let old_size = session.project.gui_size.clone();
+    let new_size = crate::project::Size { width, height };
+    if old_size == new_size {
+        return Ok(serde_json::json!({
+            "project_id": session.id,
+            "old_size": old_size,
+            "new_size": new_size,
+            "changed": false
+        }));
+    }
+
+    sessions.record_history(project_id)?;
+    let session = sessions.resolve_mut(project_id)?;
+    session.project.gui_size = new_size.clone();
+    let session_id = session.id.clone();
+    sessions.mark_changed(project_id)?;
+
+    Ok(serde_json::json!({
+        "project_id": session_id,
+        "old_size": old_size,
+        "new_size": new_size,
+        "changed": true
+    }))
+}
+
+fn project_export_settings_update(
+    sessions: &mut ProjectSessionManager,
+    project_id: Option<&str>,
+    args: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let current = sessions
+        .resolve(project_id)?
+        .project
+        .export_settings
+        .clone();
+    let mut next = current.clone();
+    apply_export_settings_args(&mut next, args)?;
+    default_semantic_registry_from_mode_when_unspecified(&mut next, args);
+    next = next.normalized();
+    if next == current {
+        return serde_json::to_value(next).map_err(|error| error.to_string());
+    }
+
+    sessions.record_history(project_id)?;
+    let session = sessions.resolve_mut(project_id)?;
+    session.project.export_settings = next.clone();
+    sessions.mark_changed(project_id)?;
+    serde_json::to_value(next).map_err(|error| error.to_string())
+}
+
+fn apply_export_settings_args(
+    settings: &mut crate::project::ProjectExportSettings,
+    args: &serde_json::Value,
+) -> Result<(), String> {
+    if let Some(value) = args.get("codegen_mode") {
+        let mode = value
+            .as_str()
+            .ok_or("codegen_mode must be \"simple\" or \"modular\"")?;
+        settings.codegen_mode = match mode {
+            "simple" => CodegenMode::Simple,
+            "modular" => CodegenMode::Modular,
+            other => return Err(format!("Unknown codegen_mode: {other}")),
+        };
+    }
+    if let Some(value) = args.get("generate_runtime_helpers") {
+        let value = value
+            .as_bool()
+            .ok_or("generate_runtime_helpers must be boolean")?;
+        settings.generate_runtime_helpers = value;
+    }
+    if let Some(value) = args.get("generate_semantic_registry") {
+        let value = value
+            .as_bool()
+            .ok_or("generate_semantic_registry must be boolean")?;
+        settings.generate_semantic_registry = value;
+    }
+    Ok(())
+}
+
+fn default_semantic_registry_from_mode_when_unspecified(
+    settings: &mut crate::project::ProjectExportSettings,
+    args: &serde_json::Value,
+) {
+    if args.get("codegen_mode").is_some() && args.get("generate_semantic_registry").is_none() {
+        settings.generate_semantic_registry = settings.codegen_mode == CodegenMode::Modular;
+    }
+}
+
+fn project_semantic_groups_update(
+    sessions: &mut ProjectSessionManager,
+    project_id: Option<&str>,
+    args: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let groups_value = args
+        .get("semantic_groups")
+        .ok_or("Missing semantic_groups")?
+        .clone();
+    let groups: Vec<SemanticGroup> = serde_json::from_value(groups_value)
+        .map_err(|error| format!("Invalid semantic_groups: {error}"))?;
+    let current = sessions
+        .resolve(project_id)?
+        .project
+        .semantic_groups
+        .clone();
+    if groups == current {
+        return serde_json::to_value(groups).map_err(|error| error.to_string());
+    }
+
+    sessions.record_history(project_id)?;
+    let session = sessions.resolve_mut(project_id)?;
+    session.project.semantic_groups = groups.clone();
+    sessions.mark_changed(project_id)?;
+    serde_json::to_value(groups).map_err(|error| error.to_string())
 }
 
 fn project_get_active(sessions: &ProjectSessionManager) -> Result<serde_json::Value, String> {
@@ -809,14 +1840,306 @@ fn element_add(
     project_id: Option<&str>,
     args: &serde_json::Value,
 ) -> Result<serde_json::Value, String> {
-    let payload = args.get("element").unwrap_or(args).clone();
-    let element: Element = serde_json::from_value(payload)
-        .map_err(|error| format!("Invalid element payload: {error}"))?;
+    let element = parse_element_arg(args)?;
     sessions.record_history(project_id)?;
     let session = sessions.resolve_mut(project_id)?;
     session.project.add_element(element.clone());
     sessions.mark_changed(project_id)?;
     Ok(serde_json::to_value(element).unwrap())
+}
+
+fn element_add_many(
+    sessions: &mut ProjectSessionManager,
+    project_id: Option<&str>,
+    args: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let values = args
+        .get("elements")
+        .and_then(|value| value.as_array())
+        .ok_or("Missing elements")?;
+    if values.is_empty() {
+        return Err("elements array cannot be empty".to_string());
+    }
+    let elements = values
+        .iter()
+        .map(parse_element_arg)
+        .collect::<Result<Vec<_>, _>>()?;
+    validate_new_element_ids(sessions, project_id, &elements)?;
+
+    sessions.record_history(project_id)?;
+    let session = sessions.resolve_mut(project_id)?;
+    session.project.elements.extend(elements.clone());
+    sessions.mark_changed(project_id)?;
+    let returned_elements = elements.iter().map(element_for_mcp).collect::<Vec<_>>();
+    Ok(serde_json::json!({
+        "created_count": elements.len(),
+        "elements": returned_elements,
+    }))
+}
+
+fn slot_grid_add(
+    sessions: &mut ProjectSessionManager,
+    project_id: Option<&str>,
+    args: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let id_prefix = required_str(args, "id_prefix")?;
+    let x = required_i32(args, "x")?;
+    let y = required_i32(args, "y")?;
+    let columns = required_u32(args, "columns")?;
+    let rows = required_u32(args, "rows")?;
+    if columns == 0 || rows == 0 {
+        return Err("columns and rows must be greater than 0".to_string());
+    }
+    let slot_size = optional_u32(args, "slot_size")?.unwrap_or(18);
+    let spacing = optional_u32(args, "spacing")?.unwrap_or(18);
+    let slot_index_start = optional_u32(args, "slot_index_start")?.unwrap_or(0);
+    let slot_role = optional_slot_role(args, "slot_role")?;
+    let inventory_group = optional_string(args, "inventory_group");
+    let scroll_binding = optional_string(args, "scroll_binding");
+    let group_id = optional_string(args, "group_id");
+    let semantic_group_kind = optional_semantic_group_kind(args, "semantic_group_kind")?;
+    let semantic_slot_count = optional_u32(args, "slot_count")?;
+
+    let options = SlotGridOptions {
+        id_prefix: id_prefix.to_string(),
+        x,
+        y,
+        columns,
+        rows,
+        slot_size,
+        spacing,
+        slot_role,
+        inventory_group: inventory_group.clone(),
+        slot_index_start,
+        scroll_binding: scroll_binding.clone(),
+    };
+    let elements = slot_grid_elements(&options)?;
+    validate_new_element_ids(sessions, project_id, &elements)?;
+    if let Some(group_id) = &group_id {
+        if sessions
+            .resolve(project_id)?
+            .project
+            .groups
+            .iter()
+            .any(|group| group.id == *group_id)
+        {
+            return Err("Group already exists".to_string());
+        }
+    }
+
+    let element_ids = elements
+        .iter()
+        .map(|element| element.id.clone())
+        .collect::<Vec<_>>();
+    let group = group_id.map(|id| crate::project::Group {
+        id,
+        x,
+        y,
+        elements: element_ids,
+    });
+    let semantic_group = match (semantic_group_kind, inventory_group.clone()) {
+        (Some(kind), Some(inventory_group)) => Some(SemanticGroup {
+            id: inventory_group.clone(),
+            kind,
+            columns: Some(columns),
+            visible_rows: Some(rows),
+            total_rows: Some(rows),
+            slot_count: Some(semantic_slot_count.unwrap_or(elements.len() as u32)),
+            member_ids: elements.iter().map(|element| element.id.clone()).collect(),
+            data_source: Some(inventory_group),
+            scroll_binding: scroll_binding.clone(),
+            dynamic_height: false,
+        }),
+        _ => None,
+    };
+
+    sessions.record_history(project_id)?;
+    let session = sessions.resolve_mut(project_id)?;
+    session.project.elements.extend(elements.clone());
+    if let Some(group) = &group {
+        session.project.groups.push(group.clone());
+    }
+    if let Some(semantic_group) = &semantic_group {
+        session
+            .project
+            .semantic_groups
+            .retain(|group| group.id != semantic_group.id);
+        session.project.semantic_groups.push(semantic_group.clone());
+    }
+    sessions.mark_changed(project_id)?;
+    Ok(serde_json::json!({
+        "created_count": elements.len(),
+        "elements": elements,
+        "group": group,
+        "semantic_group": semantic_group,
+    }))
+}
+
+struct SlotGridOptions {
+    id_prefix: String,
+    x: i32,
+    y: i32,
+    columns: u32,
+    rows: u32,
+    slot_size: u32,
+    spacing: u32,
+    slot_role: Option<crate::project::SlotRole>,
+    inventory_group: Option<String>,
+    slot_index_start: u32,
+    scroll_binding: Option<String>,
+}
+
+fn slot_grid_elements(options: &SlotGridOptions) -> Result<Vec<Element>, String> {
+    let count = options
+        .columns
+        .checked_mul(options.rows)
+        .ok_or("slot grid dimensions are too large")?;
+    let capacity = usize::try_from(count).map_err(|_| "slot grid dimensions are too large")?;
+    let mut elements = Vec::new();
+    elements
+        .try_reserve_exact(capacity)
+        .map_err(|_| "slot grid dimensions are too large")?;
+    for local_index in 0..count {
+        let column = local_index % options.columns;
+        let row = local_index / options.columns;
+        let x = slot_grid_coordinate(options.x, column, options.spacing, "x")?;
+        let y = slot_grid_coordinate(options.y, row, options.spacing, "y")?;
+        let slot_index = options
+            .slot_index_start
+            .checked_add(local_index)
+            .ok_or("slot_index_start is too large")?;
+        elements.push(base_slot_element(
+            format!("{}_{local_index}", options.id_prefix),
+            x,
+            y,
+            slot_index,
+            options,
+        ));
+    }
+    Ok(elements)
+}
+
+fn slot_grid_coordinate(origin: i32, index: u32, spacing: u32, axis: &str) -> Result<i32, String> {
+    let overflow_error = || format!("slot grid {axis} coordinate overflow");
+    let offset = u64::from(index)
+        .checked_mul(u64::from(spacing))
+        .ok_or_else(&overflow_error)?;
+    let max_offset = (i64::from(i32::MAX) - i64::from(origin)) as u64;
+    if offset > max_offset {
+        return Err(overflow_error());
+    }
+    let coordinate = i64::from(origin) + i64::try_from(offset).map_err(|_| overflow_error())?;
+    i32::try_from(coordinate).map_err(|_| overflow_error())
+}
+
+fn base_slot_element(
+    id: String,
+    x: i32,
+    y: i32,
+    slot_index: u32,
+    options: &SlotGridOptions,
+) -> Element {
+    Element {
+        id,
+        element_type: crate::project::ElementType::Slot,
+        x,
+        y,
+        width: None,
+        height: None,
+        size: Some(options.slot_size),
+        asset: None,
+        icon: None,
+        icon_uv: None,
+        tooltip: None,
+        direction: None,
+        content: None,
+        font: None,
+        color: None,
+        shadow: None,
+        animation: None,
+        visible: true,
+        uv: None,
+        render_mode: crate::project::TextureRenderMode::Plain,
+        nine_slice: None,
+        layer: crate::project::Layer::Background,
+        slot_role: options.slot_role.clone(),
+        slot_index: Some(slot_index),
+        inventory_group: options.inventory_group.clone(),
+        scroll_binding: options.scroll_binding.clone(),
+        scroll_min: None,
+        scroll_max: None,
+        visible_rows: None,
+        total_rows: None,
+        columns: None,
+        target_group: None,
+        binding: None,
+        dock: None,
+        open_width: None,
+        open_height: None,
+        attached_region: None,
+    }
+}
+
+fn parse_element_arg(value: &serde_json::Value) -> Result<Element, String> {
+    let payload = value.get("element").unwrap_or(value).clone();
+    serde_json::from_value(payload).map_err(|error| format!("Invalid element payload: {error}"))
+}
+
+fn validate_new_element_ids(
+    sessions: &ProjectSessionManager,
+    project_id: Option<&str>,
+    elements: &[Element],
+) -> Result<(), String> {
+    let mut ids = HashSet::new();
+    for element in elements {
+        if !ids.insert(element.id.as_str()) {
+            return Err(format!("Duplicate element id: {}", element.id));
+        }
+    }
+    let project = &sessions.resolve(project_id)?.project;
+    for element in elements {
+        if project.find_element(&element.id).is_some() {
+            return Err(format!("Element already exists: {}", element.id));
+        }
+    }
+    Ok(())
+}
+
+#[derive(Debug)]
+struct ElementPatch {
+    id: String,
+    changes: serde_json::Map<String, serde_json::Value>,
+}
+
+fn parse_element_patches(args: &serde_json::Value) -> Result<Vec<ElementPatch>, String> {
+    let updates = args
+        .get("updates")
+        .and_then(|value| value.as_array())
+        .ok_or("Missing updates")?;
+    if updates.is_empty() {
+        return Err("updates array cannot be empty".to_string());
+    }
+
+    let mut ids = HashSet::new();
+    let mut patches = Vec::with_capacity(updates.len());
+    for update in updates {
+        let object = update.as_object().ok_or("Each update must be an object")?;
+        let id = object
+            .get("id")
+            .and_then(|value| value.as_str())
+            .ok_or("Each update requires an id")?
+            .to_string();
+        if !ids.insert(id.clone()) {
+            return Err(format!("Duplicate element update id: {id}"));
+        }
+        let changes = object
+            .get("changes")
+            .and_then(|value| value.as_object())
+            .ok_or("Each update requires object changes")?
+            .clone();
+        patches.push(ElementPatch { id, changes });
+    }
+    Ok(patches)
 }
 
 fn element_move(
@@ -848,6 +2171,23 @@ fn element_move(
     Ok(serde_json::to_value(element).unwrap())
 }
 
+fn apply_element_changes(
+    current: &Element,
+    changes: &serde_json::Map<String, serde_json::Value>,
+) -> Result<Element, String> {
+    let mut value = serde_json::to_value(current).map_err(|error| error.to_string())?;
+    let target = value
+        .as_object_mut()
+        .ok_or("Element payload must be an object")?;
+    for (key, value) in changes {
+        if key == "id" || key == "type" {
+            continue;
+        }
+        target.insert(key.clone(), value.clone());
+    }
+    serde_json::from_value(value).map_err(|error| format!("Invalid element update: {error}"))
+}
+
 fn element_update(
     sessions: &mut ProjectSessionManager,
     project_id: Option<&str>,
@@ -864,18 +2204,7 @@ fn element_update(
         .project
         .find_element(id)
         .ok_or("Element not found")?;
-    let mut value = serde_json::to_value(current).map_err(|error| error.to_string())?;
-    let target = value
-        .as_object_mut()
-        .ok_or("Element payload must be an object")?;
-    for (key, value) in changes {
-        if key == "id" || key == "type" {
-            continue;
-        }
-        target.insert(key.clone(), value.clone());
-    }
-    let updated: Element = serde_json::from_value(value)
-        .map_err(|error| format!("Invalid element update: {error}"))?;
+    let updated = apply_element_changes(current, changes)?;
     if &updated == current {
         return Ok(serde_json::to_value(current).unwrap());
     }
@@ -887,6 +2216,59 @@ fn element_update(
         .ok_or("Element not found")? = updated.clone();
     sessions.mark_changed(project_id)?;
     Ok(serde_json::to_value(updated).unwrap())
+}
+
+fn element_update_many(
+    sessions: &mut ProjectSessionManager,
+    project_id: Option<&str>,
+    args: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let patches = parse_element_patches(args)?;
+    let (session_id, updated, changed_count) = {
+        let session = sessions.resolve(project_id)?;
+        let mut updated = Vec::with_capacity(patches.len());
+        for patch in &patches {
+            let current = session
+                .project
+                .find_element(&patch.id)
+                .ok_or_else(|| format!("Element not found: {}", patch.id))?;
+            updated.push(apply_element_changes(current, &patch.changes)?);
+        }
+        let changed_count = updated
+            .iter()
+            .filter(|element| {
+                session
+                    .project
+                    .find_element(&element.id)
+                    .is_some_and(|current| current != *element)
+            })
+            .count();
+        (session.id.clone(), updated, changed_count)
+    };
+
+    if changed_count == 0 {
+        return Ok(serde_json::json!({
+            "project_id": session_id,
+            "updated_count": 0,
+            "results": updated.iter().map(element_for_mcp).collect::<Vec<_>>()
+        }));
+    }
+
+    sessions.record_history(project_id)?;
+    let session = sessions.resolve_mut(project_id)?;
+    for element in &updated {
+        *session
+            .project
+            .find_element_mut(&element.id)
+            .ok_or_else(|| format!("Element not found: {}", element.id))? = element.clone();
+    }
+    sessions.mark_changed(project_id)?;
+
+    Ok(serde_json::json!({
+        "project_id": session_id,
+        "updated_count": changed_count,
+        "results": updated.iter().map(element_for_mcp).collect::<Vec<_>>()
+    }))
 }
 
 fn element_resize(
@@ -988,25 +2370,23 @@ fn group_create(
     project_id: Option<&str>,
     args: &serde_json::Value,
 ) -> Result<serde_json::Value, String> {
-    let element_ids = args
-        .get("element_ids")
-        .and_then(|value| value.as_array())
-        .ok_or("Missing element_ids")?
-        .iter()
-        .map(|value| {
-            value
-                .as_str()
-                .map(ToString::to_string)
-                .ok_or("element_ids must contain only strings".to_string())
-        })
-        .collect::<Result<Vec<_>, _>>()?;
+    let element_ids = string_array(args, "element_ids")?;
     let group_id = args
         .get("group_id")
         .and_then(|value| value.as_str())
         .map(ToString::to_string)
         .unwrap_or_else(|| format!("group_{}", uuid::Uuid::new_v4()));
 
-    validate_group_create(sessions, project_id, &group_id, &element_ids)?;
+    if sessions
+        .resolve(project_id)?
+        .project
+        .groups
+        .iter()
+        .any(|group| group.id == group_id)
+    {
+        return Err("Group already exists".to_string());
+    }
+    let element_ids = validate_group_members(sessions, project_id, &element_ids)?;
 
     sessions.record_history(project_id)?;
     let session = sessions.resolve_mut(project_id)?;
@@ -1015,20 +2395,89 @@ fn group_create(
     Ok(serde_json::to_value(group).unwrap())
 }
 
-fn validate_group_create(
+fn group_upsert(
+    sessions: &mut ProjectSessionManager,
+    project_id: Option<&str>,
+    args: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let group_id = required_str(args, "group_id")?.to_string();
+    let element_ids = string_array(args, "element_ids")?;
+    let element_ids = validate_group_members(sessions, project_id, &element_ids)?;
+    let project = &sessions.resolve(project_id)?.project;
+    let existing = project.groups.iter().find(|group| group.id == group_id);
+    let created = existing.is_none();
+    let x = match existing {
+        Some(group) => group.x,
+        None => min_element_coordinate(project, &element_ids, true)?,
+    };
+    let y = match existing {
+        Some(group) => group.y,
+        None => min_element_coordinate(project, &element_ids, false)?,
+    };
+    let next = crate::project::Group {
+        id: group_id.clone(),
+        x,
+        y,
+        elements: element_ids,
+    };
+    let mut next_groups = Vec::new();
+    let mut target_applied = false;
+    for group in &project.groups {
+        if group.id == group_id {
+            next_groups.push(next.clone());
+            target_applied = true;
+            continue;
+        }
+
+        let mut group = group.clone();
+        group
+            .elements
+            .retain(|element_id| !next.elements.iter().any(|id| id == element_id));
+        if group.elements.len() >= 2 {
+            next_groups.push(group);
+        }
+    }
+    if !target_applied {
+        next_groups.push(next.clone());
+    }
+
+    if project.groups == next_groups {
+        let session = sessions.resolve(project_id)?;
+        let member_count = next.elements.len();
+        return Ok(serde_json::json!({
+            "project_id": session.id,
+            "group": next,
+            "created": false,
+            "updated": false,
+            "member_count": member_count
+        }));
+    }
+
+    sessions.record_history(project_id)?;
+    let session = sessions.resolve_mut(project_id)?;
+    session.project.groups = next_groups;
+    let session_id = session.id.clone();
+    let member_count = next.elements.len();
+    sessions.mark_changed(project_id)?;
+    Ok(serde_json::json!({
+        "project_id": session_id,
+        "group": next,
+        "created": created,
+        "updated": !created,
+        "member_count": member_count
+    }))
+}
+
+fn validate_group_members(
     sessions: &ProjectSessionManager,
     project_id: Option<&str>,
-    group_id: &str,
     element_ids: &[String],
-) -> Result<(), String> {
+) -> Result<Vec<String>, String> {
     let project = &sessions.resolve(project_id)?.project;
-    if project.groups.iter().any(|group| group.id == group_id) {
-        return Err("Group already exists".to_string());
-    }
-    let mut unique_ids: Vec<&String> = Vec::new();
+    let mut unique_ids = Vec::new();
     for id in element_ids {
-        if !unique_ids.iter().any(|existing| *existing == id) {
-            unique_ids.push(id);
+        if !unique_ids.contains(id) {
+            unique_ids.push(id.clone());
         }
         if project.find_element(id).is_none() {
             return Err(format!("Element not found: {id}"));
@@ -1037,7 +2486,35 @@ fn validate_group_create(
     if unique_ids.len() < 2 {
         return Err("At least two elements are required to create a group".to_string());
     }
-    Ok(())
+    Ok(unique_ids)
+}
+
+fn string_array(value: &serde_json::Value, key: &str) -> Result<Vec<String>, String> {
+    value
+        .get(key)
+        .and_then(|value| value.as_array())
+        .ok_or(format!("Missing {key}"))?
+        .iter()
+        .map(|value| {
+            value
+                .as_str()
+                .map(ToString::to_string)
+                .ok_or(format!("{key} must contain only strings"))
+        })
+        .collect()
+}
+
+fn min_element_coordinate(
+    project: &Project,
+    element_ids: &[String],
+    x_axis: bool,
+) -> Result<i32, String> {
+    element_ids
+        .iter()
+        .filter_map(|id| project.find_element(id))
+        .map(|element| if x_axis { element.x } else { element.y })
+        .min()
+        .ok_or("Group must contain at least one existing element".to_string())
 }
 
 fn group_ungroup(
@@ -1063,6 +2540,222 @@ fn group_ungroup(
         sessions.mark_changed(project_id)?;
     }
     Ok(serde_json::json!({ "removed": removed }))
+}
+
+fn attached_region_add(
+    sessions: &mut ProjectSessionManager,
+    project_id: Option<&str>,
+    args: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let region = parse_attached_region_arg(args)?;
+    let project = &sessions.resolve(project_id)?.project;
+    if project.find_attached_region(&region.id).is_some() {
+        return Err(format!("Attached region already exists: {}", region.id));
+    }
+
+    sessions.record_history(project_id)?;
+    let session = sessions.resolve_mut(project_id)?;
+    session.project.attached_regions.push(region.clone());
+    sessions.mark_changed(project_id)?;
+    serde_json::to_value(region).map_err(|error| error.to_string())
+}
+
+fn attached_region_update(
+    sessions: &mut ProjectSessionManager,
+    project_id: Option<&str>,
+    args: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let id = required_str(args, "id")?;
+    let changes = args
+        .get("changes")
+        .ok_or("Missing changes")?
+        .as_object()
+        .ok_or("Attached region changes must be an object")?;
+    let current = sessions
+        .resolve(project_id)?
+        .project
+        .find_attached_region(id)
+        .ok_or_else(|| format!("Attached region not found: {id}"))?;
+    if changes
+        .get("id")
+        .is_some_and(|value| value.as_str() != Some(current.id.as_str()))
+    {
+        return Err("Attached region id cannot be changed".to_string());
+    }
+
+    let mut value = serde_json::to_value(current)
+        .map_err(|error| format!("Failed to encode attached region: {error}"))?;
+    let target = value
+        .as_object_mut()
+        .ok_or("Attached region payload must be an object")?;
+    for (key, value) in changes {
+        if key == "id" {
+            continue;
+        }
+        target.insert(key.clone(), value.clone());
+    }
+    let updated: AttachedRegion = serde_json::from_value(value)
+        .map_err(|error| format!("Invalid attached region update: {error}"))?;
+    if &updated == current {
+        return serde_json::to_value(current).map_err(|error| error.to_string());
+    }
+
+    sessions.record_history(project_id)?;
+    let session = sessions.resolve_mut(project_id)?;
+    *session
+        .project
+        .find_attached_region_mut(id)
+        .ok_or_else(|| format!("Attached region not found: {id}"))? = updated.clone();
+    sessions.mark_changed(project_id)?;
+    serde_json::to_value(updated).map_err(|error| error.to_string())
+}
+
+fn attached_region_remove(
+    sessions: &mut ProjectSessionManager,
+    project_id: Option<&str>,
+    args: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let id = required_str(args, "id")?;
+    let project = &sessions.resolve(project_id)?.project;
+    if project.find_attached_region(id).is_none() {
+        return Ok(serde_json::json!({ "removed": false }));
+    }
+
+    sessions.record_history(project_id)?;
+    let session = sessions.resolve_mut(project_id)?;
+    session
+        .project
+        .attached_regions
+        .retain(|region| region.id != id);
+    for element in &mut session.project.elements {
+        if element.attached_region.as_deref() == Some(id) {
+            element.attached_region = None;
+        }
+    }
+    sessions.mark_changed(project_id)?;
+    Ok(serde_json::json!({ "removed": true }))
+}
+
+fn attached_region_list(
+    sessions: &ProjectSessionManager,
+    project_id: Option<&str>,
+) -> Result<serde_json::Value, String> {
+    let session = sessions.resolve(project_id)?;
+    Ok(serde_json::json!({ "attached_regions": session.project.attached_regions }))
+}
+
+fn attached_region_move_with_elements(
+    sessions: &mut ProjectSessionManager,
+    project_id: Option<&str>,
+    args: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let id = required_str(args, "id")?.to_string();
+    let x = required_i32(args, "x")?;
+    let y = required_i32(args, "y")?;
+    let project = &sessions.resolve(project_id)?.project;
+    let current = project
+        .find_attached_region(&id)
+        .ok_or_else(|| format!("Attached region not found: {id}"))?;
+    if current.x == x && current.y == y {
+        return serde_json::to_value(current).map_err(|error| error.to_string());
+    }
+
+    let dx = x
+        .checked_sub(current.x)
+        .ok_or("Attached region move overflow")?;
+    let dy = y
+        .checked_sub(current.y)
+        .ok_or("Attached region move overflow")?;
+    let moved_child_ids = project
+        .elements
+        .iter()
+        .filter(|element| element.attached_region.as_deref() == Some(id.as_str()))
+        .map(|element| {
+            element
+                .x
+                .checked_add(dx)
+                .ok_or("Attached region child move overflow")?;
+            element
+                .y
+                .checked_add(dy)
+                .ok_or("Attached region child move overflow")?;
+            Ok(element.id.clone())
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+
+    sessions.record_history(project_id)?;
+    let session = sessions.resolve_mut(project_id)?;
+    let updated = {
+        let region = session
+            .project
+            .find_attached_region_mut(&id)
+            .ok_or_else(|| format!("Attached region not found: {id}"))?;
+        region.x = x;
+        region.y = y;
+        region.clone()
+    };
+    for element in &mut session.project.elements {
+        if element.attached_region.as_deref() == Some(id.as_str()) {
+            element.x = element
+                .x
+                .checked_add(dx)
+                .ok_or("Attached region child move overflow")?;
+            element.y = element
+                .y
+                .checked_add(dy)
+                .ok_or("Attached region child move overflow")?;
+        }
+    }
+    refresh_group_positions_for_elements(&mut session.project, &moved_child_ids);
+    sessions.mark_changed(project_id)?;
+    serde_json::to_value(updated).map_err(|error| error.to_string())
+}
+
+fn parse_attached_region_arg(args: &serde_json::Value) -> Result<AttachedRegion, String> {
+    let mut payload = args.clone();
+    let object = payload
+        .as_object_mut()
+        .ok_or("Attached region payload must be an object")?;
+    object
+        .entry("state".to_string())
+        .or_insert_with(|| serde_json::json!("static"));
+    object
+        .entry("visible".to_string())
+        .or_insert(serde_json::Value::Bool(true));
+    serde_json::from_value(payload)
+        .map_err(|error| format!("Invalid attached region payload: {error}"))
+}
+
+fn refresh_group_positions_for_elements(project: &mut Project, moved_ids: &[String]) {
+    if moved_ids.is_empty() {
+        return;
+    }
+
+    let elements = &project.elements;
+    for group in &mut project.groups {
+        if !group
+            .elements
+            .iter()
+            .any(|element_id| moved_ids.iter().any(|moved_id| moved_id == element_id))
+        {
+            continue;
+        }
+
+        let mut positions = group.elements.iter().filter_map(|element_id| {
+            elements
+                .iter()
+                .find(|element| element.id == *element_id)
+                .map(|element| (element.x, element.y))
+        });
+        if let Some((mut min_x, mut min_y)) = positions.next() {
+            for (x, y) in positions {
+                min_x = min_x.min(x);
+                min_y = min_y.min(y);
+            }
+            group.x = min_x;
+            group.y = min_y;
+        }
+    }
 }
 
 fn animation_create(
@@ -1233,11 +2926,18 @@ fn asset_import(
     let data = std::fs::read(file_path).map_err(|error| format!("Failed to read file: {error}"))?;
     let image = image::load_from_memory(&data)
         .map_err(|error| format!("Failed to decode image: {error}"))?;
-    let name = std::path::Path::new(file_path)
-        .file_stem()
-        .and_then(|value| value.to_str())
-        .unwrap_or("texture");
-    let asset_path = format!("textures/{name}.png");
+    let asset_path = if let Some(name) = optional_string(args, "name") {
+        validate_asset_name(&name)?;
+        name
+    } else {
+        let name = std::path::Path::new(file_path)
+            .file_stem()
+            .and_then(|value| value.to_str())
+            .unwrap_or("texture");
+        let asset_path = format!("textures/{name}.png");
+        validate_asset_name(&asset_path)?;
+        asset_path
+    };
     sessions.record_history(project_id)?;
     let session = sessions.resolve_mut(project_id)?;
     session
@@ -1249,13 +2949,12 @@ fn asset_import(
     }
     sessions.mark_changed(project_id)?;
 
-    use base64::Engine;
-    Ok(serde_json::json!({
-        "name": asset_path,
-        "width": image.width(),
-        "height": image.height(),
-        "data_url": format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(data)),
-    }))
+    Ok(compact_asset_metadata_with_dimensions(
+        &asset_path,
+        &data,
+        image.width(),
+        image.height(),
+    ))
 }
 
 fn asset_update(
@@ -1303,6 +3002,53 @@ fn asset_update(
     }))
 }
 
+fn asset_metadata_update(
+    sessions: &mut ProjectSessionManager,
+    project_id: Option<&str>,
+    args: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let name = required_str(args, "name")?;
+    let metadata_value = args.get("metadata").ok_or("Missing metadata")?.clone();
+    let metadata: AssetMetadata = serde_json::from_value(metadata_value)
+        .map_err(|error| format!("Invalid asset metadata: {error}"))?;
+
+    let session_id = {
+        let project = &sessions.resolve(project_id)?.project;
+        if !project.assets.iter().any(|asset| asset == name) {
+            return Err(format!("Asset not found: {name}"));
+        }
+        if let Some(current) = project.asset_metadata.get(name) {
+            if current == &metadata {
+                return Ok(serde_json::json!({
+                    "project_id": sessions.resolve(project_id)?.id,
+                    "name": name,
+                    "metadata": current,
+                }));
+            }
+        } else if metadata == AssetMetadata::default() {
+            return Ok(serde_json::json!({
+                "project_id": sessions.resolve(project_id)?.id,
+                "name": name,
+                "metadata": metadata,
+            }));
+        }
+        sessions.resolve(project_id)?.id.clone()
+    };
+
+    sessions.record_history(project_id)?;
+    let session = sessions.resolve_mut(project_id)?;
+    session
+        .project
+        .asset_metadata
+        .insert(name.to_string(), metadata.clone());
+    sessions.mark_changed(project_id)?;
+    Ok(serde_json::json!({
+        "project_id": session_id,
+        "name": name,
+        "metadata": metadata,
+    }))
+}
+
 fn asset_remove(
     sessions: &mut ProjectSessionManager,
     project_id: Option<&str>,
@@ -1311,7 +3057,9 @@ fn asset_remove(
     let name = required_str(args, "name")?;
     let exists = {
         let project = &sessions.resolve(project_id)?.project;
-        project.assets.iter().any(|asset| asset == name) || project.texture_data.contains_key(name)
+        project.assets.iter().any(|asset| asset == name)
+            || project.texture_data.contains_key(name)
+            || project.asset_metadata.contains_key(name)
     };
     if !exists {
         return Ok(serde_json::json!({ "removed": false }));
@@ -1319,13 +3067,58 @@ fn asset_remove(
     sessions.record_history(project_id)?;
     let session = sessions.resolve_mut(project_id)?;
     let removed_texture = session.project.texture_data.remove(name).is_some();
+    let removed_metadata = session.project.asset_metadata.remove(name).is_some();
     let old_len = session.project.assets.len();
     session.project.assets.retain(|asset| asset != name);
     let removed_asset = session.project.assets.len() != old_len;
-    if removed_texture || removed_asset {
+    if removed_texture || removed_asset || removed_metadata {
         sessions.mark_changed(project_id)?;
     }
-    Ok(serde_json::json!({ "removed": removed_texture || removed_asset }))
+    Ok(serde_json::json!({ "removed": removed_texture || removed_asset || removed_metadata }))
+}
+
+fn project_render(
+    sessions: &ProjectSessionManager,
+    project_id: Option<&str>,
+    args: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let session = sessions.resolve(project_id)?;
+    let png = crate::texture::composite_project_preview(&session.project)?;
+    let path = optional_string(args, "output_path")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| {
+            std::env::temp_dir().join(format!(
+                "mc-gui-crafter-render-{}.png",
+                uuid::Uuid::new_v4()
+            ))
+        });
+    if !path
+        .extension()
+        .and_then(|value| value.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("png"))
+    {
+        return Err("output_path must end with .png".to_string());
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|error| format!("Failed to create render directory: {error}"))?;
+    }
+    std::fs::write(&path, &png).map_err(|error| format!("Failed to write render PNG: {error}"))?;
+
+    let image = image::load_from_memory(&png)
+        .map_err(|error| format!("Failed to inspect render PNG: {error}"))?;
+    let mut metadata = compact_asset_metadata_with_dimensions(
+        path.to_string_lossy().as_ref(),
+        &png,
+        image.width(),
+        image.height(),
+    );
+    metadata["project_id"] = serde_json::json!(session.id);
+    metadata["path"] = serde_json::json!(path.to_string_lossy().to_string());
+    if optional_bool(args, "include_data_url")?.unwrap_or(false) {
+        metadata["data_url"] = serde_json::json!(data_url_for_png(&png));
+    }
+    Ok(metadata)
 }
 
 fn asset_get_data_url(
@@ -1339,10 +3132,9 @@ fn asset_get_data_url(
         .texture_data
         .get(name)
         .ok_or(format!("Asset not found: {name}"))?;
-    use base64::Engine;
     Ok(serde_json::json!({
         "name": name,
-        "data_url": format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(data)),
+        "data_url": data_url_for_png(data),
     }))
 }
 
@@ -1351,33 +3143,89 @@ fn asset_list(
     project_id: Option<&str>,
 ) -> Result<serde_json::Value, String> {
     let project = &sessions.resolve(project_id)?.project;
-    use base64::Engine;
     let assets = project
         .assets
         .iter()
-        .map(|name| {
-            let (width, height, data_url) = if let Some(data) = project.texture_data.get(name) {
-                let image = image::load_from_memory(data).ok();
-                (
-                    image.as_ref().map(|image| image.width()).unwrap_or(16),
-                    image.as_ref().map(|image| image.height()).unwrap_or(16),
-                    format!(
-                        "data:image/png;base64,{}",
-                        base64::engine::general_purpose::STANDARD.encode(data)
-                    ),
-                )
-            } else {
-                (16, 16, String::new())
-            };
-            serde_json::json!({
-                "name": name,
-                "width": width,
-                "height": height,
-                "data_url": data_url,
-            })
-        })
+        .map(|name| compact_asset_metadata(name, project.texture_data.get(name).map(Vec::as_slice)))
         .collect::<Vec<_>>();
     Ok(serde_json::json!({ "assets": assets }))
+}
+
+fn compact_asset_metadata(name: &str, data: Option<&[u8]>) -> serde_json::Value {
+    let Some(data) = data else {
+        return compact_asset_metadata_with_dimensions(name, &[], 16, 16);
+    };
+    let image = image::load_from_memory(data).ok();
+    compact_asset_metadata_with_dimensions(
+        name,
+        data,
+        image.as_ref().map(|image| image.width()).unwrap_or(16),
+        image.as_ref().map(|image| image.height()).unwrap_or(16),
+    )
+}
+
+fn compact_asset_metadata_with_dimensions(
+    name: &str,
+    data: &[u8],
+    width: u32,
+    height: u32,
+) -> serde_json::Value {
+    use sha2::{Digest, Sha256};
+
+    serde_json::json!({
+        "name": name,
+        "width": width,
+        "height": height,
+        "bytes": data.len(),
+        "sha256": format!("{:x}", Sha256::digest(data)),
+    })
+}
+
+fn validate_asset_name(name: &str) -> Result<(), String> {
+    if name.is_empty() {
+        return Err("Asset name cannot be empty".to_string());
+    }
+    if name.contains('\\') || std::path::Path::new(name).is_absolute() {
+        return Err("Asset name must be a relative project path".to_string());
+    }
+    if !name.starts_with("textures/") || !name.ends_with(".png") {
+        return Err("Asset name must start with textures/ and end with .png".to_string());
+    }
+    let texture_name = name
+        .strip_prefix("textures/")
+        .and_then(|name| name.strip_suffix(".png"))
+        .unwrap_or_default();
+    if texture_name.is_empty() || texture_name.ends_with('/') {
+        return Err("Asset name must include a texture filename".to_string());
+    }
+    if name
+        .split('/')
+        .any(|component| component.is_empty() || component == "." || component == "..")
+    {
+        return Err(
+            "Asset name cannot contain empty, current, or parent path components".to_string(),
+        );
+    }
+    Ok(())
+}
+
+fn element_for_mcp(element: &Element) -> serde_json::Value {
+    let mut value = serde_json::to_value(element).unwrap();
+    if let Some(object) = value.as_object_mut() {
+        object.insert(
+            "layer".to_string(),
+            serde_json::to_value(&element.layer).unwrap(),
+        );
+    }
+    value
+}
+
+fn data_url_for_png(data: &[u8]) -> String {
+    use base64::Engine;
+    format!(
+        "data:image/png;base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(data)
+    )
 }
 
 fn decode_png_data_url(data_url: &str) -> Result<Vec<u8>, String> {
@@ -1420,6 +3268,13 @@ fn optional_string(value: &serde_json::Value, key: &str) -> Option<String> {
         .map(String::from)
 }
 
+fn optional_bool(value: &serde_json::Value, key: &str) -> Result<Option<bool>, String> {
+    value
+        .get(key)
+        .map(|value| value.as_bool().ok_or(format!("{key} must be boolean")))
+        .transpose()
+}
+
 fn required_str<'a>(value: &'a serde_json::Value, key: &str) -> Result<&'a str, String> {
     value
         .get(key)
@@ -1428,24 +3283,67 @@ fn required_str<'a>(value: &'a serde_json::Value, key: &str) -> Result<&'a str, 
 }
 
 fn required_i32(value: &serde_json::Value, key: &str) -> Result<i32, String> {
-    value
-        .get(key)
-        .and_then(|value| value.as_i64())
-        .map(|value| value as i32)
-        .ok_or(format!("Missing {key}"))
+    let value = value.get(key).ok_or(format!("Missing {key}"))?;
+    if let Some(value) = value.as_i64() {
+        return i32::try_from(value).map_err(|_| format!("{key} is out of range"));
+    }
+    if let Some(value) = value.as_u64() {
+        return i32::try_from(value).map_err(|_| format!("{key} is out of range"));
+    }
+    Err(format!("{key} must be an integer"))
 }
 
 fn required_u32(value: &serde_json::Value, key: &str) -> Result<u32, String> {
+    let value = value.get(key).ok_or(format!("Missing {key}"))?;
+    json_number_to_u32(value, key)
+}
+
+fn optional_u32(value: &serde_json::Value, key: &str) -> Result<Option<u32>, String> {
     value
         .get(key)
-        .and_then(|value| value.as_u64())
-        .map(|value| value as u32)
-        .ok_or(format!("Missing {key}"))
+        .map(|value| json_number_to_u32(value, key))
+        .transpose()
+}
+
+fn json_number_to_u32(value: &serde_json::Value, key: &str) -> Result<u32, String> {
+    if let Some(value) = value.as_i64() {
+        return u32::try_from(value).map_err(|_| format!("{key} is out of range"));
+    }
+    if let Some(value) = value.as_u64() {
+        return u32::try_from(value).map_err(|_| format!("{key} is out of range"));
+    }
+    Err(format!("{key} must be an integer"))
+}
+
+fn optional_slot_role(
+    value: &serde_json::Value,
+    key: &str,
+) -> Result<Option<crate::project::SlotRole>, String> {
+    value
+        .get(key)
+        .map(|value| {
+            serde_json::from_value(value.clone()).map_err(|error| format!("Invalid {key}: {error}"))
+        })
+        .transpose()
+}
+
+fn optional_semantic_group_kind(
+    value: &serde_json::Value,
+    key: &str,
+) -> Result<Option<crate::project::SemanticGroupKind>, String> {
+    value
+        .get(key)
+        .map(|value| {
+            serde_json::from_value(value.clone()).map_err(|error| format!("Invalid {key}: {error}"))
+        })
+        .transpose()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::net::{Ipv4Addr, TcpListener};
+    use std::path::{Path, PathBuf};
     use std::sync::Mutex;
 
     fn test_state() -> AppState {
@@ -1460,6 +3358,293 @@ mod tests {
         match handle_json_rpc_value(value, state) {
             RpcReply::Response(response) => serde_json::to_value(response).unwrap(),
             RpcReply::Notification => panic!("expected JSON-RPC response"),
+        }
+    }
+
+    fn tool_text_value(response: &serde_json::Value) -> serde_json::Value {
+        let content = response["result"]["content"][0]["text"].as_str().unwrap();
+        serde_json::from_str(content).unwrap()
+    }
+
+    fn attached_region_tool_call(
+        state: &AppState,
+        tool_name: &str,
+        project_id: &str,
+        arguments: serde_json::Value,
+    ) -> serde_json::Value {
+        let mut args = arguments.as_object().cloned().unwrap_or_default();
+        args.insert(
+            "project_id".to_string(),
+            serde_json::Value::String(project_id.to_string()),
+        );
+        response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": tool_name,
+                "method": "tools/call",
+                "params": {
+                    "name": tool_name,
+                    "arguments": args
+                }
+            }),
+            state,
+        )
+    }
+
+    fn revision_for(state: &AppState, project_id: &str) -> u64 {
+        state
+            .sessions
+            .lock()
+            .unwrap()
+            .resolve(Some(project_id))
+            .unwrap()
+            .revision
+    }
+
+    fn mutation_snapshot_for(
+        state: &AppState,
+        project_id: &str,
+    ) -> Option<ProjectMutationSnapshot> {
+        project_mutation_snapshot(state, &serde_json::json!({ "project_id": project_id }))
+    }
+
+    #[test]
+    fn new_alpha_mutation_responses_include_project_id() {
+        let state = test_state();
+        let project_id = {
+            let mut sessions = state.sessions.lock().unwrap();
+            let mut project = Project::new("Response Contract", 176, 166, ModTarget::Forge);
+            project.elements.push(
+                parse_element_arg(&serde_json::json!({
+                    "id": "a",
+                    "type": "slot",
+                    "x": 8,
+                    "y": 18,
+                    "size": 18
+                }))
+                .unwrap(),
+            );
+            project.elements.push(
+                parse_element_arg(&serde_json::json!({
+                    "id": "b",
+                    "type": "slot",
+                    "x": 26,
+                    "y": 18,
+                    "size": 18
+                }))
+                .unwrap(),
+            );
+            sessions.create_session(project)
+        };
+
+        for (tool_name, arguments) in [
+            (
+                "project_resize",
+                serde_json::json!({ "project_id": project_id, "width": 180, "height": 166 }),
+            ),
+            (
+                "group_upsert",
+                serde_json::json!({ "project_id": project_id, "group_id": "machine", "element_ids": ["a", "b"] }),
+            ),
+            (
+                "element_update_many",
+                serde_json::json!({ "project_id": project_id, "updates": [{ "id": "a", "changes": { "x": 10 } }] }),
+            ),
+        ] {
+            let response = response_for(
+                serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": tool_name,
+                    "method": "tools/call",
+                    "params": {
+                        "name": tool_name,
+                        "arguments": arguments
+                    }
+                }),
+                &state,
+            );
+            assert!(response["error"].is_null(), "{tool_name}: {response:#}");
+            let value = tool_text_value(&response);
+            assert_eq!(value["project_id"], project_id, "{tool_name}");
+        }
+    }
+
+    #[test]
+    fn project_render_and_asset_list_do_not_inline_binary_payloads_by_default() {
+        let state = test_state();
+        let project_id = {
+            let mut sessions = state.sessions.lock().unwrap();
+            let mut project = Project::new("Compact", 32, 24, ModTarget::Forge);
+            let asset = "textures/generated/gui_panel.png";
+            project.assets.push(asset.to_string());
+            project.texture_data.insert(
+                asset.to_string(),
+                crate::texture::generated_gui_panel(16, 16).unwrap(),
+            );
+            sessions.create_session(project)
+        };
+        let render_output_path = TempPath::new("mc-gui-crafter-render-compact-test", "png");
+
+        for (tool_name, arguments) in [
+            (
+                "project_render",
+                serde_json::json!({
+                    "project_id": project_id,
+                    "output_path": render_output_path.path_string()
+                }),
+            ),
+            (
+                "asset_list",
+                serde_json::json!({
+                    "project_id": project_id
+                }),
+            ),
+        ] {
+            let response = response_for(
+                serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": tool_name,
+                    "method": "tools/call",
+                    "params": {
+                        "name": tool_name,
+                        "arguments": arguments
+                    }
+                }),
+                &state,
+            );
+            assert!(response["error"].is_null(), "{tool_name}: {response:#}");
+            let value = tool_text_value(&response);
+            assert!(
+                !serde_json::to_string(&value)
+                    .unwrap()
+                    .contains("data:image/png;base64"),
+                "{tool_name} should be compact by default"
+            );
+        }
+    }
+
+    #[test]
+    fn no_op_batch_tools_do_not_change_revision() {
+        let state = test_state();
+        let project_id = {
+            let mut sessions = state.sessions.lock().unwrap();
+            let mut project = Project::new("Noop Batch", 176, 166, ModTarget::Forge);
+            project.elements.push(
+                parse_element_arg(&serde_json::json!({
+                    "id": "a",
+                    "type": "slot",
+                    "x": 8,
+                    "y": 18,
+                    "size": 18
+                }))
+                .unwrap(),
+            );
+            project.elements.push(
+                parse_element_arg(&serde_json::json!({
+                    "id": "b",
+                    "type": "slot",
+                    "x": 26,
+                    "y": 18,
+                    "size": 18
+                }))
+                .unwrap(),
+            );
+            project.groups.push(crate::project::Group {
+                id: "machine".to_string(),
+                x: 8,
+                y: 18,
+                elements: vec!["a".to_string(), "b".to_string()],
+            });
+            sessions.create_session(project)
+        };
+
+        let calls = [
+            (
+                "project_resize",
+                serde_json::json!({ "project_id": project_id, "width": 176, "height": 166 }),
+            ),
+            (
+                "group_upsert",
+                serde_json::json!({ "project_id": project_id, "group_id": "machine", "element_ids": ["a", "b"] }),
+            ),
+            (
+                "element_update_many",
+                serde_json::json!({ "project_id": project_id, "updates": [{ "id": "a", "changes": { "x": 8 } }] }),
+            ),
+        ];
+
+        for (tool_name, arguments) in calls {
+            let before = mutation_snapshot_for(&state, &project_id);
+            let response = response_for(
+                serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": tool_name,
+                    "method": "tools/call",
+                    "params": {
+                        "name": tool_name,
+                        "arguments": arguments
+                    }
+                }),
+                &state,
+            );
+            assert!(response["error"].is_null(), "{tool_name}: {response:#}");
+            assert_eq!(
+                mutation_snapshot_for(&state, &project_id),
+                before,
+                "{tool_name}"
+            );
+        }
+    }
+
+    fn attached_region_project(state: &AppState) -> String {
+        let mut project = Project::new("Attached Region Regression", 176, 166, ModTarget::Forge);
+        project.attached_regions.push(AttachedRegion {
+            id: "returns_pocket".to_string(),
+            anchor: crate::project::AttachedRegionAnchor::Right,
+            x: 100,
+            y: 18,
+            width: 54,
+            height: 72,
+            state: crate::project::AttachedRegionState::Static,
+            kind: Some("returns_pocket".to_string()),
+            semantic_group: Some("food_returns".to_string()),
+            visible: true,
+        });
+        state.sessions.lock().unwrap().create_session(project)
+    }
+
+    struct TempPath {
+        path: PathBuf,
+    }
+
+    impl TempPath {
+        fn new(prefix: &str, extension: &str) -> Self {
+            let file_name = if extension.is_empty() {
+                format!("{prefix}-{}", uuid::Uuid::new_v4())
+            } else {
+                format!("{prefix}-{}.{}", uuid::Uuid::new_v4(), extension)
+            };
+            Self {
+                path: std::env::temp_dir().join(file_name),
+            }
+        }
+
+        fn from_path(path: PathBuf) -> Self {
+            Self { path }
+        }
+
+        fn path(&self) -> &Path {
+            &self.path
+        }
+
+        fn path_string(&self) -> String {
+            self.path.to_string_lossy().into_owned()
+        }
+    }
+
+    impl Drop for TempPath {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.path);
         }
     }
 
@@ -1514,6 +3699,9 @@ mod tests {
 
         assert!(names.contains(&"project_list_sessions"));
         assert!(names.contains(&"project_get_active"));
+        assert!(names.contains(&"project_save_as"));
+        assert!(names.contains(&"project_export_preview"));
+        assert!(names.contains(&"project_export"));
         assert!(names.contains(&"element_update"));
         assert!(names.contains(&"element_reorder"));
         assert!(names.contains(&"group_create"));
@@ -1521,6 +3709,1444 @@ mod tests {
         assert!(names.contains(&"asset_get_data_url"));
         assert!(names.contains(&"project_undo"));
         assert!(names.contains(&"project_redo"));
+    }
+
+    #[test]
+    fn tools_list_exposes_export_settings_update() {
+        let tools = get_tool_definitions();
+
+        assert!(tools
+            .iter()
+            .any(|tool| tool["name"] == "project_export_settings_update"));
+    }
+
+    #[test]
+    fn tools_list_exposes_project_render_as_preferred_visual_tool() {
+        let tools = get_tool_definitions();
+        let names = tools
+            .iter()
+            .filter_map(|tool| tool["name"].as_str())
+            .collect::<Vec<_>>();
+
+        assert!(names.contains(&"project_render"));
+        assert!(names.contains(&"project_screenshot"));
+
+        let render = tools
+            .iter()
+            .find(|tool| tool["name"] == "project_render")
+            .expect("project_render should be listed");
+        assert!(render["description"].as_str().unwrap().contains("Render"));
+        assert!(render["inputSchema"]["properties"]
+            .as_object()
+            .unwrap()
+            .contains_key("include_data_url"));
+    }
+
+    #[test]
+    fn tools_list_exposes_project_resize() {
+        let tools = get_tool_definitions();
+        let names = tools
+            .iter()
+            .filter_map(|tool| tool["name"].as_str())
+            .collect::<Vec<_>>();
+
+        assert!(names.contains(&"project_resize"));
+    }
+
+    #[test]
+    fn tools_list_exposes_group_upsert() {
+        let tools = get_tool_definitions();
+        let names = tools
+            .iter()
+            .filter_map(|tool| tool["name"].as_str())
+            .collect::<Vec<_>>();
+
+        assert!(names.contains(&"group_upsert"));
+    }
+
+    #[test]
+    fn tools_list_exposes_element_update_many() {
+        let tools = get_tool_definitions();
+        let names = tools
+            .iter()
+            .filter_map(|tool| tool["name"].as_str())
+            .collect::<Vec<_>>();
+
+        assert!(names.contains(&"element_update_many"));
+    }
+
+    #[test]
+    fn tools_list_exposes_schema_discover() {
+        let tools = get_tool_definitions();
+        let names = tools
+            .iter()
+            .filter_map(|tool| tool["name"].as_str())
+            .collect::<Vec<_>>();
+
+        assert!(names.contains(&"schema_discover"));
+    }
+
+    #[test]
+    fn schema_discover_lists_visual_authoring_fields() {
+        let state = test_state();
+        let response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "schema-visual-authoring",
+                "method": "tools/call",
+                "params": {
+                    "name": "schema_discover",
+                    "arguments": {}
+                }
+            }),
+            &state,
+        );
+
+        assert!(response["error"].is_null(), "{response:#}");
+        let value = tool_text_value(&response);
+        assert!(value["texture_render_modes"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!("nine_slice")));
+        assert!(value["nine_slice_modes"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!("tile")));
+        assert!(value["editable_element_fields"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!("render_mode")));
+        assert!(value["editable_element_fields"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!("nine_slice")));
+    }
+
+    #[test]
+    fn schema_discover_returns_agent_authoring_enums_and_defaults() {
+        let state = test_state();
+        let response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "schema",
+                "method": "tools/call",
+                "params": {
+                    "name": "schema_discover",
+                    "arguments": {}
+                }
+            }),
+            &state,
+        );
+
+        assert!(response["error"].is_null(), "{response:#}");
+        let value = tool_text_value(&response);
+        assert_eq!(value["mod_targets"], serde_values(ModTarget::variants()));
+        assert_eq!(
+            value["element_types"],
+            serde_values(ElementType::variants())
+        );
+        assert_eq!(value["slot_roles"], serde_values(SlotRole::variants()));
+        assert_eq!(
+            value["semantic_group_kinds"],
+            serde_values(SemanticGroupKind::variants())
+        );
+        assert_eq!(
+            value["attached_region_anchors"],
+            serde_values(AttachedRegionAnchor::variants())
+        );
+        assert_eq!(
+            value["attached_region_states"],
+            serde_values(AttachedRegionState::variants())
+        );
+        assert_eq!(
+            value["fill_directions"],
+            serde_values(FillDirection::variants())
+        );
+        assert_eq!(value["layers"], serde_values(Layer::variants()));
+        assert_eq!(
+            value["texture_render_modes"],
+            serde_values(TextureRenderMode::variants())
+        );
+        assert_eq!(
+            value["nine_slice_modes"],
+            serde_values(NineSliceMode::variants())
+        );
+        assert_eq!(
+            value["export_settings"]["codegen_modes"],
+            serde_values(CodegenMode::variants())
+        );
+        let export_defaults = ProjectExportSettings::default();
+        assert_eq!(
+            value["export_settings"]["codegen_mode_default"],
+            serde_json::to_value(&export_defaults.codegen_mode).unwrap()
+        );
+        assert_eq!(
+            value["export_settings"]["generate_runtime_helpers_default"],
+            export_defaults.generate_runtime_helpers
+        );
+        assert_eq!(
+            value["export_settings"]["generate_semantic_registry_default"],
+            export_defaults.generate_semantic_registry
+        );
+        assert_eq!(
+            value["editable_element_fields"],
+            serde_json::json!([
+                "x",
+                "y",
+                "width",
+                "height",
+                "size",
+                "asset",
+                "icon",
+                "icon_uv",
+                "tooltip",
+                "direction",
+                "content",
+                "font",
+                "color",
+                "shadow",
+                "animation",
+                "visible",
+                "uv",
+                "render_mode",
+                "nine_slice",
+                "layer",
+                "slot_role",
+                "slot_index",
+                "inventory_group",
+                "scroll_binding",
+                "scroll_min",
+                "scroll_max",
+                "visible_rows",
+                "total_rows",
+                "columns",
+                "target_group",
+                "binding",
+                "dock",
+                "open_width",
+                "open_height",
+                "attached_region"
+            ])
+        );
+        assert_eq!(
+            value["asset_metadata_fields"],
+            serde_json::json!(["width", "height", "nine_slice"])
+        );
+        assert_eq!(
+            value["serialization_defaults"],
+            schema_serialization_defaults()
+        );
+    }
+
+    #[test]
+    fn tools_list_exposes_alpha_ergonomics_tools() {
+        let tools = get_tool_definitions();
+        let names = tools
+            .iter()
+            .filter_map(|tool| tool["name"].as_str())
+            .collect::<Vec<_>>();
+
+        assert!(names.contains(&"project_save_as"));
+        assert!(names.contains(&"project_export_preview"));
+        assert!(names.contains(&"project_export"));
+        assert!(names.contains(&"project_export_settings_update"));
+        assert!(names.contains(&"project_semantic_groups_update"));
+        assert!(names.contains(&"element_add_many"));
+        assert!(names.contains(&"slot_grid_add"));
+    }
+
+    #[test]
+    fn tools_list_exposes_attached_region_tools() {
+        let state = test_state();
+
+        let response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "tools",
+                "method": "tools/list"
+            }),
+            &state,
+        );
+        let names = response["result"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|tool| tool["name"].as_str())
+            .collect::<Vec<_>>();
+
+        assert!(names.contains(&"attached_region_add"));
+        assert!(names.contains(&"attached_region_update"));
+        assert!(names.contains(&"attached_region_remove"));
+        assert!(names.contains(&"attached_region_list"));
+        assert!(names.contains(&"attached_region_move_with_elements"));
+    }
+
+    #[test]
+    fn attached_region_schemas_describe_defaults_and_update_fields() {
+        let tools = get_tool_definitions();
+        let add_schema = tools
+            .iter()
+            .find(|tool| tool["name"] == "attached_region_add")
+            .unwrap();
+        let update_schema = tools
+            .iter()
+            .find(|tool| tool["name"] == "attached_region_update")
+            .unwrap();
+
+        assert!(
+            add_schema["inputSchema"]["properties"]["state"]["description"]
+                .as_str()
+                .unwrap()
+                .contains("Defaults to static")
+        );
+        assert!(
+            add_schema["inputSchema"]["properties"]["visible"]["description"]
+                .as_str()
+                .unwrap()
+                .contains("Defaults to true")
+        );
+        let changes = &update_schema["inputSchema"]["properties"]["changes"];
+        assert_eq!(changes["type"], "object");
+        assert!(changes["description"]
+            .as_str()
+            .unwrap()
+            .contains("id cannot be changed"));
+        for field in [
+            "anchor",
+            "x",
+            "y",
+            "width",
+            "height",
+            "state",
+            "kind",
+            "semantic_group",
+            "visible",
+        ] {
+            assert!(changes["properties"].get(field).is_some(), "{field}");
+        }
+        assert_eq!(
+            changes["properties"]["anchor"]["description"],
+            attached_region_anchor_description()
+        );
+        assert_eq!(
+            changes["properties"]["state"]["description"],
+            attached_region_state_description()
+        );
+    }
+
+    #[test]
+    fn group_upsert_creates_and_updates_existing_group() {
+        let state = test_state();
+        let project_id = {
+            let mut sessions = state.sessions.lock().unwrap();
+            let mut project = Project::new("Group Upsert", 176, 166, ModTarget::Forge);
+            for (id, x) in [("a", 8), ("b", 26), ("c", 44)] {
+                project.elements.push(
+                    parse_element_arg(&serde_json::json!({
+                        "id": id,
+                        "type": "slot",
+                        "x": x,
+                        "y": 18,
+                        "size": 18
+                    }))
+                    .unwrap(),
+                );
+            }
+            sessions.create_session(project)
+        };
+
+        let create_response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "group-upsert-create",
+                "method": "tools/call",
+                "params": {
+                    "name": "group_upsert",
+                    "arguments": {
+                        "project_id": project_id,
+                        "group_id": "machine",
+                        "element_ids": ["a", "b"]
+                    }
+                }
+            }),
+            &state,
+        );
+        assert!(create_response["error"].is_null(), "{create_response:#}");
+        let create_value = tool_text_value(&create_response);
+        assert_eq!(create_value["project_id"], project_id);
+        assert_eq!(create_value["created"], true);
+        assert_eq!(create_value["updated"], false);
+        assert_eq!(create_value["member_count"], 2);
+
+        let update_response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "group-upsert-update",
+                "method": "tools/call",
+                "params": {
+                    "name": "group_upsert",
+                    "arguments": {
+                        "project_id": project_id,
+                        "group_id": "machine",
+                        "element_ids": ["a", "c"]
+                    }
+                }
+            }),
+            &state,
+        );
+        assert!(update_response["error"].is_null(), "{update_response:#}");
+        let update_value = tool_text_value(&update_response);
+        assert_eq!(update_value["created"], false);
+        assert_eq!(update_value["updated"], true);
+        assert_eq!(update_value["member_count"], 2);
+
+        let sessions = state.sessions.lock().unwrap();
+        let session = sessions.resolve(Some(&project_id)).unwrap();
+        assert_eq!(session.project.groups.len(), 1);
+        assert_eq!(
+            session.project.groups[0].elements,
+            vec!["a".to_string(), "c".to_string()]
+        );
+        assert_eq!(session.project.groups[0].x, 8);
+        assert_eq!(session.project.groups[0].y, 18);
+        assert_eq!(session.revision, 2);
+    }
+
+    #[test]
+    fn group_upsert_no_op_does_not_change_revision() {
+        let state = test_state();
+        let project_id = {
+            let mut sessions = state.sessions.lock().unwrap();
+            let mut project = Project::new("Group Upsert Noop", 176, 166, ModTarget::Forge);
+            project.elements.push(
+                parse_element_arg(&serde_json::json!({
+                    "id": "a",
+                    "type": "slot",
+                    "x": 8,
+                    "y": 18,
+                    "size": 18
+                }))
+                .unwrap(),
+            );
+            project.elements.push(
+                parse_element_arg(&serde_json::json!({
+                    "id": "b",
+                    "type": "slot",
+                    "x": 26,
+                    "y": 18,
+                    "size": 18
+                }))
+                .unwrap(),
+            );
+            project.groups.push(crate::project::Group {
+                id: "machine".to_string(),
+                x: 8,
+                y: 18,
+                elements: vec!["a".to_string(), "b".to_string()],
+            });
+            sessions.create_session(project)
+        };
+        let before = mutation_snapshot_for(&state, &project_id);
+
+        let response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "group-upsert-noop",
+                "method": "tools/call",
+                "params": {
+                    "name": "group_upsert",
+                    "arguments": {
+                        "project_id": project_id,
+                        "group_id": "machine",
+                        "element_ids": ["a", "b"]
+                    }
+                }
+            }),
+            &state,
+        );
+
+        assert!(response["error"].is_null(), "{response:#}");
+        assert_eq!(mutation_snapshot_for(&state, &project_id), before);
+    }
+
+    #[test]
+    fn group_upsert_preserves_existing_group_position_metadata() {
+        let state = test_state();
+        let project_id = {
+            let mut sessions = state.sessions.lock().unwrap();
+            let mut project = Project::new("Group Upsert Metadata", 176, 166, ModTarget::Forge);
+            for (id, x) in [("a", 8), ("b", 26), ("c", 44)] {
+                project.elements.push(
+                    parse_element_arg(&serde_json::json!({
+                        "id": id,
+                        "type": "slot",
+                        "x": x,
+                        "y": 18,
+                        "size": 18
+                    }))
+                    .unwrap(),
+                );
+            }
+            project.groups.push(crate::project::Group {
+                id: "machine".to_string(),
+                x: 99,
+                y: 77,
+                elements: vec!["a".to_string(), "b".to_string()],
+            });
+            sessions.create_session(project)
+        };
+
+        let response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "group-upsert-metadata",
+                "method": "tools/call",
+                "params": {
+                    "name": "group_upsert",
+                    "arguments": {
+                        "project_id": project_id,
+                        "group_id": "machine",
+                        "element_ids": ["a", "c"]
+                    }
+                }
+            }),
+            &state,
+        );
+
+        assert!(response["error"].is_null(), "{response:#}");
+        let value = tool_text_value(&response);
+        assert_eq!(value["group"]["x"], 99);
+        assert_eq!(value["group"]["y"], 77);
+        assert_eq!(value["group"]["elements"], serde_json::json!(["a", "c"]));
+
+        let sessions = state.sessions.lock().unwrap();
+        let session = sessions.resolve(Some(&project_id)).unwrap();
+        assert_eq!(session.project.groups[0].x, 99);
+        assert_eq!(session.project.groups[0].y, 77);
+        assert_eq!(
+            session.project.groups[0].elements,
+            vec!["a".to_string(), "c".to_string()]
+        );
+    }
+
+    #[test]
+    fn group_upsert_removes_members_from_other_groups_and_prunes_short_groups() {
+        let state = test_state();
+        let project_id = {
+            let mut sessions = state.sessions.lock().unwrap();
+            let mut project = Project::new("Group Upsert Rehome", 176, 166, ModTarget::Forge);
+            for (id, x) in [("a", 8), ("b", 26), ("c", 44), ("d", 62)] {
+                project.elements.push(
+                    parse_element_arg(&serde_json::json!({
+                        "id": id,
+                        "type": "slot",
+                        "x": x,
+                        "y": 18,
+                        "size": 18
+                    }))
+                    .unwrap(),
+                );
+            }
+            project.groups.push(crate::project::Group {
+                id: "g1".to_string(),
+                x: 8,
+                y: 18,
+                elements: vec!["a".to_string(), "b".to_string()],
+            });
+            project.groups.push(crate::project::Group {
+                id: "g2".to_string(),
+                x: 44,
+                y: 18,
+                elements: vec!["c".to_string(), "d".to_string()],
+            });
+            sessions.create_session(project)
+        };
+
+        let response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "group-upsert-rehome",
+                "method": "tools/call",
+                "params": {
+                    "name": "group_upsert",
+                    "arguments": {
+                        "project_id": project_id,
+                        "group_id": "g1",
+                        "element_ids": ["a", "c"]
+                    }
+                }
+            }),
+            &state,
+        );
+
+        assert!(response["error"].is_null(), "{response:#}");
+        let sessions = state.sessions.lock().unwrap();
+        let session = sessions.resolve(Some(&project_id)).unwrap();
+        assert_eq!(session.revision, 1);
+        assert_eq!(session.project.groups.len(), 1);
+        assert_eq!(session.project.groups[0].id, "g1");
+        assert_eq!(
+            session.project.groups[0].elements,
+            vec!["a".to_string(), "c".to_string()]
+        );
+        assert!(session.project.groups.iter().all(|group| group.id != "g2"));
+        assert!(session
+            .project
+            .groups
+            .iter()
+            .filter(|group| group.id != "g1")
+            .all(|group| !group.elements.contains(&"c".to_string())));
+    }
+
+    #[test]
+    fn semantic_groups_schema_describes_object_array_and_enums() {
+        let tools = get_tool_definitions();
+        let tool = tools
+            .iter()
+            .find(|tool| tool["name"] == "project_semantic_groups_update")
+            .expect("project_semantic_groups_update tool should exist");
+        let semantic_groups = &tool["inputSchema"]["properties"]["semantic_groups"];
+        let description = semantic_groups["items"]["properties"]["kind"]["description"]
+            .as_str()
+            .unwrap();
+
+        assert_eq!(semantic_groups["type"], "array");
+        assert_eq!(semantic_groups["items"]["type"], "object");
+        assert!(description.contains("fixed_slots"));
+        assert!(description.contains("virtual_slot_grid"));
+        assert!(description.contains("player_inventory"));
+    }
+
+    #[test]
+    fn semantic_groups_schema_exposes_member_ids() {
+        let tools = get_tool_definitions();
+        let tool = tools
+            .iter()
+            .find(|tool| tool["name"] == "project_semantic_groups_update")
+            .unwrap();
+        let properties =
+            &tool["inputSchema"]["properties"]["semantic_groups"]["items"]["properties"];
+
+        assert_eq!(properties["member_ids"]["type"], "array");
+        assert_eq!(properties["member_ids"]["items"]["type"], "string");
+    }
+
+    #[test]
+    fn export_props_accept_codegen_override() {
+        let schema = export_props();
+        let properties = schema["properties"].as_object().unwrap();
+
+        assert!(properties.contains_key("codegen_mode"));
+        assert!(properties.contains_key("generate_runtime_helpers"));
+        assert!(properties.contains_key("generate_semantic_registry"));
+        assert!(properties.contains_key("overwrite"));
+        assert_eq!(
+            properties["target"]["description"],
+            mod_target_description()
+        );
+        assert_eq!(
+            properties["codegen_mode"]["description"],
+            codegen_mode_description()
+        );
+    }
+
+    #[test]
+    fn tool_schemas_generate_mod_target_and_codegen_descriptions() {
+        let tools = get_tool_definitions();
+        let project_new = tools
+            .iter()
+            .find(|tool| tool["name"] == "project_new")
+            .unwrap();
+        let settings_update = tools
+            .iter()
+            .find(|tool| tool["name"] == "project_export_settings_update")
+            .unwrap();
+
+        assert_eq!(
+            project_new["inputSchema"]["properties"]["mod_target"]["description"],
+            mod_target_description()
+        );
+        assert_eq!(
+            settings_update["inputSchema"]["properties"]["codegen_mode"]["description"],
+            codegen_mode_description()
+        );
+    }
+
+    #[test]
+    fn bind_mcp_listener_uses_fallback_when_preferred_port_is_busy() {
+        let occupied = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let occupied_port = occupied.local_addr().unwrap().port();
+
+        let listener = bind_mcp_listener(Some(occupied_port)).unwrap();
+
+        assert_ne!(listener.local_addr().unwrap().port(), occupied_port);
+    }
+
+    #[test]
+    fn project_save_as_tool_sets_project_path() {
+        let state = test_state();
+        let path = std::env::temp_dir()
+            .join(format!(
+                "gui-crafter-mcp-save-as-{}.mcgui",
+                uuid::Uuid::new_v4()
+            ))
+            .to_string_lossy()
+            .into_owned();
+        let project_id = {
+            let mut sessions = state.sessions.lock().unwrap();
+            sessions.create_session(Project::new("Save As MCP", 176, 166, ModTarget::Forge))
+        };
+
+        let response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "save-as",
+                "method": "tools/call",
+                "params": {
+                    "name": "project_save_as",
+                    "arguments": {
+                        "project_id": project_id,
+                        "path": path,
+                    }
+                }
+            }),
+            &state,
+        );
+        let _ = std::fs::remove_file(&path);
+
+        assert!(response["error"].is_null());
+        let content = response["result"]["content"][0]["text"].as_str().unwrap();
+        let value: serde_json::Value = serde_json::from_str(content).unwrap();
+        assert_eq!(value["path"], path);
+        assert_eq!(value["is_dirty"], false);
+    }
+
+    #[test]
+    fn project_save_as_changes_project_mutation_snapshot() {
+        let state = test_state();
+        let path = std::env::temp_dir()
+            .join(format!(
+                "gui-crafter-mcp-save-as-snapshot-{}.mcgui",
+                uuid::Uuid::new_v4()
+            ))
+            .to_string_lossy()
+            .into_owned();
+        let project_id = {
+            let mut sessions = state.sessions.lock().unwrap();
+            sessions.create_session(Project::new("Save As Snapshot", 176, 166, ModTarget::Forge))
+        };
+        let before = mutation_snapshot_for(&state, &project_id);
+
+        let response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "save-as-snapshot",
+                "method": "tools/call",
+                "params": {
+                    "name": "project_save_as",
+                    "arguments": {
+                        "project_id": project_id,
+                        "path": path,
+                    }
+                }
+            }),
+            &state,
+        );
+        let _ = std::fs::remove_file(&path);
+        let after = mutation_snapshot_for(&state, &project_id);
+
+        assert!(response["error"].is_null());
+        assert_eq!(revision_for(&state, &project_id), 0);
+        assert_ne!(before, after);
+    }
+
+    #[test]
+    fn project_new_empty_template_respects_requested_dimensions() {
+        let state = test_state();
+
+        let response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "new-empty",
+                "method": "tools/call",
+                "params": {
+                    "name": "project_new",
+                    "arguments": {
+                        "name": "Custom Empty",
+                        "template": "empty",
+                        "width": 264,
+                        "height": 162,
+                    }
+                }
+            }),
+            &state,
+        );
+
+        assert!(response["error"].is_null());
+        let value = tool_text_value(&response);
+        assert_eq!(value["project"]["gui_size"]["width"], 264);
+        assert_eq!(value["project"]["gui_size"]["height"], 162);
+
+        let sessions = state.sessions.lock().unwrap();
+        let active = sessions.active_session().unwrap();
+        assert_eq!(active.project.gui_size.width, 264);
+        assert_eq!(active.project.gui_size.height, 162);
+    }
+
+    #[test]
+    fn project_resize_changes_only_gui_size_and_preserves_elements() {
+        let state = test_state();
+        let project_id = {
+            let mut sessions = state.sessions.lock().unwrap();
+            let mut project = Project::new("Resize", 176, 166, ModTarget::Forge);
+            project.elements.push(
+                parse_element_arg(&serde_json::json!({
+                    "id": "outside_slot",
+                    "type": "slot",
+                    "x": 200,
+                    "y": -12,
+                    "size": 18
+                }))
+                .unwrap(),
+            );
+            sessions.create_session(project)
+        };
+
+        let response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "resize",
+                "method": "tools/call",
+                "params": {
+                    "name": "project_resize",
+                    "arguments": {
+                        "project_id": project_id,
+                        "width": 264,
+                        "height": 162
+                    }
+                }
+            }),
+            &state,
+        );
+
+        assert!(response["error"].is_null(), "{response:#}");
+        let value = tool_text_value(&response);
+        assert_eq!(value["project_id"], project_id);
+        assert_eq!(
+            value["old_size"],
+            serde_json::json!({ "width": 176, "height": 166 })
+        );
+        assert_eq!(
+            value["new_size"],
+            serde_json::json!({ "width": 264, "height": 162 })
+        );
+
+        let sessions = state.sessions.lock().unwrap();
+        let session = sessions.resolve(Some(&project_id)).unwrap();
+        assert_eq!(session.project.gui_size.width, 264);
+        assert_eq!(session.project.gui_size.height, 162);
+        let element = session.project.find_element("outside_slot").unwrap();
+        assert_eq!(element.x, 200);
+        assert_eq!(element.y, -12);
+        assert_eq!(session.revision, 1);
+        assert!(session.project.is_dirty);
+    }
+
+    #[test]
+    fn project_resize_no_op_does_not_change_revision() {
+        let state = test_state();
+        let project_id = {
+            let mut sessions = state.sessions.lock().unwrap();
+            sessions.create_session(Project::new("Resize Noop", 176, 166, ModTarget::Forge))
+        };
+        let before = mutation_snapshot_for(&state, &project_id);
+
+        let response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "resize-noop",
+                "method": "tools/call",
+                "params": {
+                    "name": "project_resize",
+                    "arguments": {
+                        "project_id": project_id,
+                        "width": 176,
+                        "height": 166
+                    }
+                }
+            }),
+            &state,
+        );
+
+        assert!(response["error"].is_null(), "{response:#}");
+        assert_eq!(mutation_snapshot_for(&state, &project_id), before);
+        assert_eq!(revision_for(&state, &project_id), 0);
+    }
+
+    #[test]
+    fn project_resize_rejects_zero_dimensions_without_mutation() {
+        let state = test_state();
+        let project_id = {
+            let mut sessions = state.sessions.lock().unwrap();
+            sessions.create_session(Project::new("Resize Bad", 176, 166, ModTarget::Forge))
+        };
+
+        let response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "resize-bad",
+                "method": "tools/call",
+                "params": {
+                    "name": "project_resize",
+                    "arguments": {
+                        "project_id": project_id,
+                        "width": 0,
+                        "height": 166
+                    }
+                }
+            }),
+            &state,
+        );
+
+        assert_eq!(
+            response["error"]["message"],
+            "Project dimensions must be greater than zero"
+        );
+        assert_eq!(revision_for(&state, &project_id), 0);
+    }
+
+    #[test]
+    fn project_export_preview_tool_returns_planned_files() {
+        let state = test_state();
+        let project_id = {
+            let mut sessions = state.sessions.lock().unwrap();
+            sessions.create_session(Project::new(
+                "Export Preview MCP",
+                176,
+                166,
+                ModTarget::Forge,
+            ))
+        };
+        let output_dir = std::env::temp_dir()
+            .join(format!("gui-crafter-mcp-export-{}", uuid::Uuid::new_v4()))
+            .to_string_lossy()
+            .into_owned();
+
+        let response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "export-preview",
+                "method": "tools/call",
+                "params": {
+                    "name": "project_export_preview",
+                    "arguments": {
+                        "project_id": project_id,
+                        "target": "forge",
+                        "mod_id": "mcp_test",
+                        "package": "net.inkyquill.mcptest",
+                        "class_name": "FourInputProcessor",
+                        "output_dir": output_dir,
+                    }
+                }
+            }),
+            &state,
+        );
+
+        assert!(response["error"].is_null());
+        let content = response["result"]["content"][0]["text"].as_str().unwrap();
+        let value: serde_json::Value = serde_json::from_str(content).unwrap();
+        assert_eq!(value["target"], "forge");
+        assert!(value["files"].as_array().unwrap().iter().any(|path| {
+            path.as_str()
+                .unwrap()
+                .ends_with("FourInputProcessorScreen.java")
+        }));
+    }
+
+    #[test]
+    fn asset_import_accepts_explicit_name_and_returns_compact_metadata() {
+        let state = test_state();
+        let project_id = {
+            let mut sessions = state.sessions.lock().unwrap();
+            sessions.create_session(Project::new("Asset Import", 176, 166, ModTarget::Forge))
+        };
+        let png = crate::texture::generated_gui_panel(32, 24).unwrap();
+        let path = std::env::temp_dir()
+            .join(format!(
+                "gui-crafter-mcp-asset-import-{}.png",
+                uuid::Uuid::new_v4()
+            ))
+            .to_string_lossy()
+            .into_owned();
+        std::fs::write(&path, &png).unwrap();
+
+        let response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "asset-import",
+                "method": "tools/call",
+                "params": {
+                    "name": "asset_import",
+                    "arguments": {
+                        "project_id": project_id,
+                        "file_path": path,
+                        "name": "textures/generated/custom_panel.png",
+                    }
+                }
+            }),
+            &state,
+        );
+        let _ = std::fs::remove_file(&path);
+
+        assert!(response["error"].is_null());
+        let value = tool_text_value(&response);
+        assert_eq!(value["name"], "textures/generated/custom_panel.png");
+        assert_eq!(value["width"], 32);
+        assert_eq!(value["height"], 24);
+        assert!(value["bytes"].as_u64().unwrap() > 0);
+        assert_eq!(value["sha256"].as_str().unwrap().len(), 64);
+        assert!(!value.as_object().unwrap().contains_key("data_url"));
+
+        let sessions = state.sessions.lock().unwrap();
+        let project = &sessions.resolve(Some(&project_id)).unwrap().project;
+        assert_eq!(
+            project
+                .texture_data
+                .get("textures/generated/custom_panel.png"),
+            Some(&png)
+        );
+    }
+
+    #[test]
+    fn asset_metadata_update_sets_nine_slice_metadata() {
+        let state = test_state();
+        let project_id = {
+            let mut sessions = state.sessions.lock().unwrap();
+            let mut project = Project::new("Asset Metadata", 176, 166, ModTarget::Forge);
+            project
+                .assets
+                .push("textures/gui/panel_atlas.png".to_string());
+            sessions.create_session(project)
+        };
+
+        let response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "asset-metadata",
+                "method": "tools/call",
+                "params": {
+                    "name": "asset_metadata_update",
+                    "arguments": {
+                        "project_id": project_id,
+                        "name": "textures/gui/panel_atlas.png",
+                        "metadata": {
+                            "nine_slice": {
+                                "left": 4,
+                                "right": 4,
+                                "top": 4,
+                                "bottom": 4,
+                                "edge_mode": "tile",
+                                "center_mode": "tile"
+                            }
+                        }
+                    }
+                }
+            }),
+            &state,
+        );
+
+        assert!(response["error"].is_null(), "{response:#}");
+        let value = tool_text_value(&response);
+        assert_eq!(value["project_id"], project_id);
+        assert_eq!(value["name"], "textures/gui/panel_atlas.png");
+        assert_eq!(value["metadata"]["nine_slice"]["left"], 4);
+    }
+
+    #[test]
+    fn asset_metadata_update_missing_asset_preserves_redo_snapshot() {
+        let state = test_state();
+        let project_id = {
+            let mut sessions = state.sessions.lock().unwrap();
+            let project_id = sessions.create_session(Project::new(
+                "Asset Metadata Missing",
+                176,
+                166,
+                ModTarget::Forge,
+            ));
+            sessions.record_history(Some(&project_id)).unwrap();
+            sessions
+                .resolve_mut(Some(&project_id))
+                .unwrap()
+                .project
+                .assets
+                .push("textures/gui/panel_atlas.png".to_string());
+            sessions.mark_changed(Some(&project_id)).unwrap();
+            sessions.undo(Some(&project_id)).unwrap();
+            project_id
+        };
+        let before_revision = {
+            let sessions = state.sessions.lock().unwrap();
+            sessions.resolve(Some(&project_id)).unwrap().revision
+        };
+
+        let response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "asset-metadata-missing",
+                "method": "tools/call",
+                "params": {
+                    "name": "asset_metadata_update",
+                    "arguments": {
+                        "project_id": project_id,
+                        "name": "textures/gui/missing.png",
+                        "metadata": {
+                            "width": 16,
+                            "height": 16
+                        }
+                    }
+                }
+            }),
+            &state,
+        );
+
+        assert_eq!(
+            response["error"]["message"],
+            "Asset not found: textures/gui/missing.png"
+        );
+        let sessions = state.sessions.lock().unwrap();
+        let session = sessions.resolve(Some(&project_id)).unwrap();
+        let summary = session_summary(&sessions, &project_id).unwrap();
+        assert_eq!(session.revision, before_revision);
+        assert!(!summary.can_undo);
+        assert!(summary.can_redo);
+    }
+
+    #[test]
+    fn asset_metadata_update_noop_preserves_revision_and_redo() {
+        let state = test_state();
+        let metadata = AssetMetadata {
+            width: Some(16),
+            height: Some(16),
+            nine_slice: None,
+        };
+        let project_id = {
+            let mut sessions = state.sessions.lock().unwrap();
+            let mut project = Project::new("Asset Metadata Noop", 176, 166, ModTarget::Forge);
+            project
+                .assets
+                .push("textures/gui/panel_atlas.png".to_string());
+            let project_id = sessions.create_session(project);
+            drop(sessions);
+
+            let response = response_for(
+                serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": "asset-metadata-seed",
+                    "method": "tools/call",
+                    "params": {
+                        "name": "asset_metadata_update",
+                        "arguments": {
+                            "project_id": project_id,
+                            "name": "textures/gui/panel_atlas.png",
+                            "metadata": {
+                                "width": 16,
+                                "height": 16
+                            }
+                        }
+                    }
+                }),
+                &state,
+            );
+            assert!(response["error"].is_null(), "{response:#}");
+
+            let mut sessions = state.sessions.lock().unwrap();
+            sessions.undo(Some(&project_id)).unwrap();
+            sessions
+                .resolve_mut(Some(&project_id))
+                .unwrap()
+                .project
+                .asset_metadata
+                .insert("textures/gui/panel_atlas.png".to_string(), metadata.clone());
+            project_id
+        };
+        let before_revision = {
+            let sessions = state.sessions.lock().unwrap();
+            sessions.resolve(Some(&project_id)).unwrap().revision
+        };
+
+        let response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "asset-metadata-noop",
+                "method": "tools/call",
+                "params": {
+                    "name": "asset_metadata_update",
+                    "arguments": {
+                        "project_id": project_id,
+                        "name": "textures/gui/panel_atlas.png",
+                        "metadata": {
+                            "width": 16,
+                            "height": 16
+                        }
+                    }
+                }
+            }),
+            &state,
+        );
+
+        assert!(response["error"].is_null(), "{response:#}");
+        let value = tool_text_value(&response);
+        assert_eq!(value["metadata"]["width"], 16);
+        let sessions = state.sessions.lock().unwrap();
+        let session = sessions.resolve(Some(&project_id)).unwrap();
+        let summary = session_summary(&sessions, &project_id).unwrap();
+        assert_eq!(session.revision, before_revision);
+        assert!(!summary.can_undo);
+        assert!(summary.can_redo);
+    }
+
+    #[test]
+    fn asset_remove_removes_metadata_only_entries() {
+        let state = test_state();
+        let asset_name = "textures/gui/stale_panel.png";
+        let project_id = {
+            let mut sessions = state.sessions.lock().unwrap();
+            let mut project = Project::new("Asset Metadata Remove", 176, 166, ModTarget::Forge);
+            project.asset_metadata.insert(
+                asset_name.to_string(),
+                AssetMetadata {
+                    width: Some(16),
+                    height: Some(16),
+                    nine_slice: None,
+                },
+            );
+            sessions.create_session(project)
+        };
+        let before_revision = {
+            let sessions = state.sessions.lock().unwrap();
+            sessions.resolve(Some(&project_id)).unwrap().revision
+        };
+
+        let response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "asset-remove-metadata",
+                "method": "tools/call",
+                "params": {
+                    "name": "asset_remove",
+                    "arguments": {
+                        "project_id": project_id,
+                        "name": asset_name,
+                    }
+                }
+            }),
+            &state,
+        );
+
+        assert!(response["error"].is_null(), "{response:#}");
+        let value = tool_text_value(&response);
+        assert_eq!(value["removed"], true);
+
+        let sessions = state.sessions.lock().unwrap();
+        let session = sessions.resolve(Some(&project_id)).unwrap();
+        assert!(session.project.asset_metadata.get(asset_name).is_none());
+        assert!(session.revision > before_revision);
+    }
+
+    #[test]
+    fn asset_import_rejects_explicit_names_that_cannot_round_trip() {
+        let state = test_state();
+        let png = crate::texture::generated_gui_panel(16, 16).unwrap();
+        let path = std::env::temp_dir()
+            .join(format!(
+                "gui-crafter-mcp-invalid-asset-import-{}.png",
+                uuid::Uuid::new_v4()
+            ))
+            .to_string_lossy()
+            .into_owned();
+        std::fs::write(&path, &png).unwrap();
+
+        for name in [
+            "custom.png",
+            "textures/custom",
+            "../textures/custom.png",
+            "/tmp/custom.png",
+            "textures/",
+            "textures\\custom.png",
+        ] {
+            let project_id = {
+                let mut sessions = state.sessions.lock().unwrap();
+                sessions.create_session(Project::new(
+                    "Invalid Asset Import",
+                    176,
+                    166,
+                    ModTarget::Forge,
+                ))
+            };
+            let response = response_for(
+                serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": format!("asset-import-{name}"),
+                    "method": "tools/call",
+                    "params": {
+                        "name": "asset_import",
+                        "arguments": {
+                            "project_id": project_id,
+                            "file_path": path,
+                            "name": name,
+                        }
+                    }
+                }),
+                &state,
+            );
+
+            assert!(
+                !response["error"].is_null(),
+                "expected asset name {name:?} to be rejected"
+            );
+        }
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn asset_import_with_explicit_name_survives_save_and_reopen() {
+        let state = test_state();
+        let project_id = {
+            let mut sessions = state.sessions.lock().unwrap();
+            sessions.create_session(Project::new("Asset Round Trip", 176, 166, ModTarget::Forge))
+        };
+        let asset_name = "textures/generated/custom_panel.png";
+        let png = crate::texture::generated_gui_panel(32, 24).unwrap();
+        let asset_path = std::env::temp_dir()
+            .join(format!(
+                "gui-crafter-mcp-round-trip-asset-{}.png",
+                uuid::Uuid::new_v4()
+            ))
+            .to_string_lossy()
+            .into_owned();
+        let project_path = std::env::temp_dir()
+            .join(format!(
+                "gui-crafter-mcp-round-trip-project-{}.mcgui",
+                uuid::Uuid::new_v4()
+            ))
+            .to_string_lossy()
+            .into_owned();
+        std::fs::write(&asset_path, &png).unwrap();
+
+        let import_response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "asset-import-round-trip",
+                "method": "tools/call",
+                "params": {
+                    "name": "asset_import",
+                    "arguments": {
+                        "project_id": project_id,
+                        "file_path": asset_path,
+                        "name": asset_name,
+                    }
+                }
+            }),
+            &state,
+        );
+        assert!(import_response["error"].is_null());
+
+        let save_response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "asset-import-save",
+                "method": "tools/call",
+                "params": {
+                    "name": "project_save_as",
+                    "arguments": {
+                        "project_id": project_id,
+                        "path": project_path,
+                    }
+                }
+            }),
+            &state,
+        );
+        assert!(save_response["error"].is_null());
+
+        let loaded = crate::format::load_from_mcgui(&project_path).unwrap();
+        let _ = std::fs::remove_file(&asset_path);
+        let _ = std::fs::remove_file(&project_path);
+
+        assert_eq!(loaded.texture_data.get(asset_name), Some(&png));
+    }
+
+    #[test]
+    fn asset_list_is_compact_and_element_list_includes_default_layer() {
+        let state = test_state();
+        let project_id = {
+            let mut sessions = state.sessions.lock().unwrap();
+            let project_id = sessions.create_session(Project::new(
+                "Asset List Compact",
+                176,
+                166,
+                ModTarget::Forge,
+            ));
+            let project = &mut sessions.resolve_mut(Some(&project_id)).unwrap().project;
+            let asset_name = "textures/generated/gui_panel.png";
+            project.assets.push(asset_name.to_string());
+            project.texture_data.insert(
+                asset_name.to_string(),
+                crate::texture::generated_gui_panel(16, 16).unwrap(),
+            );
+            project.elements.push(
+                parse_element_arg(&serde_json::json!({
+                    "id": "slot_without_layer",
+                    "type": "slot",
+                    "x": 8,
+                    "y": 18,
+                    "size": 18
+                }))
+                .unwrap(),
+            );
+            project_id
+        };
+
+        let asset_response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "asset-list",
+                "method": "tools/call",
+                "params": {
+                    "name": "asset_list",
+                    "arguments": {
+                        "project_id": project_id,
+                    }
+                }
+            }),
+            &state,
+        );
+        let element_response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "element-list",
+                "method": "tools/call",
+                "params": {
+                    "name": "element_list",
+                    "arguments": {
+                        "project_id": project_id,
+                    }
+                }
+            }),
+            &state,
+        );
+
+        assert!(asset_response["error"].is_null());
+        let asset_value = tool_text_value(&asset_response);
+        let asset = &asset_value["assets"].as_array().unwrap()[0];
+        assert_eq!(asset["name"], "textures/generated/gui_panel.png");
+        assert_eq!(asset["sha256"].as_str().unwrap().len(), 64);
+        assert!(!asset.as_object().unwrap().contains_key("data_url"));
+
+        assert!(element_response["error"].is_null());
+        let element_value = tool_text_value(&element_response);
+        let element = &element_value["elements"].as_array().unwrap()[0];
+        assert_eq!(element["layer"], "background");
     }
 
     #[test]
@@ -1557,6 +5183,1679 @@ mod tests {
         assert_eq!(active.project.elements[0].id, "slot_1");
         assert_eq!(active.revision, 1);
         assert!(active.project.is_dirty);
+    }
+
+    #[test]
+    fn attached_region_add_and_move_with_elements_mutate_live_session() {
+        let state = test_state();
+        let project_id = {
+            let mut sessions = state.sessions.lock().unwrap();
+            sessions.create_session(Project::new("Attached Regions", 176, 166, ModTarget::Forge))
+        };
+
+        let add_region_response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "attached-region-add",
+                "method": "tools/call",
+                "params": {
+                    "name": "attached_region_add",
+                    "arguments": {
+                        "project_id": project_id,
+                        "id": "returns_pocket",
+                        "anchor": "right",
+                        "x": 100,
+                        "y": 18,
+                        "width": 54,
+                        "height": 72,
+                        "state": "static",
+                        "kind": "returns_pocket",
+                        "semantic_group": "food_returns"
+                    }
+                }
+            }),
+            &state,
+        );
+        assert!(add_region_response["error"].is_null());
+
+        let add_element_response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "attached-region-child-add",
+                "method": "tools/call",
+                "params": {
+                    "name": "element_add",
+                    "arguments": {
+                        "project_id": project_id,
+                        "id": "returns_0",
+                        "type": "slot",
+                        "x": 108,
+                        "y": 26,
+                        "size": 18,
+                        "attached_region": "returns_pocket"
+                    }
+                }
+            }),
+            &state,
+        );
+        assert!(add_element_response["error"].is_null());
+
+        let move_response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "attached-region-move",
+                "method": "tools/call",
+                "params": {
+                    "name": "attached_region_move_with_elements",
+                    "arguments": {
+                        "project_id": project_id,
+                        "id": "returns_pocket",
+                        "x": 110,
+                        "y": 28
+                    }
+                }
+            }),
+            &state,
+        );
+        assert!(move_response["error"].is_null());
+
+        let sessions = state.sessions.lock().unwrap();
+        let active = sessions.active_session().unwrap();
+        let region = active
+            .project
+            .find_attached_region("returns_pocket")
+            .unwrap();
+        let child = active.project.find_element("returns_0").unwrap();
+        assert_eq!(region.x, 110);
+        assert_eq!(child.x, 118);
+    }
+
+    #[test]
+    fn attached_region_list_does_not_change_revision() {
+        let state = test_state();
+        let project_id = attached_region_project(&state);
+
+        let response = attached_region_tool_call(
+            &state,
+            "attached_region_list",
+            &project_id,
+            serde_json::json!({}),
+        );
+
+        assert!(response["error"].is_null());
+        assert_eq!(revision_for(&state, &project_id), 0);
+    }
+
+    #[test]
+    fn attached_region_no_op_update_and_move_do_not_change_revision() {
+        let state = test_state();
+        let project_id = attached_region_project(&state);
+        let before = mutation_snapshot_for(&state, &project_id);
+
+        let update_response = attached_region_tool_call(
+            &state,
+            "attached_region_update",
+            &project_id,
+            serde_json::json!({
+                "id": "returns_pocket",
+                "changes": {
+                    "x": 100,
+                    "y": 18,
+                    "visible": true
+                }
+            }),
+        );
+        let move_response = attached_region_tool_call(
+            &state,
+            "attached_region_move_with_elements",
+            &project_id,
+            serde_json::json!({
+                "id": "returns_pocket",
+                "x": 100,
+                "y": 18
+            }),
+        );
+
+        assert!(update_response["error"].is_null());
+        assert!(move_response["error"].is_null());
+        assert_eq!(revision_for(&state, &project_id), 0);
+        assert_eq!(mutation_snapshot_for(&state, &project_id), before);
+    }
+
+    #[test]
+    fn attached_region_missing_remove_returns_false_without_revision_change() {
+        let state = test_state();
+        let project_id = attached_region_project(&state);
+        let before = mutation_snapshot_for(&state, &project_id);
+
+        let response = attached_region_tool_call(
+            &state,
+            "attached_region_remove",
+            &project_id,
+            serde_json::json!({ "id": "missing_region" }),
+        );
+
+        assert!(response["error"].is_null());
+        let value = tool_text_value(&response);
+        assert_eq!(value["removed"], false);
+        assert_eq!(revision_for(&state, &project_id), 0);
+        assert_eq!(mutation_snapshot_for(&state, &project_id), before);
+    }
+
+    #[test]
+    fn attached_region_invalid_updates_return_errors_without_mutation() {
+        let state = test_state();
+        let project_id = attached_region_project(&state);
+
+        let id_change_response = attached_region_tool_call(
+            &state,
+            "attached_region_update",
+            &project_id,
+            serde_json::json!({
+                "id": "returns_pocket",
+                "changes": { "id": "other_region" }
+            }),
+        );
+        let null_required_response = attached_region_tool_call(
+            &state,
+            "attached_region_update",
+            &project_id,
+            serde_json::json!({
+                "id": "returns_pocket",
+                "changes": { "width": null }
+            }),
+        );
+        let bad_enum_response = attached_region_tool_call(
+            &state,
+            "attached_region_update",
+            &project_id,
+            serde_json::json!({
+                "id": "returns_pocket",
+                "changes": { "state": "animated" }
+            }),
+        );
+
+        assert_eq!(
+            id_change_response["error"]["message"],
+            "Attached region id cannot be changed"
+        );
+        assert!(null_required_response["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("Invalid attached region update"));
+        assert!(bad_enum_response["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("Invalid attached region update"));
+        let sessions = state.sessions.lock().unwrap();
+        let active = sessions.resolve(Some(&project_id)).unwrap();
+        let region = active
+            .project
+            .find_attached_region("returns_pocket")
+            .unwrap();
+        assert_eq!(region.width, 54);
+        assert_eq!(region.state, crate::project::AttachedRegionState::Static);
+        assert_eq!(active.revision, 0);
+    }
+
+    #[test]
+    fn attached_region_move_overflow_errors_before_mutation() {
+        let state = test_state();
+        let project_id = attached_region_project(&state);
+        {
+            let mut sessions = state.sessions.lock().unwrap();
+            sessions
+                .resolve_mut(Some(&project_id))
+                .unwrap()
+                .project
+                .elements
+                .push(
+                    parse_element_arg(&serde_json::json!({
+                        "id": "returns_0",
+                        "type": "slot",
+                        "x": i32::MAX,
+                        "y": 26,
+                        "size": 18,
+                        "attached_region": "returns_pocket"
+                    }))
+                    .unwrap(),
+                );
+        }
+
+        let response = attached_region_tool_call(
+            &state,
+            "attached_region_move_with_elements",
+            &project_id,
+            serde_json::json!({
+                "id": "returns_pocket",
+                "x": 101,
+                "y": 18
+            }),
+        );
+
+        assert_eq!(
+            response["error"]["message"],
+            "Attached region child move overflow"
+        );
+        let sessions = state.sessions.lock().unwrap();
+        let active = sessions.resolve(Some(&project_id)).unwrap();
+        let region = active
+            .project
+            .find_attached_region("returns_pocket")
+            .unwrap();
+        let child = active.project.find_element("returns_0").unwrap();
+        assert_eq!(region.x, 100);
+        assert_eq!(child.x, i32::MAX);
+        assert_eq!(active.revision, 0);
+    }
+
+    #[test]
+    fn attached_region_move_refreshes_group_position_for_attached_children() {
+        let state = test_state();
+        let project_id = attached_region_project(&state);
+        {
+            let mut sessions = state.sessions.lock().unwrap();
+            let project = &mut sessions.resolve_mut(Some(&project_id)).unwrap().project;
+            project.elements.push(
+                parse_element_arg(&serde_json::json!({
+                    "id": "returns_0",
+                    "type": "slot",
+                    "x": 108,
+                    "y": 26,
+                    "size": 18,
+                    "attached_region": "returns_pocket"
+                }))
+                .unwrap(),
+            );
+            project.elements.push(
+                parse_element_arg(&serde_json::json!({
+                    "id": "returns_1",
+                    "type": "slot",
+                    "x": 126,
+                    "y": 26,
+                    "size": 18,
+                    "attached_region": "returns_pocket"
+                }))
+                .unwrap(),
+            );
+            project.groups.push(crate::project::Group {
+                id: "returns_group".to_string(),
+                x: 108,
+                y: 26,
+                elements: vec!["returns_0".to_string(), "returns_1".to_string()],
+            });
+        }
+
+        let response = attached_region_tool_call(
+            &state,
+            "attached_region_move_with_elements",
+            &project_id,
+            serde_json::json!({
+                "id": "returns_pocket",
+                "x": 110,
+                "y": 30
+            }),
+        );
+
+        assert!(response["error"].is_null());
+        let sessions = state.sessions.lock().unwrap();
+        let active = sessions.resolve(Some(&project_id)).unwrap();
+        let group = active
+            .project
+            .groups
+            .iter()
+            .find(|group| group.id == "returns_group")
+            .unwrap();
+        assert_eq!(group.x, 118);
+        assert_eq!(group.y, 38);
+        assert_eq!(active.revision, 1);
+    }
+
+    #[test]
+    fn element_add_many_is_atomic_for_duplicate_ids() {
+        let state = test_state();
+        {
+            let mut sessions = state.sessions.lock().unwrap();
+            sessions.create_session(Project::new("Bulk Add", 176, 166, ModTarget::Forge));
+        }
+
+        let response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "element-add-many",
+                "method": "tools/call",
+                "params": {
+                    "name": "element_add_many",
+                    "arguments": {
+                        "elements": [
+                            {
+                                "id": "slot_a",
+                                "type": "slot",
+                                "x": 8,
+                                "y": 18,
+                                "size": 18
+                            },
+                            {
+                                "id": "slot_a",
+                                "type": "slot",
+                                "x": 26,
+                                "y": 18,
+                                "size": 18
+                            }
+                        ]
+                    }
+                }
+            }),
+            &state,
+        );
+
+        assert!(response["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("Duplicate element id"));
+        let sessions = state.sessions.lock().unwrap();
+        let active = sessions.active_session().unwrap();
+        assert!(active.project.elements.is_empty());
+        assert_eq!(active.revision, 0);
+    }
+
+    #[test]
+    fn element_add_many_rejects_existing_ids_before_mutating() {
+        let state = test_state();
+        let existing = parse_element_arg(&serde_json::json!({
+            "id": "slot_existing",
+            "type": "slot",
+            "x": 8,
+            "y": 18,
+            "size": 18
+        }))
+        .unwrap();
+        let original_elements = vec![existing.clone()];
+        {
+            let mut sessions = state.sessions.lock().unwrap();
+            let project_id =
+                sessions.create_session(Project::new("Bulk Existing", 176, 166, ModTarget::Forge));
+            sessions
+                .resolve_mut(Some(&project_id))
+                .unwrap()
+                .project
+                .elements = original_elements.clone();
+        }
+
+        let response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "element-add-many-existing",
+                "method": "tools/call",
+                "params": {
+                    "name": "element_add_many",
+                    "arguments": {
+                        "elements": [
+                            {
+                                "id": "slot_existing",
+                                "type": "slot",
+                                "x": 26,
+                                "y": 18,
+                                "size": 18
+                            }
+                        ]
+                    }
+                }
+            }),
+            &state,
+        );
+
+        assert!(response["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("Element already exists: slot_existing"));
+        let sessions = state.sessions.lock().unwrap();
+        let active = sessions.active_session().unwrap();
+        assert_eq!(active.project.elements, original_elements);
+        assert_eq!(active.revision, 0);
+    }
+
+    #[test]
+    fn element_add_many_rejects_empty_array_without_history() {
+        let state = test_state();
+        {
+            let mut sessions = state.sessions.lock().unwrap();
+            sessions.create_session(Project::new("Bulk Empty", 176, 166, ModTarget::Forge));
+        }
+
+        let response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "element-add-many-empty",
+                "method": "tools/call",
+                "params": {
+                    "name": "element_add_many",
+                    "arguments": {
+                        "elements": []
+                    }
+                }
+            }),
+            &state,
+        );
+
+        assert_eq!(
+            response["error"]["message"],
+            "elements array cannot be empty"
+        );
+        let sessions = state.sessions.lock().unwrap();
+        let active = sessions.active_session().unwrap();
+        assert!(active.project.elements.is_empty());
+        assert_eq!(active.revision, 0);
+    }
+
+    #[test]
+    fn element_add_many_response_includes_effective_layer() {
+        let state = test_state();
+        {
+            let mut sessions = state.sessions.lock().unwrap();
+            sessions.create_session(Project::new(
+                "Bulk Effective Layer",
+                176,
+                166,
+                ModTarget::Forge,
+            ));
+        }
+
+        let response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "bulk",
+                "method": "tools/call",
+                "params": {
+                    "name": "element_add_many",
+                    "arguments": {
+                        "elements": [
+                            { "id": "slot_a", "type": "slot", "x": 8, "y": 8, "size": 18 }
+                        ]
+                    }
+                }
+            }),
+            &state,
+        );
+
+        let text = response["result"]["content"][0]["text"].as_str().unwrap();
+        let value: serde_json::Value = serde_json::from_str(text).unwrap();
+        assert_eq!(value["elements"][0]["layer"], "background");
+    }
+
+    #[test]
+    fn element_update_many_updates_multiple_elements_in_one_revision() {
+        let state = test_state();
+        let project_id = {
+            let mut sessions = state.sessions.lock().unwrap();
+            let mut project = Project::new("Update Many", 176, 166, ModTarget::Forge);
+            for (id, x) in [("a", 8), ("b", 26)] {
+                project.elements.push(
+                    parse_element_arg(&serde_json::json!({
+                        "id": id,
+                        "type": "slot",
+                        "x": x,
+                        "y": 18,
+                        "size": 18
+                    }))
+                    .unwrap(),
+                );
+            }
+            sessions.create_session(project)
+        };
+
+        let response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "update-many",
+                "method": "tools/call",
+                "params": {
+                    "name": "element_update_many",
+                    "arguments": {
+                        "project_id": project_id,
+                        "updates": [
+                            { "id": "a", "changes": { "x": 10, "y": 20 } },
+                            { "id": "b", "changes": { "x": 30, "y": 40, "slot_index": 7 } }
+                        ]
+                    }
+                }
+            }),
+            &state,
+        );
+
+        assert!(response["error"].is_null(), "{response:#}");
+        let value = tool_text_value(&response);
+        assert_eq!(value["project_id"], project_id);
+        assert_eq!(value["updated_count"], 2);
+        assert_eq!(value["results"].as_array().unwrap().len(), 2);
+
+        let sessions = state.sessions.lock().unwrap();
+        let session = sessions.resolve(Some(&project_id)).unwrap();
+        assert_eq!(session.project.find_element("a").unwrap().x, 10);
+        assert_eq!(
+            session.project.find_element("b").unwrap().slot_index,
+            Some(7)
+        );
+        assert_eq!(session.revision, 1);
+    }
+
+    #[test]
+    fn element_update_many_counts_only_changed_elements() {
+        let state = test_state();
+        let project_id = {
+            let mut sessions = state.sessions.lock().unwrap();
+            let mut project = Project::new("Update Many Count", 176, 166, ModTarget::Forge);
+            for (id, x) in [("a", 8), ("b", 26)] {
+                project.elements.push(
+                    parse_element_arg(&serde_json::json!({
+                        "id": id,
+                        "type": "slot",
+                        "x": x,
+                        "y": 18,
+                        "size": 18
+                    }))
+                    .unwrap(),
+                );
+            }
+            sessions.create_session(project)
+        };
+
+        let response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "update-many-count",
+                "method": "tools/call",
+                "params": {
+                    "name": "element_update_many",
+                    "arguments": {
+                        "project_id": project_id,
+                        "updates": [
+                            { "id": "a", "changes": { "x": 8, "y": 18 } },
+                            { "id": "b", "changes": { "x": 30, "y": 40 } }
+                        ]
+                    }
+                }
+            }),
+            &state,
+        );
+
+        assert!(response["error"].is_null(), "{response:#}");
+        let value = tool_text_value(&response);
+        assert_eq!(value["updated_count"], 1);
+        assert_eq!(value["results"].as_array().unwrap().len(), 2);
+
+        let sessions = state.sessions.lock().unwrap();
+        let session = sessions.resolve(Some(&project_id)).unwrap();
+        assert_eq!(session.project.find_element("a").unwrap().x, 8);
+        assert_eq!(session.project.find_element("b").unwrap().x, 30);
+        assert_eq!(session.revision, 1);
+    }
+
+    #[test]
+    fn element_update_many_strict_failure_is_atomic() {
+        let state = test_state();
+        let project_id = {
+            let mut sessions = state.sessions.lock().unwrap();
+            let mut project = Project::new("Update Many Atomic", 176, 166, ModTarget::Forge);
+            project.elements.push(
+                parse_element_arg(&serde_json::json!({
+                    "id": "a",
+                    "type": "slot",
+                    "x": 8,
+                    "y": 18,
+                    "size": 18
+                }))
+                .unwrap(),
+            );
+            sessions.create_session(project)
+        };
+
+        let response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "update-many-bad",
+                "method": "tools/call",
+                "params": {
+                    "name": "element_update_many",
+                    "arguments": {
+                        "project_id": project_id,
+                        "updates": [
+                            { "id": "a", "changes": { "x": 10 } },
+                            { "id": "missing", "changes": { "x": 30 } }
+                        ]
+                    }
+                }
+            }),
+            &state,
+        );
+
+        assert!(response["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("Element not found: missing"));
+        let sessions = state.sessions.lock().unwrap();
+        let session = sessions.resolve(Some(&project_id)).unwrap();
+        assert_eq!(session.project.find_element("a").unwrap().x, 8);
+        assert_eq!(session.revision, 0);
+    }
+
+    #[test]
+    fn element_update_many_no_op_does_not_change_revision() {
+        let state = test_state();
+        let project_id = {
+            let mut sessions = state.sessions.lock().unwrap();
+            let mut project = Project::new("Update Many Noop", 176, 166, ModTarget::Forge);
+            project.elements.push(
+                parse_element_arg(&serde_json::json!({
+                    "id": "a",
+                    "type": "slot",
+                    "x": 8,
+                    "y": 18,
+                    "size": 18
+                }))
+                .unwrap(),
+            );
+            sessions.create_session(project)
+        };
+        let before = mutation_snapshot_for(&state, &project_id);
+
+        let response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "update-many-noop",
+                "method": "tools/call",
+                "params": {
+                    "name": "element_update_many",
+                    "arguments": {
+                        "project_id": project_id,
+                        "updates": [
+                            { "id": "a", "changes": { "x": 8, "y": 18 } }
+                        ]
+                    }
+                }
+            }),
+            &state,
+        );
+
+        assert!(response["error"].is_null(), "{response:#}");
+        assert_eq!(mutation_snapshot_for(&state, &project_id), before);
+    }
+
+    #[test]
+    fn element_update_many_rejects_duplicate_ids_without_mutation() {
+        let state = test_state();
+        let project_id = {
+            let mut sessions = state.sessions.lock().unwrap();
+            let mut project = Project::new("Update Many Duplicate", 176, 166, ModTarget::Forge);
+            project.elements.push(
+                parse_element_arg(&serde_json::json!({
+                    "id": "a",
+                    "type": "slot",
+                    "x": 8,
+                    "y": 18,
+                    "size": 18
+                }))
+                .unwrap(),
+            );
+            sessions.create_session(project)
+        };
+
+        let response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "update-many-duplicate",
+                "method": "tools/call",
+                "params": {
+                    "name": "element_update_many",
+                    "arguments": {
+                        "project_id": project_id,
+                        "updates": [
+                            { "id": "a", "changes": { "x": 10 } },
+                            { "id": "a", "changes": { "y": 20 } }
+                        ]
+                    }
+                }
+            }),
+            &state,
+        );
+
+        assert!(response["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("Duplicate element update id: a"));
+        let sessions = state.sessions.lock().unwrap();
+        let session = sessions.resolve(Some(&project_id)).unwrap();
+        assert_eq!(session.project.find_element("a").unwrap().x, 8);
+        assert_eq!(session.revision, 0);
+    }
+
+    #[test]
+    fn project_screenshot_writes_compact_png_metadata() {
+        let state = test_state();
+        let project_id = {
+            let mut sessions = state.sessions.lock().unwrap();
+            let mut project = Project::new("Screenshot", 64, 32, ModTarget::Forge);
+            project.elements.push(
+                parse_element_arg(&serde_json::json!({
+                    "id": "slot_a",
+                    "type": "slot",
+                    "x": 8,
+                    "y": 8,
+                    "size": 18
+                }))
+                .unwrap(),
+            );
+            sessions.create_session(project)
+        };
+        let output_path = TempPath::new("mc-gui-crafter-test", "png");
+        let output_path_string = output_path.path_string();
+
+        let response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "screenshot",
+                "method": "tools/call",
+                "params": {
+                    "name": "project_screenshot",
+                    "arguments": {
+                        "project_id": project_id,
+                        "output_path": output_path_string,
+                    }
+                }
+            }),
+            &state,
+        );
+
+        assert!(response["error"].is_null(), "{response:#}");
+        let text = response["result"]["content"][0]["text"].as_str().unwrap();
+        let value: serde_json::Value = serde_json::from_str(text).unwrap();
+        assert_eq!(value["width"], 64);
+        assert_eq!(value["height"], 32);
+        assert!(value["bytes"].as_u64().unwrap() > 0);
+        assert_eq!(value["sha256"].as_str().unwrap().len(), 64);
+        assert!(value.get("data_url").is_none());
+        assert!(output_path.path().exists());
+        assert_eq!(value["path"], output_path.path_string());
+    }
+
+    #[test]
+    fn project_render_writes_compact_png_metadata() {
+        let state = test_state();
+        let project_id = {
+            let mut sessions = state.sessions.lock().unwrap();
+            let mut project = Project::new("Render", 64, 32, ModTarget::Forge);
+            project.elements.push(
+                parse_element_arg(&serde_json::json!({
+                    "id": "slot_a",
+                    "type": "slot",
+                    "x": 8,
+                    "y": 8,
+                    "size": 18
+                }))
+                .unwrap(),
+            );
+            sessions.create_session(project)
+        };
+        let output_path = TempPath::new("mc-gui-crafter-render-test", "png");
+        let output_path_string = output_path.path_string();
+
+        let response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "render",
+                "method": "tools/call",
+                "params": {
+                    "name": "project_render",
+                    "arguments": {
+                        "project_id": project_id,
+                        "output_path": output_path_string
+                    }
+                }
+            }),
+            &state,
+        );
+
+        assert!(response["error"].is_null(), "{response:#}");
+        let value = tool_text_value(&response);
+        assert_eq!(value["project_id"], project_id);
+        assert_eq!(value["width"], 64);
+        assert_eq!(value["height"], 32);
+        assert!(value["bytes"].as_u64().unwrap() > 0);
+        assert_eq!(value["sha256"].as_str().unwrap().len(), 64);
+        assert!(value.get("data_url").is_none());
+        assert_eq!(value["path"], output_path.path_string());
+        assert!(output_path.path().exists());
+    }
+
+    #[test]
+    fn project_screenshot_includes_data_url_only_when_requested() {
+        let state = test_state();
+        {
+            let mut sessions = state.sessions.lock().unwrap();
+            sessions.create_session(Project::new(
+                "Screenshot Data URL",
+                32,
+                24,
+                ModTarget::Forge,
+            ));
+        }
+
+        let response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "screenshot",
+                "method": "tools/call",
+                "params": {
+                    "name": "project_screenshot",
+                    "arguments": { "include_data_url": true }
+                }
+            }),
+            &state,
+        );
+
+        assert!(response["error"].is_null(), "{response:#}");
+        let text = response["result"]["content"][0]["text"].as_str().unwrap();
+        let value: serde_json::Value = serde_json::from_str(text).unwrap();
+        let _written_path = TempPath::from_path(PathBuf::from(value["path"].as_str().unwrap()));
+        assert!(value["data_url"]
+            .as_str()
+            .unwrap()
+            .starts_with("data:image/png;base64,"));
+    }
+
+    #[test]
+    fn project_screenshot_accepts_png_extension_case_insensitively() {
+        let state = test_state();
+        {
+            let mut sessions = state.sessions.lock().unwrap();
+            sessions.create_session(Project::new(
+                "Screenshot PNG Extension",
+                32,
+                24,
+                ModTarget::Forge,
+            ));
+        }
+        let output_path = TempPath::new("mc-gui-crafter-test", "PNG");
+        let output_path_string = output_path.path_string();
+
+        let response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "screenshot",
+                "method": "tools/call",
+                "params": {
+                    "name": "project_screenshot",
+                    "arguments": { "output_path": output_path_string }
+                }
+            }),
+            &state,
+        );
+
+        assert!(response["error"].is_null(), "{response:#}");
+        let value = tool_text_value(&response);
+        assert_eq!(value["path"], output_path.path_string());
+        assert!(output_path.path().exists());
+    }
+
+    #[test]
+    fn project_screenshot_rejects_missing_or_non_png_extension() {
+        let state = test_state();
+        {
+            let mut sessions = state.sessions.lock().unwrap();
+            sessions.create_session(Project::new(
+                "Screenshot Bad Extension",
+                32,
+                24,
+                ModTarget::Forge,
+            ));
+        }
+
+        for output_path in [
+            TempPath::new("mc-gui-crafter-test", ""),
+            TempPath::new("mc-gui-crafter-test", "jpg"),
+        ] {
+            let output_path_string = output_path.path_string();
+            let response = response_for(
+                serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": "screenshot",
+                    "method": "tools/call",
+                    "params": {
+                        "name": "project_screenshot",
+                        "arguments": { "output_path": output_path_string }
+                    }
+                }),
+                &state,
+            );
+
+            assert!(!response["error"].is_null(), "{response:#}");
+            assert!(!output_path.path().exists());
+        }
+    }
+
+    #[test]
+    fn slot_grid_add_creates_grouped_player_inventory_grid() {
+        let state = test_state();
+        {
+            let mut sessions = state.sessions.lock().unwrap();
+            sessions.create_session(Project::new("Slot Grid", 176, 166, ModTarget::Forge));
+        }
+
+        let response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "slot-grid-add",
+                "method": "tools/call",
+                "params": {
+                    "name": "slot_grid_add",
+                    "arguments": {
+                        "id_prefix": "player_inv",
+                        "x": 8,
+                        "y": 84,
+                        "columns": 9,
+                        "rows": 3,
+                        "slot_role": "player_inventory",
+                        "inventory_group": "player_inventory",
+                        "slot_index_start": 9,
+                        "group_id": "player_inventory_grid",
+                        "semantic_group_kind": "player_inventory",
+                        "slot_count": 27
+                    }
+                }
+            }),
+            &state,
+        );
+
+        assert!(response["error"].is_null());
+        let content = response["result"]["content"][0]["text"].as_str().unwrap();
+        let value: serde_json::Value = serde_json::from_str(content).unwrap();
+        assert_eq!(value["created_count"], 27);
+        assert_eq!(value["elements"].as_array().unwrap().len(), 27);
+        assert_eq!(value["group"]["id"], "player_inventory_grid");
+        assert_eq!(value["semantic_group"]["id"], "player_inventory");
+
+        let sessions = state.sessions.lock().unwrap();
+        let active = sessions.active_session().unwrap();
+        assert_eq!(active.project.elements.len(), 27);
+        assert_eq!(active.project.elements[0].id, "player_inv_0");
+        assert_eq!(active.project.elements[0].x, 8);
+        assert_eq!(active.project.elements[0].y, 84);
+        assert_eq!(active.project.elements[0].slot_index, Some(9));
+        assert_eq!(active.project.elements[1].x, 26);
+        assert_eq!(active.project.elements[9].x, 8);
+        assert_eq!(active.project.elements[9].y, 102);
+        assert_eq!(active.project.elements[26].slot_index, Some(35));
+        assert_eq!(active.project.groups.len(), 1);
+        assert_eq!(active.project.groups[0].id, "player_inventory_grid");
+        assert_eq!(active.project.groups[0].elements.len(), 27);
+        assert_eq!(active.project.groups[0].elements[0], "player_inv_0");
+        assert_eq!(active.project.semantic_groups.len(), 1);
+        assert_eq!(active.project.semantic_groups[0].id, "player_inventory");
+        assert_eq!(
+            active.project.semantic_groups[0].kind,
+            crate::project::SemanticGroupKind::PlayerInventory
+        );
+        assert_eq!(active.project.semantic_groups[0].slot_count, Some(27));
+    }
+
+    #[test]
+    fn slot_grid_add_uses_default_slot_geometry_and_indices() {
+        let state = test_state();
+        {
+            let mut sessions = state.sessions.lock().unwrap();
+            sessions.create_session(Project::new(
+                "Slot Grid Defaults",
+                176,
+                166,
+                ModTarget::Forge,
+            ));
+        }
+
+        let response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "slot-grid-defaults",
+                "method": "tools/call",
+                "params": {
+                    "name": "slot_grid_add",
+                    "arguments": {
+                        "id_prefix": "default_slot",
+                        "x": 4,
+                        "y": 5,
+                        "columns": 2,
+                        "rows": 2
+                    }
+                }
+            }),
+            &state,
+        );
+
+        assert!(response["error"].is_null());
+        let sessions = state.sessions.lock().unwrap();
+        let active = sessions.active_session().unwrap();
+        assert_eq!(active.project.elements.len(), 4);
+        assert_eq!(active.project.elements[0].size, Some(18));
+        assert_eq!(active.project.elements[0].slot_index, Some(0));
+        assert_eq!(active.project.elements[1].x, 22);
+        assert_eq!(active.project.elements[1].y, 5);
+        assert_eq!(active.project.elements[2].x, 4);
+        assert_eq!(active.project.elements[2].y, 23);
+        assert_eq!(active.project.elements[3].slot_index, Some(3));
+        assert_eq!(active.revision, 1);
+    }
+
+    #[test]
+    fn slot_grid_add_rejects_element_id_conflicts_before_mutating() {
+        let state = test_state();
+        let existing = parse_element_arg(&serde_json::json!({
+            "id": "grid_0",
+            "type": "slot",
+            "x": 8,
+            "y": 18,
+            "size": 18
+        }))
+        .unwrap();
+        let original_elements = vec![existing.clone()];
+        {
+            let mut sessions = state.sessions.lock().unwrap();
+            let project_id = sessions.create_session(Project::new(
+                "Slot Grid Element Conflict",
+                176,
+                166,
+                ModTarget::Forge,
+            ));
+            sessions
+                .resolve_mut(Some(&project_id))
+                .unwrap()
+                .project
+                .elements = original_elements.clone();
+        }
+
+        let response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "slot-grid-element-conflict",
+                "method": "tools/call",
+                "params": {
+                    "name": "slot_grid_add",
+                    "arguments": {
+                        "id_prefix": "grid",
+                        "x": 8,
+                        "y": 18,
+                        "columns": 1,
+                        "rows": 1
+                    }
+                }
+            }),
+            &state,
+        );
+
+        assert!(response["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("Element already exists: grid_0"));
+        let sessions = state.sessions.lock().unwrap();
+        let active = sessions.active_session().unwrap();
+        assert_eq!(active.project.elements, original_elements);
+        assert!(active.project.groups.is_empty());
+        assert!(active.project.semantic_groups.is_empty());
+        assert_eq!(active.revision, 0);
+    }
+
+    #[test]
+    fn slot_grid_add_rejects_group_id_conflicts_before_mutating() {
+        let state = test_state();
+        let original_groups = vec![crate::project::Group {
+            id: "existing_group".to_string(),
+            x: 1,
+            y: 2,
+            elements: vec!["other_a".to_string(), "other_b".to_string()],
+        }];
+        {
+            let mut sessions = state.sessions.lock().unwrap();
+            let project_id = sessions.create_session(Project::new(
+                "Slot Grid Group Conflict",
+                176,
+                166,
+                ModTarget::Forge,
+            ));
+            sessions
+                .resolve_mut(Some(&project_id))
+                .unwrap()
+                .project
+                .groups = original_groups.clone();
+        }
+
+        let response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "slot-grid-group-conflict",
+                "method": "tools/call",
+                "params": {
+                    "name": "slot_grid_add",
+                    "arguments": {
+                        "id_prefix": "grid",
+                        "x": 8,
+                        "y": 18,
+                        "columns": 2,
+                        "rows": 1,
+                        "group_id": "existing_group"
+                    }
+                }
+            }),
+            &state,
+        );
+
+        assert_eq!(response["error"]["message"], "Group already exists");
+        let sessions = state.sessions.lock().unwrap();
+        let active = sessions.active_session().unwrap();
+        assert!(active.project.elements.is_empty());
+        assert_eq!(active.project.groups, original_groups);
+        assert!(active.project.semantic_groups.is_empty());
+        assert_eq!(active.revision, 0);
+    }
+
+    #[test]
+    fn slot_grid_add_skips_semantic_group_without_inventory_group() {
+        let state = test_state();
+        {
+            let mut sessions = state.sessions.lock().unwrap();
+            sessions.create_session(Project::new(
+                "Slot Grid No Semantic Group",
+                176,
+                166,
+                ModTarget::Forge,
+            ));
+        }
+
+        let response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "slot-grid-no-semantic-without-inventory",
+                "method": "tools/call",
+                "params": {
+                    "name": "slot_grid_add",
+                    "arguments": {
+                        "id_prefix": "player_inv",
+                        "x": 8,
+                        "y": 84,
+                        "columns": 2,
+                        "rows": 1,
+                        "group_id": "player_inventory_grid",
+                        "semantic_group_kind": "player_inventory",
+                        "slot_count": 2
+                    }
+                }
+            }),
+            &state,
+        );
+
+        assert!(response["error"].is_null());
+        let content = response["result"]["content"][0]["text"].as_str().unwrap();
+        let value: serde_json::Value = serde_json::from_str(content).unwrap();
+        assert!(value["semantic_group"].is_null());
+        let sessions = state.sessions.lock().unwrap();
+        let active = sessions.active_session().unwrap();
+        assert!(active.project.semantic_groups.is_empty());
+        assert_eq!(active.project.groups.len(), 1);
+        assert_eq!(active.revision, 1);
+    }
+
+    #[test]
+    fn slot_grid_add_replaces_existing_semantic_group_with_same_id() {
+        let state = test_state();
+        let original_group = SemanticGroup {
+            id: "player_inventory".to_string(),
+            kind: crate::project::SemanticGroupKind::Hotbar,
+            columns: Some(9),
+            visible_rows: Some(1),
+            total_rows: Some(1),
+            slot_count: Some(9),
+            member_ids: Vec::new(),
+            data_source: Some("old".to_string()),
+            scroll_binding: None,
+            dynamic_height: false,
+        };
+        {
+            let mut sessions = state.sessions.lock().unwrap();
+            let project_id = sessions.create_session(Project::new(
+                "Slot Grid Semantic Replacement",
+                176,
+                166,
+                ModTarget::Forge,
+            ));
+            sessions
+                .resolve_mut(Some(&project_id))
+                .unwrap()
+                .project
+                .semantic_groups = vec![original_group];
+        }
+
+        let response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "slot-grid-semantic-replace",
+                "method": "tools/call",
+                "params": {
+                    "name": "slot_grid_add",
+                    "arguments": {
+                        "id_prefix": "player_inv",
+                        "x": 8,
+                        "y": 84,
+                        "columns": 2,
+                        "rows": 1,
+                        "inventory_group": "player_inventory",
+                        "semantic_group_kind": "player_inventory",
+                        "slot_count": 2
+                    }
+                }
+            }),
+            &state,
+        );
+
+        assert!(response["error"].is_null());
+        let sessions = state.sessions.lock().unwrap();
+        let active = sessions.active_session().unwrap();
+        assert_eq!(active.project.semantic_groups.len(), 1);
+        assert_eq!(active.project.semantic_groups[0].id, "player_inventory");
+        assert_eq!(
+            active.project.semantic_groups[0].kind,
+            crate::project::SemanticGroupKind::PlayerInventory
+        );
+        assert_eq!(active.project.semantic_groups[0].columns, Some(2));
+        assert_eq!(active.project.semantic_groups[0].slot_count, Some(2));
+        assert_eq!(
+            active.project.semantic_groups[0].data_source,
+            Some("player_inventory".to_string())
+        );
+        assert_eq!(active.revision, 1);
+    }
+
+    #[test]
+    fn slot_grid_add_rejects_out_of_range_integer_inputs_before_mutating() {
+        let state = test_state();
+        {
+            let mut sessions = state.sessions.lock().unwrap();
+            sessions.create_session(Project::new(
+                "Slot Grid Integer Ranges",
+                176,
+                166,
+                ModTarget::Forge,
+            ));
+        }
+
+        let x_response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "slot-grid-x-range",
+                "method": "tools/call",
+                "params": {
+                    "name": "slot_grid_add",
+                    "arguments": {
+                        "id_prefix": "grid",
+                        "x": 2147483648i64,
+                        "y": 18,
+                        "columns": 1,
+                        "rows": 1
+                    }
+                }
+            }),
+            &state,
+        );
+        let columns_response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "slot-grid-columns-range",
+                "method": "tools/call",
+                "params": {
+                    "name": "slot_grid_add",
+                    "arguments": {
+                        "id_prefix": "grid",
+                        "x": 8,
+                        "y": 18,
+                        "columns": 4294967297u64,
+                        "rows": 1
+                    }
+                }
+            }),
+            &state,
+        );
+        let slot_size_response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "slot-grid-slot-size-range",
+                "method": "tools/call",
+                "params": {
+                    "name": "slot_grid_add",
+                    "arguments": {
+                        "id_prefix": "grid",
+                        "x": 8,
+                        "y": 18,
+                        "columns": 1,
+                        "rows": 1,
+                        "slot_size": 4294967297u64
+                    }
+                }
+            }),
+            &state,
+        );
+
+        assert_eq!(x_response["error"]["message"], "x is out of range");
+        assert_eq!(
+            columns_response["error"]["message"],
+            "columns is out of range"
+        );
+        assert_eq!(
+            slot_size_response["error"]["message"],
+            "slot_size is out of range"
+        );
+        let sessions = state.sessions.lock().unwrap();
+        let active = sessions.active_session().unwrap();
+        assert!(active.project.elements.is_empty());
+        assert!(active.project.groups.is_empty());
+        assert_eq!(active.revision, 0);
+    }
+
+    #[test]
+    fn slot_grid_add_rejects_coordinate_overflow_before_mutating() {
+        let state = test_state();
+        {
+            let mut sessions = state.sessions.lock().unwrap();
+            sessions.create_session(Project::new(
+                "Slot Grid Coordinate Overflow",
+                176,
+                166,
+                ModTarget::Forge,
+            ));
+        }
+
+        let response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "slot-grid-coordinate-overflow",
+                "method": "tools/call",
+                "params": {
+                    "name": "slot_grid_add",
+                    "arguments": {
+                        "id_prefix": "grid",
+                        "x": i32::MAX,
+                        "y": 18,
+                        "columns": 2,
+                        "rows": 1,
+                        "spacing": 18
+                    }
+                }
+            }),
+            &state,
+        );
+
+        assert_eq!(
+            response["error"]["message"],
+            "slot grid x coordinate overflow"
+        );
+        let sessions = state.sessions.lock().unwrap();
+        let active = sessions.active_session().unwrap();
+        assert!(active.project.elements.is_empty());
+        assert!(active.project.groups.is_empty());
+        assert!(active.project.semantic_groups.is_empty());
+        assert_eq!(active.revision, 0);
+    }
+
+    #[test]
+    fn project_export_settings_update_changes_live_session() {
+        let state = test_state();
+        let project_id = {
+            let mut sessions = state.sessions.lock().unwrap();
+            sessions.create_session(Project::new("Settings", 176, 166, ModTarget::Forge))
+        };
+
+        let response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "settings-update",
+                "method": "tools/call",
+                "params": {
+                    "name": "project_export_settings_update",
+                    "arguments": {
+                        "project_id": project_id,
+                        "codegen_mode": "modular",
+                        "generate_runtime_helpers": false,
+                        "generate_semantic_registry": false,
+                    }
+                }
+            }),
+            &state,
+        );
+
+        assert!(response["error"].is_null());
+        let content = response["result"]["content"][0]["text"].as_str().unwrap();
+        let value: serde_json::Value = serde_json::from_str(content).unwrap();
+        assert_eq!(value["codegen_mode"], "modular");
+        assert_eq!(value["generate_runtime_helpers"], false);
+        assert_eq!(value["generate_semantic_registry"], false);
+
+        let sessions = state.sessions.lock().unwrap();
+        let active = sessions.active_session().unwrap();
+        assert_eq!(
+            active.project.export_settings.codegen_mode,
+            CodegenMode::Modular
+        );
+        assert_eq!(active.revision, 1);
+        assert!(active.project.is_dirty);
+    }
+
+    #[test]
+    fn project_export_settings_update_defaults_semantic_registry_from_codegen_when_unspecified() {
+        let state = test_state();
+        let project_id = {
+            let mut sessions = state.sessions.lock().unwrap();
+            sessions.create_session(Project::new("Settings Defaults", 176, 166, ModTarget::Forge))
+        };
+
+        let response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "settings-default",
+                "method": "tools/call",
+                "params": {
+                    "name": "project_export_settings_update",
+                    "arguments": {
+                        "project_id": project_id,
+                        "codegen_mode": "modular"
+                    }
+                }
+            }),
+            &state,
+        );
+
+        assert!(response["error"].is_null());
+        let content = response["result"]["content"][0]["text"].as_str().unwrap();
+        let value: serde_json::Value = serde_json::from_str(content).unwrap();
+        assert_eq!(value["codegen_mode"], "modular");
+        assert_eq!(value["generate_semantic_registry"], true);
+    }
+
+    #[test]
+    fn project_export_settings_update_rejects_wrong_typed_boolean() {
+        let state = test_state();
+        let project_id = {
+            let mut sessions = state.sessions.lock().unwrap();
+            sessions.create_session(Project::new("Settings", 176, 166, ModTarget::Forge))
+        };
+
+        let response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "settings-update",
+                "method": "tools/call",
+                "params": {
+                    "name": "project_export_settings_update",
+                    "arguments": {
+                        "project_id": project_id,
+                        "generate_runtime_helpers": "false",
+                    }
+                }
+            }),
+            &state,
+        );
+
+        assert_eq!(
+            response["error"]["message"],
+            "generate_runtime_helpers must be boolean"
+        );
+
+        let sessions = state.sessions.lock().unwrap();
+        let active = sessions.active_session().unwrap();
+        assert_eq!(active.revision, 0);
+        assert!(active.project.export_settings.generate_runtime_helpers);
+    }
+
+    #[test]
+    fn project_semantic_groups_update_changes_live_session() {
+        let state = test_state();
+        let project_id = {
+            let mut sessions = state.sessions.lock().unwrap();
+            sessions.create_session(Project::new("Semantic Groups", 176, 166, ModTarget::Forge))
+        };
+
+        let response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "semantic-groups-update",
+                "method": "tools/call",
+                "params": {
+                    "name": "project_semantic_groups_update",
+                    "arguments": {
+                        "project_id": project_id,
+                        "semantic_groups": [{
+                            "id": "inventory",
+                            "kind": "player_inventory",
+                            "columns": 9,
+                            "visible_rows": 3,
+                            "total_rows": 3
+                        }],
+                    }
+                }
+            }),
+            &state,
+        );
+
+        assert!(response["error"].is_null());
+        let sessions = state.sessions.lock().unwrap();
+        let active = sessions.active_session().unwrap();
+        assert_eq!(active.project.semantic_groups.len(), 1);
+        assert_eq!(
+            active.project.semantic_groups[0].kind,
+            crate::project::SemanticGroupKind::PlayerInventory
+        );
+        assert_eq!(active.revision, 1);
+        assert!(active.project.is_dirty);
+    }
+
+    #[test]
+    fn export_request_parses_codegen_override() {
+        let mut sessions = ProjectSessionManager::default();
+        let project_id =
+            sessions.create_session(Project::new("Export Override", 176, 166, ModTarget::Forge));
+        let (_, config, _) = export_request(
+            &sessions,
+            Some(&project_id),
+            &serde_json::json!({
+                "target": "forge",
+                "mod_id": "mcp_test",
+                "package": "net.inkyquill.mcptest",
+                "class_name": "OverrideScreen",
+                "output_dir": "/tmp/gui-crafter-mcp-export",
+                "codegen_mode": "modular",
+                "generate_runtime_helpers": false,
+                "generate_semantic_registry": false,
+            }),
+        )
+        .unwrap();
+
+        let settings = config.settings_override.unwrap();
+        assert_eq!(settings.codegen_mode, CodegenMode::Modular);
+        assert!(!settings.generate_runtime_helpers);
+        assert!(!settings.generate_semantic_registry);
+    }
+
+    #[test]
+    fn export_request_rejects_unknown_codegen_override() {
+        let mut sessions = ProjectSessionManager::default();
+        let project_id =
+            sessions.create_session(Project::new("Export Override", 176, 166, ModTarget::Forge));
+        let error = match export_request(
+            &sessions,
+            Some(&project_id),
+            &serde_json::json!({
+                "target": "forge",
+                "mod_id": "mcp_test",
+                "package": "net.inkyquill.mcptest",
+                "class_name": "OverrideScreen",
+                "output_dir": "/tmp/gui-crafter-mcp-export",
+                "codegen_mode": "split",
+            }),
+        ) {
+            Ok(_) => panic!("expected codegen override error"),
+            Err(error) => error,
+        };
+
+        assert_eq!(error, "Unknown codegen_mode: split");
+    }
+
+    #[test]
+    fn export_request_rejects_wrong_typed_codegen_override() {
+        let mut sessions = ProjectSessionManager::default();
+        let project_id =
+            sessions.create_session(Project::new("Export Override", 176, 166, ModTarget::Forge));
+        let error = match export_request(
+            &sessions,
+            Some(&project_id),
+            &serde_json::json!({
+                "target": "forge",
+                "mod_id": "mcp_test",
+                "package": "net.inkyquill.mcptest",
+                "class_name": "OverrideScreen",
+                "output_dir": "/tmp/gui-crafter-mcp-export",
+                "codegen_mode": 123,
+            }),
+        ) {
+            Ok(_) => panic!("expected codegen override type error"),
+            Err(error) => error,
+        };
+
+        assert_eq!(error, "codegen_mode must be \"simple\" or \"modular\"");
+    }
+
+    #[test]
+    fn export_request_rejects_wrong_typed_overwrite() {
+        let state = test_state();
+        {
+            let mut sessions = state.sessions.lock().unwrap();
+            sessions.create_session(Project::new("Overwrite Type", 176, 166, ModTarget::Forge));
+        }
+
+        let response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "preview",
+                "method": "tools/call",
+                "params": {
+                    "name": "project_export_preview",
+                    "arguments": {
+                        "target": "forge",
+                        "mod_id": "overwrite_type",
+                        "package": "net.inkyquill.overwrite",
+                        "class_name": "OverwriteType",
+                        "output_dir": "/tmp/mcgui-overwrite-type",
+                        "overwrite": "true"
+                    }
+                }
+            }),
+            &state,
+        );
+
+        assert_eq!(response["error"]["message"], "overwrite must be boolean");
     }
 
     #[test]

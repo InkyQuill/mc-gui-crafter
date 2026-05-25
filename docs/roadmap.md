@@ -101,11 +101,33 @@
 
 ## Phase 6.x / Phase 7 Candidates
 
-- [ ] More templates: advanced machine, fluid tank, brewing stand, anvil, custom grid
+- [x] MCP Reliability Alpha design/spec written.
+- [x] MCP render tool exposed as `project_render`.
+- [x] MCP project resize, group upsert, and batch element update workflows.
+- [x] MCP schema discovery and explicit semantic member validation.
+- [x] Visual Authoring Alpha design/spec written.
+- [x] Visual Authoring Alpha implementation plan written.
+- [x] Visual Authoring Alpha implementation complete.
+- [ ] Editable State Variants Alpha.
+- [ ] GUI Polish Alpha.
+- [x] More starter templates: advanced machine, fluid tank, brewing stand, anvil, and Custom Grid as a default 3×3 starter layout
+- [x] Minecraft visual fidelity pass: light/dark Minecraft-like themes, generated default GUI textures, and vanilla-aligned template slot metrics
+- [x] Semantic slot roles and semantic group metadata for machine, player, hotbar, scrollable, virtual, upgrade, filter, ghost, and offhand slots
+- [x] Scrollable inventory machine template with baked visible slots, scrollbar preview, and virtual slot grid metadata
+- [x] Configurable simple vs modular code generation, including MCP and export-dialog overrides
+- [x] MCP alpha ergonomics: bulk element/grid creation, compact asset metadata, default player inventory/hotbar grids, generated button visuals, and semantic preview warnings
+- [x] MCP/UI polish v2: screenshot previews, button/toggle authoring, icon/tooltip metadata, overwrite previews, and validation polish
+- [x] Editor UX polish: generated background elements, progress texture editing, persisted inspector dock, grouped Layers, reusable UV Editor, and UI/window layout reset
+- [x] Parameterized custom grid generation through MCP `slot_grid_add`
+- [x] Static attached regions: active outside-GUI flair, side panels, return pockets, computed visual bounds, and MCP authoring
 - [ ] Expression support in animation bindings (`cook_time / total_cook_time`)
-- [ ] Resource pack export (Bedrock JSON UI) — research
-- [ ] Custom font import (Minecraft bitmap font format)
-- [ ] CI/CD pipeline (Tauri bundling for all platforms)
+- [ ] Workspace/dock framework: movable and pinnable editor panels, workspace profiles, richer Asset/UV panes, and optional stacked/pinned Layers and Assets behavior
+- [ ] Full runtime container/menu code generation for semantic inventories and virtual storage grids
+- [ ] Toggleable attached-region runtime: open/closed state, click bindings, animation, conditional slot activation, and modular generated helpers
+- [ ] Resource pack export (Bedrock JSON UI) — research, not implemented
+- [x] Font import for project font selection and canvas preview
+- [ ] Custom runtime font support for exported Minecraft screens; exported runtime currently uses the platform text renderer
+- [ ] CI/CD pipeline groundwork — prepare for Phase 7 installer builds
 
 ---
 

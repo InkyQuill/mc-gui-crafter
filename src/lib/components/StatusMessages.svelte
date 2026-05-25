@@ -31,11 +31,11 @@
     gap: 8px;
     max-width: min(420px, calc(100vw - 28px));
     min-height: 34px;
-    border: 1px solid #0f3460;
+    border: 1px solid var(--border);
     border-radius: 6px;
-    background: #12121f;
+    background: var(--app-bg);
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
-    color: #e0e0e0;
+    color: var(--text);
     padding: 7px 8px;
     pointer-events: auto;
   }
@@ -52,17 +52,17 @@
   }
 
   .message.warning .marker {
-    background: #e9a23b;
+    background: var(--warning);
   }
 
   .message.error .marker {
-    background: #ff6b83;
+    background: var(--danger);
   }
 
   p {
     overflow: hidden;
     margin: 0;
-    color: #d8d8e6;
+    color: inherit;
     font-size: 12px;
     line-height: 1.35;
     text-overflow: ellipsis;
@@ -74,7 +74,7 @@
     border: 0;
     border-radius: 3px;
     background: transparent;
-    color: #808090;
+    color: var(--muted-text);
     cursor: pointer;
     font: inherit;
     line-height: 1;
@@ -82,8 +82,8 @@
 
   button:hover,
   button:focus-visible {
-    background: #0f3460;
-    color: #e0e0e0;
+    background: var(--surface-raised);
+    color: var(--text);
     outline: none;
   }
 </style>

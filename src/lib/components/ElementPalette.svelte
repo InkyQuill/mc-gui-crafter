@@ -9,11 +9,18 @@
     { id: "slot", label: "Slot", shortcut: "S" },
     { id: "texture", label: "Texture", shortcut: "T" },
     { id: "text", label: "Text", shortcut: "X" },
+    { id: "button", label: "Button", shortcut: "B" },
+    { id: "toggle_button", label: "Toggle", shortcut: "G" },
   ];
 
   function selectTool(tool: EditorTool) {
     editor.tool = tool;
   }
+
+  let activeTool = $derived.by(() => {
+    void editor.toolRevision;
+    return editor.tool;
+  });
 
   function isEditableTarget(target: EventTarget | null): boolean {
     if (!(target instanceof HTMLElement)) return false;
@@ -35,6 +42,8 @@
       case "s": editor.tool = "slot"; break;
       case "t": editor.tool = "texture"; break;
       case "x": editor.tool = "text"; break;
+      case "b": editor.tool = "button"; break;
+      case "g": editor.tool = "toggle_button"; break;
       case "delete":
       case "backspace":
         if (editor.selectedElementId) {
@@ -58,7 +67,7 @@
     {#each tools as tool}
       <button
         class="tool-btn"
-        class:active={editor.tool === tool.id}
+        class:active={activeTool === tool.id}
         onclick={() => selectTool(tool.id)}
         title={`${tool.label} (${tool.shortcut})`}
       >
@@ -68,6 +77,8 @@
           {:else if tool.id === "slot"}◻
           {:else if tool.id === "texture"}▣
           {:else if tool.id === "text"}T
+          {:else if tool.id === "button"}▭
+          {:else if tool.id === "toggle_button"}◉
           {/if}
         </span>
         <span class="tool-label">{tool.label}</span>
@@ -77,16 +88,20 @@
   </div>
 
   <p class="hint">
-    {#if editor.tool === "select"}
+    {#if activeTool === "select"}
       Click to select. Drag to move.
-    {:else if editor.tool === "pan"}
+    {:else if activeTool === "pan"}
       Drag to pan canvas.
-    {:else if editor.tool === "slot"}
+    {:else if activeTool === "slot"}
       Click canvas to place slot.
-    {:else if editor.tool === "texture"}
+    {:else if activeTool === "texture"}
       Click canvas to place texture region.
-    {:else if editor.tool === "text"}
+    {:else if activeTool === "text"}
       Click canvas to place text.
+    {:else if activeTool === "button"}
+      Click canvas to place button.
+    {:else if activeTool === "toggle_button"}
+      Click canvas to place toggle.
     {/if}
   </p>
 
@@ -109,7 +124,7 @@
     font-size: 11px;
     text-transform: uppercase;
     letter-spacing: 1px;
-    color: #606080;
+    color: var(--muted-text);
     margin-bottom: 8px;
   }
 
@@ -125,7 +140,7 @@
     gap: 8px;
     background: transparent;
     border: 1px solid transparent;
-    color: #808090;
+    color: var(--muted-text);
     padding: 6px 8px;
     font-size: 12px;
     cursor: pointer;
@@ -136,14 +151,14 @@
   }
 
   .tool-btn:hover {
-    background: #0f3460;
-    color: #e0e0e0;
+    background: var(--surface-raised);
+    color: var(--text);
   }
 
   .tool-btn.active {
-    background: #0f3460;
-    color: #e94560;
-    border-color: #e94560;
+    background: var(--surface-raised);
+    color: var(--accent);
+    border-color: var(--accent);
   }
 
   .tool-icon {
@@ -158,8 +173,8 @@
 
   .tool-shortcut {
     font-size: 10px;
-    color: #505060;
-    background: #1a1a2e;
+    color: var(--muted-text);
+    background: var(--surface);
     padding: 1px 5px;
     border-radius: 2px;
     font-family: monospace;
@@ -167,14 +182,14 @@
 
   .hint {
     font-size: 11px;
-    color: #505060;
+    color: var(--muted-text);
     margin-top: 8px;
     line-height: 1.4;
   }
 
   .divider {
     border: none;
-    border-top: 1px solid #0f3460;
+    border-top: 1px solid var(--border);
     margin: 12px 0;
   }
 
@@ -183,12 +198,12 @@
     flex-direction: column;
     gap: 2px;
     font-size: 12px;
-    color: #808090;
+    color: var(--muted-text);
     font-family: monospace;
   }
 
   .muted {
-    color: #505060;
+    color: var(--muted-text);
     font-size: 11px;
   }
 </style>

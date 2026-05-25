@@ -1,13 +1,66 @@
 <script lang="ts">
   import { project } from "../stores/project.svelte";
   import { editor } from "../stores/editor.svelte";
+  import UvEditorDialog from "./UvEditorDialog.svelte";
+  import type { AttachedRegion, AttachedRegionAnchor, AttachedRegionState, CodegenMode, Element, NineSlice, Size, SlotRole, TextureRenderMode, UvRect } from "../types";
 
-  let selectedEl = $derived(editor.selectedElementId ? project.elementById(editor.selectedElementId) : null);
-  let selectedGroup = $derived(editor.selectedElementId ? project.groupForElement(editor.selectedElementId) : null);
+  type UvTarget = "uv" | "icon_uv";
+
+  let uvEditorTarget = $state<UvTarget | null>(null);
+  let editingNineSlice = $state(false);
+  let selectedElementId = $derived.by(() => {
+    void editor.selectionRevision;
+    return editor.selectedElementId;
+  });
+  let selectedEl = $derived(selectedElementId ? project.elementById(selectedElementId) : null);
+  let selectedTargetSize = $derived.by((): Size | null => {
+    if (!selectedEl) return null;
+    if (selectedEl.width === undefined || selectedEl.height === undefined) return null;
+    return {
+      width: selectedEl.width,
+      height: selectedEl.height,
+    };
+  });
+  let selectedGroup = $derived(selectedElementId ? project.groupForElement(selectedElementId) : null);
+  let selectedRegion = $derived.by(() => {
+    void editor.regionSelectionRevision;
+    const id = editor.selectedAttachedRegionId;
+    return id ? project.attachedRegionById(id) : null;
+  });
+  let fontOptions = $derived.by(() => {
+    const options = project.fonts.filter((font, index, fonts) => fonts.findIndex(candidate => candidate.id === font.id) === index);
+    if (!options.some(font => font.id === "minecraft:default")) {
+      options.unshift({ id: "minecraft:default", source: { type: "minecraft" } });
+    }
+    return options;
+  });
+  const slotRoleOptions: SlotRole[] = [
+    "machine",
+    "player_inventory",
+    "hotbar",
+    "scrollable_inventory",
+    "virtual_storage",
+    "upgrade",
+    "upgrade_settings",
+    "filter",
+    "ghost",
+    "offhand",
+  ];
+  const attachedRegionAnchors: AttachedRegionAnchor[] = ["left", "right", "top", "bottom", "free"];
+  const attachedRegionStates: AttachedRegionState[] = ["static", "toggleable"];
 
   function updateProp(key: string, value: unknown) {
     if (!editor.selectedElementId) return;
     project.updateElement(editor.selectedElementId, { [key]: value });
+  }
+
+  function updateSelectedElement(changes: Partial<Element>) {
+    if (!selectedEl) return;
+    project.updateElement(selectedEl.id, changes);
+  }
+
+  function updateRegion(id: string, changes: Partial<AttachedRegion>) {
+    void project.updateAttachedRegion(id, changes);
   }
 
   function numberValue(value: string, fallback = 0): number {
@@ -26,10 +79,117 @@
     };
     updateProp("uv", next);
   }
+
+  function updateIconUv(key: "x" | "y" | "width" | "height", value: string) {
+    if (!selectedEl) return;
+    const next = {
+      x: selectedEl.icon_uv?.x ?? 0,
+      y: selectedEl.icon_uv?.y ?? 0,
+      width: selectedEl.icon_uv?.width ?? 16,
+      height: selectedEl.icon_uv?.height ?? 16,
+      [key]: Math.max(key === "width" || key === "height" ? 1 : 0, numberValue(value)),
+    };
+    updateSelectedElement({ icon_uv: next });
+  }
+
+  function optionalText(value: string): string | null {
+    return value.trim() || null;
+  }
+
+  function optionalU32(value: string): number | null | undefined {
+    if (value === "") return null;
+    if (!/^\d+$/.test(value)) return undefined;
+    const parsed = Number(value);
+    return Number.isSafeInteger(parsed) ? parsed : undefined;
+  }
+
+  function updateOptionalU32(key: "slot_index" | "columns" | "visible_rows" | "total_rows", value: string) {
+    const parsed = optionalU32(value);
+    if (parsed !== undefined) {
+      updateSelectedElement({ [key]: parsed });
+    }
+  }
+
+  function openUvEditor(target: UvTarget) {
+    uvEditorTarget = target;
+  }
+
+  function applyUvSelection(asset: string, value: UvRect | NineSlice | null) {
+    if (!selectedEl || !uvEditorTarget) return;
+    const uv = value as UvRect | null;
+    if (uvEditorTarget === "icon_uv") {
+      updateSelectedElement({ icon: asset, icon_uv: uv });
+    } else {
+      updateSelectedElement({ asset, uv });
+    }
+    uvEditorTarget = null;
+  }
+
+  function clearUvSelection() {
+    if (!selectedEl || !uvEditorTarget) return;
+    if (uvEditorTarget === "icon_uv") {
+      updateSelectedElement({ icon_uv: null });
+    } else {
+      updateSelectedElement({ uv: null });
+    }
+    uvEditorTarget = null;
+  }
+
+  function openNineSliceEditor() {
+    if (!selectedEl?.asset) return;
+    void project.ensureAssetDataUrl(selectedEl.asset);
+    editingNineSlice = true;
+  }
+
+  function applyNineSlice(asset: string, value: UvRect | NineSlice | null) {
+    if (!selectedEl || !value) return;
+    updateSelectedElement({
+      asset,
+      render_mode: "nine_slice",
+      nine_slice: value as NineSlice,
+    });
+    editingNineSlice = false;
+  }
+
+  function clearNineSlice() {
+    updateSelectedElement({ nine_slice: null });
+    editingNineSlice = false;
+  }
+
+  function useAssetGuides() {
+    updateSelectedElement({ nine_slice: null });
+  }
 </script>
 
 <aside class="properties">
   <h3>Properties</h3>
+
+  {#if project.isOpen}
+    <div class="props-form project-form">
+      <div class="prop-row">
+        <label for="project-codegen-mode">Code Gen</label>
+        <select
+          id="project-codegen-mode"
+          value={project.exportSettings.codegen_mode}
+          onchange={(event) => project.updateExportSettings({ codegen_mode: event.currentTarget.value as CodegenMode })}
+        >
+          <option value="simple">Simple</option>
+          <option value="modular">Modular</option>
+        </select>
+      </div>
+      <div class="prop-row">
+        <label for="project-runtime-helpers">Runtime</label>
+        <input
+          id="project-runtime-helpers"
+          type="checkbox"
+          checked={project.exportSettings.generate_runtime_helpers}
+          onchange={(event) => project.updateExportSettings({ generate_runtime_helpers: event.currentTarget.checked })}
+        />
+      </div>
+    </div>
+
+    <hr class="divider" />
+  {/if}
 
   {#if selectedEl}
     <div class="props-form">
@@ -68,6 +228,32 @@
         />
       </div>
 
+      <div class="prop-row">
+        <label for="prop-layer">Layer</label>
+        <select
+          id="prop-layer"
+          value={selectedEl.layer ?? "background"}
+          onchange={(e) => updateProp("layer", e.currentTarget.value)}
+        >
+          <option value="background">Background</option>
+          <option value="overlay">Overlay</option>
+          <option value="animatable">Animatable</option>
+        </select>
+      </div>
+      <div class="prop-row">
+        <label for="prop-attached-region">Region</label>
+        <select
+          id="prop-attached-region"
+          value={selectedEl.attached_region ?? ""}
+          onchange={(e) => updateSelectedElement({ attached_region: e.currentTarget.value || null })}
+        >
+          <option value="">(none)</option>
+          {#each project.attachedRegions as region (region.id)}
+            <option value={region.id}>{region.id}</option>
+          {/each}
+        </select>
+      </div>
+
       {#if selectedEl.type === "slot"}
         <div class="prop-row">
           <label for="prop-size">Size</label>
@@ -78,7 +264,7 @@
             oninput={(e) => updateProp("size", parseInt(e.currentTarget.value) || 18)}
           />
         </div>
-      {:else if selectedEl.type === "texture" || selectedEl.type === "progress" || selectedEl.type === "fluid_tank" || selectedEl.type === "energy_bar"}
+      {:else if selectedEl.type === "texture" || selectedEl.type === "progress" || selectedEl.type === "fluid_tank" || selectedEl.type === "energy_bar" || selectedEl.type === "button" || selectedEl.type === "toggle_button"}
         <div class="prop-row">
           <label for="prop-width">Width</label>
           <input
@@ -99,16 +285,112 @@
         </div>
       {/if}
 
-      {#if selectedEl.type === "texture"}
+      {#if selectedEl.type === "slot" || selectedEl.type === "virtual_slot_cell"}
+        <div class="prop-section">
+          <div class="section-title">Slot</div>
+          <div class="prop-row">
+            <label for="prop-slot-role">Role</label>
+            <select
+              id="prop-slot-role"
+              value={selectedEl.slot_role ?? ""}
+              onchange={(e) => updateSelectedElement({ slot_role: (e.currentTarget.value || null) as SlotRole | null })}
+            >
+              <option value="">(none)</option>
+              {#each slotRoleOptions as role (role)}
+                <option value={role}>{role}</option>
+              {/each}
+            </select>
+          </div>
+          <div class="prop-row">
+            <label for="prop-inventory-group">Group</label>
+            <input
+              id="prop-inventory-group"
+              type="text"
+              value={selectedEl.inventory_group ?? ""}
+              oninput={(e) => updateSelectedElement({ inventory_group: optionalText(e.currentTarget.value) })}
+            />
+          </div>
+          <div class="prop-row">
+            <label for="prop-slot-index">Index</label>
+            <input
+              id="prop-slot-index"
+              type="number"
+              min="0"
+              step="1"
+              value={selectedEl.slot_index ?? ""}
+              oninput={(e) => updateOptionalU32("slot_index", e.currentTarget.value)}
+            />
+          </div>
+          <div class="prop-row">
+            <label for="prop-scroll-binding">Scroll</label>
+            <input
+              id="prop-scroll-binding"
+              type="text"
+              value={selectedEl.scroll_binding ?? ""}
+              oninput={(e) => updateSelectedElement({ scroll_binding: optionalText(e.currentTarget.value) })}
+            />
+          </div>
+        </div>
+      {/if}
+
+      {#if selectedEl.type === "scrollbar"}
+        <div class="prop-section">
+          <div class="section-title">Scrollbar</div>
+          <div class="prop-row">
+            <label for="prop-scroll-columns">Columns</label>
+            <input
+              id="prop-scroll-columns"
+              type="number"
+              min="0"
+              step="1"
+              value={selectedEl.columns ?? ""}
+              oninput={(e) => updateOptionalU32("columns", e.currentTarget.value)}
+            />
+          </div>
+          <div class="prop-row">
+            <label for="prop-visible-rows">Visible</label>
+            <input
+              id="prop-visible-rows"
+              type="number"
+              min="0"
+              step="1"
+              value={selectedEl.visible_rows ?? ""}
+              oninput={(e) => updateOptionalU32("visible_rows", e.currentTarget.value)}
+            />
+          </div>
+          <div class="prop-row">
+            <label for="prop-total-rows">Total</label>
+            <input
+              id="prop-total-rows"
+              type="number"
+              min="0"
+              step="1"
+              value={selectedEl.total_rows ?? ""}
+              oninput={(e) => updateOptionalU32("total_rows", e.currentTarget.value)}
+            />
+          </div>
+          <div class="prop-row">
+            <label for="prop-target-group">Target</label>
+            <input
+              id="prop-target-group"
+              type="text"
+              value={selectedEl.target_group ?? ""}
+              oninput={(e) => updateSelectedElement({ target_group: optionalText(e.currentTarget.value) })}
+            />
+          </div>
+        </div>
+      {/if}
+
+      {#if selectedEl.type === "texture" || selectedEl.type === "progress"}
         <div class="prop-row">
-          <label for="prop-asset">Texture</label>
+          <label for="prop-asset">{selectedEl.type === "progress" ? "Source" : "Texture"}</label>
           <select
             id="prop-asset"
             value={selectedEl.asset ?? ""}
             onchange={(e) => updateProp("asset", e.currentTarget.value || undefined)}
           >
             <option value="">(none)</option>
-            {#each project.assets as a}
+            {#each project.assets as a (a)}
               <option value={a}>{a.replace("textures/", "").replace(".png", "")}</option>
             {/each}
           </select>
@@ -152,6 +434,37 @@
           <button class="secondary-btn" onclick={() => updateProp("uv", null)}>
             Clear UV
           </button>
+          <button class="secondary-btn" onclick={() => openUvEditor("uv")} disabled={project.assets.length === 0}>
+            Pick Region...
+          </button>
+        </div>
+      {/if}
+
+      {#if selectedEl.type === "texture"}
+        <div class="prop-section">
+          <div class="section-title">Texture Render</div>
+          <div class="prop-row">
+            <label for="prop-render-mode">Mode</label>
+            <select
+              id="prop-render-mode"
+              value={selectedEl.render_mode ?? "plain"}
+              onchange={(e) => updateSelectedElement({ render_mode: e.currentTarget.value as TextureRenderMode })}
+            >
+              <option value="plain">Plain</option>
+              <option value="nine_slice">Nine Slice</option>
+            </select>
+          </div>
+          {#if (selectedEl.render_mode ?? "plain") === "nine_slice"}
+            <button class="secondary-btn" onclick={openNineSliceEditor} disabled={!selectedEl.asset || project.assets.length === 0}>
+              Edit Guides...
+            </button>
+            <button class="secondary-btn" onclick={clearNineSlice}>
+              Clear Guides
+            </button>
+            <button class="secondary-btn" onclick={useAssetGuides} disabled={!selectedEl.asset || !project.assetMetadata[selectedEl.asset]?.nine_slice}>
+              Use Asset Guides
+            </button>
+          {/if}
         </div>
       {/if}
 
@@ -171,7 +484,7 @@
         </div>
       {/if}
 
-      {#if selectedEl.type === "text"}
+      {#if selectedEl.type === "text" || selectedEl.type === "button" || selectedEl.type === "toggle_button"}
         <div class="prop-row">
           <label for="prop-content">Content</label>
           <input
@@ -180,6 +493,18 @@
             value={selectedEl.content ?? ""}
             oninput={(e) => updateProp("content", e.currentTarget.value)}
           />
+        </div>
+        <div class="prop-row">
+          <label for="prop-font">Font</label>
+          <select
+            id="prop-font"
+            value={selectedEl.font ?? "minecraft:default"}
+            onchange={(e) => updateProp("font", e.currentTarget.value)}
+          >
+            {#each fontOptions as font (font.id)}
+              <option value={font.id}>{font.id}</option>
+            {/each}
+          </select>
         </div>
         <div class="prop-row">
           <label for="prop-color">Color</label>
@@ -198,6 +523,59 @@
             checked={selectedEl.shadow ?? false}
             onchange={(e) => updateProp("shadow", e.currentTarget.checked)}
           />
+        </div>
+      {/if}
+
+      {#if selectedEl.type === "button" || selectedEl.type === "toggle_button"}
+        <div class="prop-section">
+          <div class="section-title">Button</div>
+          <div class="prop-row">
+            <label for="prop-tooltip">Tooltip</label>
+            <input
+              id="prop-tooltip"
+              type="text"
+              value={selectedEl.tooltip ?? ""}
+              oninput={(e) => updateSelectedElement({ tooltip: optionalText(e.currentTarget.value) })}
+            />
+          </div>
+          <div class="prop-row">
+            <label for="prop-binding">Binding</label>
+            <input
+              id="prop-binding"
+              type="text"
+              value={selectedEl.binding ?? ""}
+              oninput={(e) => updateSelectedElement({ binding: optionalText(e.currentTarget.value) })}
+            />
+          </div>
+          <div class="prop-row">
+            <label for="prop-icon">Icon</label>
+            <select
+              id="prop-icon"
+              value={selectedEl.icon ?? ""}
+              onchange={(e) => updateSelectedElement({ icon: optionalText(e.currentTarget.value), icon_uv: optionalText(e.currentTarget.value) ? selectedEl.icon_uv : null })}
+            >
+              <option value="">(none)</option>
+              {#each project.assets as a (a)}
+                <option value={a}>{a.replace("textures/", "").replace(".png", "")}</option>
+              {/each}
+            </select>
+          </div>
+          <div class="uv-grid">
+            <label for="prop-icon-uv-x">Icon X</label>
+            <input id="prop-icon-uv-x" type="number" min="0" value={selectedEl.icon_uv?.x ?? 0} oninput={(e) => updateIconUv("x", e.currentTarget.value)} />
+            <label for="prop-icon-uv-y">Icon Y</label>
+            <input id="prop-icon-uv-y" type="number" min="0" value={selectedEl.icon_uv?.y ?? 0} oninput={(e) => updateIconUv("y", e.currentTarget.value)} />
+            <label for="prop-icon-uv-width">Icon W</label>
+            <input id="prop-icon-uv-width" type="number" min="1" value={selectedEl.icon_uv?.width ?? 16} oninput={(e) => updateIconUv("width", e.currentTarget.value)} />
+            <label for="prop-icon-uv-height">Icon H</label>
+            <input id="prop-icon-uv-height" type="number" min="1" value={selectedEl.icon_uv?.height ?? 16} oninput={(e) => updateIconUv("height", e.currentTarget.value)} />
+          </div>
+          <button class="secondary-btn" onclick={() => updateSelectedElement({ icon_uv: null })}>
+            Clear Icon UV
+          </button>
+          <button class="secondary-btn" onclick={() => openUvEditor("icon_uv")} disabled={project.assets.length === 0}>
+            Pick Icon Region...
+          </button>
         </div>
       {/if}
 
@@ -229,6 +607,93 @@
         </button>
       {/if}
     </div>
+  {:else if selectedRegion}
+    <div class="props-form">
+      <div class="prop-row">
+        <span class="prop-label">ID</span>
+        <span class="prop-value mono">{selectedRegion.id}</span>
+      </div>
+      <div class="prop-row">
+        <label for="prop-region-anchor">Anchor</label>
+        <select
+          id="prop-region-anchor"
+          value={selectedRegion.anchor}
+          onchange={(e) => updateRegion(selectedRegion.id, { anchor: e.currentTarget.value as AttachedRegionAnchor })}
+        >
+          {#each attachedRegionAnchors as anchor (anchor)}
+            <option value={anchor}>{anchor}</option>
+          {/each}
+        </select>
+      </div>
+      <div class="prop-row">
+        <label for="prop-region-x">X</label>
+        <input
+          id="prop-region-x"
+          type="number"
+          value={selectedRegion.x}
+          onchange={(e) => updateRegion(selectedRegion.id, { x: numberValue(e.currentTarget.value, selectedRegion.x) })}
+        />
+      </div>
+      <div class="prop-row">
+        <label for="prop-region-y">Y</label>
+        <input
+          id="prop-region-y"
+          type="number"
+          value={selectedRegion.y}
+          onchange={(e) => updateRegion(selectedRegion.id, { y: numberValue(e.currentTarget.value, selectedRegion.y) })}
+        />
+      </div>
+      <div class="prop-row">
+        <label for="prop-region-width">Width</label>
+        <input
+          id="prop-region-width"
+          type="number"
+          min="1"
+          value={selectedRegion.width}
+          onchange={(e) => updateRegion(selectedRegion.id, { width: Math.max(1, numberValue(e.currentTarget.value, selectedRegion.width)) })}
+        />
+      </div>
+      <div class="prop-row">
+        <label for="prop-region-height">Height</label>
+        <input
+          id="prop-region-height"
+          type="number"
+          min="1"
+          value={selectedRegion.height}
+          onchange={(e) => updateRegion(selectedRegion.id, { height: Math.max(1, numberValue(e.currentTarget.value, selectedRegion.height)) })}
+        />
+      </div>
+      <div class="prop-row">
+        <label for="prop-region-state">State</label>
+        <select
+          id="prop-region-state"
+          value={selectedRegion.state}
+          onchange={(e) => updateRegion(selectedRegion.id, { state: e.currentTarget.value as AttachedRegionState })}
+        >
+          {#each attachedRegionStates as state (state)}
+            <option value={state}>{state}</option>
+          {/each}
+        </select>
+      </div>
+      <div class="prop-row">
+        <label for="prop-region-kind">Kind</label>
+        <input
+          id="prop-region-kind"
+          type="text"
+          value={selectedRegion.kind ?? ""}
+          onchange={(e) => updateRegion(selectedRegion.id, { kind: optionalText(e.currentTarget.value) })}
+        />
+      </div>
+      <div class="prop-row">
+        <label for="prop-region-semantic-group">Semantic</label>
+        <input
+          id="prop-region-semantic-group"
+          type="text"
+          value={selectedRegion.semantic_group ?? ""}
+          onchange={(e) => updateRegion(selectedRegion.id, { semantic_group: optionalText(e.currentTarget.value) })}
+        />
+      </div>
+    </div>
   {:else}
     <p class="muted">
       {#if project.isOpen}
@@ -240,6 +705,32 @@
   {/if}
 </aside>
 
+{#if selectedEl && uvEditorTarget}
+  <UvEditorDialog
+    title={uvEditorTarget === "icon_uv" ? "Pick Button Icon Region" : "Pick Texture Region"}
+    assets={project.assets}
+    asset={uvEditorTarget === "icon_uv" ? selectedEl.icon ?? null : selectedEl.asset ?? null}
+    uv={uvEditorTarget === "icon_uv" ? selectedEl.icon_uv ?? null : selectedEl.uv ?? null}
+    onapply={applyUvSelection}
+    onclear={clearUvSelection}
+    onclose={() => uvEditorTarget = null}
+  />
+{/if}
+
+{#if selectedEl && editingNineSlice && selectedEl.asset}
+  <UvEditorDialog
+    title="Edit Texture Guides"
+    mode="nine_slice"
+    assets={project.assets}
+    asset={selectedEl.asset}
+    nineSlice={selectedEl.nine_slice ?? null}
+    targetSize={selectedTargetSize}
+    onapply={applyNineSlice}
+    onclear={clearNineSlice}
+    onclose={() => editingNineSlice = false}
+  />
+{/if}
+
 <style>
   .properties {
     padding: 10px;
@@ -249,12 +740,12 @@
     font-size: 11px;
     text-transform: uppercase;
     letter-spacing: 1px;
-    color: #606080;
+    color: var(--muted-text);
     margin-bottom: 8px;
   }
 
   .muted {
-    color: #505060;
+    color: var(--muted-text);
     font-size: 12px;
   }
 
@@ -262,6 +753,10 @@
     display: flex;
     flex-direction: column;
     gap: 6px;
+  }
+
+  .project-form {
+    margin-bottom: 8px;
   }
 
   .prop-row {
@@ -273,14 +768,14 @@
   .prop-label,
   .prop-row label {
     font-size: 11px;
-    color: #606080;
+    color: var(--muted-text);
     width: 55px;
     flex-shrink: 0;
   }
 
   .prop-value {
     font-size: 12px;
-    color: #a0a0b0;
+    color: var(--muted-text);
   }
 
   .prop-value.mono {
@@ -292,13 +787,13 @@
     display: flex;
     flex-direction: column;
     gap: 6px;
-    border-top: 1px solid #0f3460;
+    border-top: 1px solid var(--border);
     padding-top: 8px;
     margin-top: 2px;
   }
 
   .section-title {
-    color: #606080;
+    color: var(--muted-text);
     font-size: 11px;
     text-transform: uppercase;
     letter-spacing: 0.5px;
@@ -319,9 +814,9 @@
   input[type="text"],
   select {
     flex: 1;
-    background: #12121f;
-    border: 1px solid #0f3460;
-    color: #e0e0e0;
+    background: var(--app-bg);
+    border: 1px solid var(--border);
+    color: var(--text);
     padding: 3px 6px;
     font-size: 11px;
     font-family: monospace;
@@ -333,11 +828,11 @@
   input[type="text"]:focus,
   select:focus {
     outline: none;
-    border-color: #e94560;
+    border-color: var(--accent);
   }
 
   input[type="checkbox"] {
-    accent-color: #e94560;
+    accent-color: var(--accent);
   }
 
   select {
@@ -346,14 +841,14 @@
 
   .divider {
     border: none;
-    border-top: 1px solid #0f3460;
+    border-top: 1px solid var(--border);
     margin: 8px 0;
   }
 
   .delete-btn {
     background: transparent;
-    border: 1px solid #e94560;
-    color: #e94560;
+    border: 1px solid var(--danger);
+    color: var(--danger);
     padding: 4px 8px;
     font-size: 11px;
     cursor: pointer;
@@ -364,8 +859,8 @@
 
   .secondary-btn {
     background: transparent;
-    border: 1px solid #0f3460;
-    color: #a0a0b0;
+    border: 1px solid var(--border);
+    color: var(--muted-text);
     padding: 4px 8px;
     font-size: 11px;
     cursor: pointer;
@@ -375,12 +870,12 @@
   }
 
   .secondary-btn:hover {
-    background: #0f3460;
-    color: #e0e0e0;
+    background: var(--surface-raised);
+    color: var(--text);
   }
 
   .delete-btn:hover {
-    background: #e94560;
-    color: #12121f;
+    background: var(--danger);
+    color: var(--app-bg);
   }
 </style>

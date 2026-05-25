@@ -3,8 +3,11 @@
   import { status, readableError } from "../stores/status.svelte";
   import * as api from "../api";
   import PixelEditor from "./PixelEditor.svelte";
+  import UvEditorDialog from "./UvEditorDialog.svelte";
+  import type { NineSlice, UvRect } from "../types";
 
   let editingAsset = $state<string | null>(null);
+  let editingGuidesAsset = $state<string | null>(null);
 
   async function handleImport() {
     let path: string | null = null;
@@ -26,12 +29,35 @@
       if (!project.assets.includes(asset.name)) {
         project.assets = [...project.assets, asset.name];
       }
-      assetDataUrls.set(asset.name, asset.data_url);
+      if (asset.data_url) assetDataUrls.set(asset.name, asset.data_url);
       await project.refreshSessions();
       await project.syncFromBackend();
       status.success(`Imported ${displayName(asset.name)}.`);
     } catch (error) {
       status.error(`Failed to import asset: ${readableError(error)}`);
+    }
+  }
+
+  async function handleImportFont() {
+    let path: string | null = null;
+    try {
+      const dialog = await import("@tauri-apps/plugin-dialog");
+      const result = await dialog.open({
+        filters: [{ name: "Font Files", extensions: ["ttf", "otf"] }],
+        multiple: false,
+      });
+      if (!result) return;
+      path = result as string;
+    } catch {
+      status.warning("Font import requires the desktop app.");
+      return;
+    }
+
+    try {
+      await project.importFont(path!);
+      status.success(`Imported font from ${path}`);
+    } catch (error) {
+      status.error(`Failed to import font: ${readableError(error)}`);
     }
   }
 
@@ -43,8 +69,12 @@
         return;
       }
       project.assets = project.assets.filter(a => a !== name);
+      const metadata = { ...project.assetMetadata };
+      delete metadata[name];
+      project.assetMetadata = metadata;
       assetDataUrls.delete(name);
       if (editingAsset === name) editingAsset = null;
+      if (editingGuidesAsset === name) editingGuidesAsset = null;
       status.success(`Removed ${displayName(name)}.`);
     } catch (error) {
       status.error(`Failed to remove ${displayName(name)}: ${readableError(error)}`);
@@ -79,7 +109,7 @@
       if (!project.assets.includes(asset.name)) {
         project.assets = [...project.assets, asset.name];
       }
-      assetDataUrls.set(asset.name, asset.data_url);
+      assetDataUrls.set(asset.name, asset.data_url ?? dataUrl);
       await project.refreshSessions();
       await project.syncFromBackend();
       status.success(`Imported ${displayName(asset.name)}.`);
@@ -91,6 +121,51 @@
   function displayName(fullPath: string): string {
     return fullPath.replace("textures/", "").replace(".png", "");
   }
+
+  async function startEditing(name: string) {
+    try {
+      await project.ensureAssetDataUrl(name);
+      editingAsset = name;
+    } catch (error) {
+      status.error(`Failed to load ${displayName(name)}: ${readableError(error)}`);
+    }
+  }
+
+  async function startEditingGuides(name: string) {
+    try {
+      await project.ensureAssetDataUrl(name);
+      editingGuidesAsset = name;
+    } catch (error) {
+      status.error(`Failed to load ${displayName(name)}: ${readableError(error)}`);
+    }
+  }
+
+  async function applyAssetGuides(name: string, value: UvRect | NineSlice | null) {
+    if (!value) return;
+    try {
+      await project.updateAssetMetadata(name, {
+        ...(project.assetMetadata[name] ?? {}),
+        nine_slice: value as NineSlice,
+      });
+      editingGuidesAsset = null;
+      status.success(`Updated guides for ${displayName(name)}.`);
+    } catch (error) {
+      status.error(`Failed to update guides for ${displayName(name)}: ${readableError(error)}`);
+    }
+  }
+
+  async function clearAssetGuides(name: string) {
+    try {
+      await project.updateAssetMetadata(name, {
+        ...(project.assetMetadata[name] ?? {}),
+        nine_slice: null,
+      });
+      editingGuidesAsset = null;
+      status.success(`Cleared guides for ${displayName(name)}.`);
+    } catch (error) {
+      status.error(`Failed to clear guides for ${displayName(name)}: ${readableError(error)}`);
+    }
+  }
 </script>
 
 <aside class="assets">
@@ -100,8 +175,24 @@
     + Import PNG
   </button>
 
+  {#if project.fonts.length > 0}
+    <h3>Fonts ({project.fonts.length})</h3>
+    <ul class="font-list">
+      {#each project.fonts as font (font.id)}
+        <li class="font-item">
+          <span>{font.id}</span>
+          <span class="font-type">{font.source.type}</span>
+        </li>
+      {/each}
+    </ul>
+  {/if}
+
+  <button class="import-btn" onclick={handleImportFont}>
+    + Import Font
+  </button>
+
   {#if editingAsset}
-    {@const dataUrl = assetDataUrls.get(editingAsset)}
+    {@const dataUrl = project.getAssetDataUrl(editingAsset)}
     {#if dataUrl}
       <PixelEditor
         assetName={editingAsset}
@@ -114,7 +205,7 @@
               newDataUrl,
               project.activeProjectId ?? undefined,
             );
-            assetDataUrls.set(asset.name, asset.data_url);
+            assetDataUrls.set(asset.name, asset.data_url ?? newDataUrl);
             await project.refreshSessions();
             await project.syncFromBackend();
             status.success(`Updated ${displayName(asset.name)}.`);
@@ -130,10 +221,10 @@
       <p class="muted">No textures imported</p>
     {:else}
       <div class="asset-grid">
-        {#each project.assets as name}
-          {@const dataUrl = assetDataUrls.get(name)}
+        {#each project.assets as name (name)}
+          {@const dataUrl = project.peekAssetDataUrl(name)}
           <div class="asset-item">
-            <button class="asset-thumb" onclick={() => editingAsset = name} title="Click to edit">
+            <button class="asset-thumb" onclick={() => startEditing(name)} title="Click to edit">
               {#if dataUrl}
                 <img src={dataUrl} alt={name} />
               {:else}
@@ -141,13 +232,31 @@
               {/if}
               <span class="asset-label">{displayName(name)}</span>
             </button>
-            <button class="remove-btn" onclick={() => handleRemove(name)} title="Remove">×</button>
+            <div class="asset-actions">
+              <button class="guide-btn" onclick={() => startEditingGuides(name)} title="Edit guides">Guides</button>
+              <button class="remove-btn" onclick={() => handleRemove(name)} title="Remove">×</button>
+            </div>
           </div>
         {/each}
       </div>
     {/if}
   {/if}
 </aside>
+
+{#if editingGuidesAsset}
+  <UvEditorDialog
+    title={`Edit Guides: ${displayName(editingGuidesAsset)}`}
+    mode="nine_slice"
+    assets={[editingGuidesAsset]}
+    asset={editingGuidesAsset}
+    nineSlice={project.assetMetadata[editingGuidesAsset]?.nine_slice ?? null}
+    onapply={applyAssetGuides}
+    onclear={() => {
+      if (editingGuidesAsset) void clearAssetGuides(editingGuidesAsset);
+    }}
+    onclose={() => editingGuidesAsset = null}
+  />
+{/if}
 
 <style>
   .assets {
@@ -158,19 +267,19 @@
     font-size: 11px;
     text-transform: uppercase;
     letter-spacing: 1px;
-    color: #606080;
+    color: var(--muted-text);
     margin-bottom: 8px;
   }
 
   .muted {
-    color: #505060;
+    color: var(--muted-text);
     font-size: 12px;
   }
 
   .import-btn {
-    background: #0f3460;
-    border: 1px solid #1a5aa0;
-    color: #a0b0d0;
+    background: var(--surface-raised);
+    border: 1px solid var(--accent-2);
+    color: var(--muted-text);
     padding: 4px 8px;
     font-size: 11px;
     cursor: pointer;
@@ -181,8 +290,8 @@
   }
 
   .import-btn:hover {
-    background: #1a5aa0;
-    color: #e0e0e0;
+    background: var(--accent-2);
+    color: var(--text);
   }
 
   .asset-grid {
@@ -198,8 +307,8 @@
   }
 
   .asset-thumb {
-    background: #12121f;
-    border: 1px solid #0f3460;
+    background: var(--app-bg);
+    border: 1px solid var(--border);
     border-radius: 4px;
     padding: 4px;
     cursor: pointer;
@@ -211,7 +320,7 @@
   }
 
   .asset-thumb:hover {
-    border-color: #e94560;
+    border-color: var(--accent);
   }
 
   .asset-thumb img {
@@ -227,13 +336,13 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    color: #505060;
+    color: var(--muted-text);
     font-size: 18px;
   }
 
   .asset-label {
     font-size: 10px;
-    color: #808090;
+    color: var(--muted-text);
     font-family: monospace;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -241,10 +350,32 @@
     max-width: 100%;
   }
 
+  .asset-actions {
+    display: grid;
+    grid-template-columns: 1fr 20px;
+    gap: 2px;
+  }
+
+  .guide-btn {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--muted-text);
+    font-size: 10px;
+    cursor: pointer;
+    padding: 1px 4px;
+    line-height: 1.2;
+    font-family: inherit;
+  }
+
+  .guide-btn:hover {
+    background: var(--surface-raised);
+    color: var(--text);
+  }
+
   .remove-btn {
     background: transparent;
-    border: none;
-    color: #505060;
+    border: 1px solid transparent;
+    color: var(--muted-text);
     font-size: 12px;
     cursor: pointer;
     padding: 1px;
@@ -253,6 +384,31 @@
   }
 
   .remove-btn:hover {
-    color: #e94560;
+    color: var(--danger);
+  }
+
+  .font-list {
+    list-style: none;
+    padding: 0;
+    margin: 0 0 8px 0;
+  }
+
+  .font-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 3px 6px;
+    font-size: 11px;
+    color: var(--text);
+    background: var(--surface-raised);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    margin-bottom: 2px;
+  }
+
+  .font-type {
+    font-size: 9px;
+    color: var(--muted-text);
+    text-transform: uppercase;
   }
 </style>

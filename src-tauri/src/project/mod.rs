@@ -9,51 +9,212 @@ fn is_true(value: &bool) -> bool {
     *value
 }
 
+macro_rules! iterable_enum {
+    (
+        $(#[$enum_meta:meta])*
+        pub enum $name:ident {
+            $(
+                $(#[$variant_meta:meta])*
+                $variant:ident
+            ),+ $(,)?
+        }
+    ) => {
+        $(#[$enum_meta])*
+        pub enum $name {
+            $(
+                $(#[$variant_meta])*
+                $variant,
+            )+
+        }
+
+        impl $name {
+            pub fn variants() -> impl Iterator<Item = Self> {
+                [$(Self::$variant),+].into_iter()
+            }
+        }
+    };
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Size {
     pub width: u32,
     pub height: u32,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "snake_case")]
-pub enum ModTarget {
-    #[serde(alias = "Forge")]
-    Forge,
-    #[serde(alias = "Fabric")]
-    Fabric,
-    #[serde(rename = "neoforge", alias = "NeoForge", alias = "neo_forge")]
-    NeoForge,
+iterable_enum! {
+    #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+    #[serde(rename_all = "snake_case")]
+    pub enum ModTarget {
+        #[serde(alias = "Forge")]
+        Forge,
+        #[serde(alias = "Fabric")]
+        Fabric,
+        #[serde(rename = "neoforge", alias = "NeoForge", alias = "neo_forge")]
+        NeoForge,
+    }
+}
+
+iterable_enum! {
+    #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+    #[serde(rename_all = "snake_case")]
+    pub enum ElementType {
+        #[serde(alias = "Texture")]
+        Texture,
+        #[serde(alias = "Slot")]
+        Slot,
+        #[serde(alias = "Progress")]
+        Progress,
+        #[serde(alias = "Text")]
+        Text,
+        #[serde(alias = "FluidTank")]
+        FluidTank,
+        #[serde(alias = "EnergyBar")]
+        EnergyBar,
+        #[serde(alias = "Scrollbar")]
+        Scrollbar,
+        #[serde(alias = "Button")]
+        Button,
+        #[serde(alias = "ToggleButton")]
+        ToggleButton,
+        #[serde(alias = "TextInput")]
+        TextInput,
+        #[serde(alias = "Tab")]
+        Tab,
+        #[serde(alias = "Panel")]
+        Panel,
+        #[serde(alias = "VirtualSlotCell")]
+        VirtualSlotCell,
+    }
+}
+
+iterable_enum! {
+    #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+    #[serde(rename_all = "snake_case")]
+    pub enum SlotRole {
+        #[serde(alias = "Machine")]
+        Machine,
+        #[serde(alias = "PlayerInventory")]
+        PlayerInventory,
+        #[serde(alias = "Hotbar")]
+        Hotbar,
+        #[serde(alias = "ScrollableInventory")]
+        ScrollableInventory,
+        #[serde(alias = "VirtualStorage")]
+        VirtualStorage,
+        #[serde(alias = "Upgrade")]
+        Upgrade,
+        #[serde(alias = "UpgradeSettings")]
+        UpgradeSettings,
+        #[serde(alias = "Filter")]
+        Filter,
+        #[serde(alias = "Ghost")]
+        Ghost,
+        #[serde(alias = "Offhand")]
+        Offhand,
+    }
+}
+
+iterable_enum! {
+    #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+    #[serde(rename_all = "snake_case")]
+    pub enum SemanticGroupKind {
+        FixedSlots,
+        VirtualSlotGrid,
+        PlayerInventory,
+        Hotbar,
+        UpgradeSlots,
+        UpgradePanel,
+        SearchField,
+        ControlButtons,
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "snake_case")]
-pub enum ElementType {
-    #[serde(alias = "Texture")]
-    Texture,
-    #[serde(alias = "Slot")]
-    Slot,
-    #[serde(alias = "Progress")]
-    Progress,
-    #[serde(alias = "Text")]
-    Text,
-    #[serde(alias = "FluidTank")]
-    FluidTank,
-    #[serde(alias = "EnergyBar")]
-    EnergyBar,
+pub struct SemanticGroup {
+    pub id: String,
+    pub kind: SemanticGroupKind,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub columns: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub visible_rows: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total_rows: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub slot_count: Option<u32>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub member_ids: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub data_source: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scroll_binding: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub dynamic_height: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "snake_case")]
-pub enum FillDirection {
-    #[serde(alias = "LeftToRight")]
-    LeftToRight,
-    #[serde(alias = "RightToLeft")]
-    RightToLeft,
-    #[serde(alias = "BottomToTop")]
-    BottomToTop,
-    #[serde(alias = "TopToBottom")]
-    TopToBottom,
+iterable_enum! {
+    #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+    #[serde(rename_all = "snake_case")]
+    pub enum CodegenMode {
+        #[default]
+        Simple,
+        Modular,
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProjectExportSettings {
+    #[serde(default)]
+    pub codegen_mode: CodegenMode,
+    #[serde(default = "default_true")]
+    pub generate_runtime_helpers: bool,
+    #[serde(default)]
+    pub generate_semantic_registry: bool,
+}
+
+impl Default for ProjectExportSettings {
+    fn default() -> Self {
+        Self {
+            codegen_mode: CodegenMode::Simple,
+            generate_runtime_helpers: true,
+            generate_semantic_registry: false,
+        }
+    }
+}
+
+impl ProjectExportSettings {
+    pub fn normalized(self) -> Self {
+        self
+    }
+}
+
+iterable_enum! {
+    #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+    #[serde(rename_all = "snake_case")]
+    pub enum FillDirection {
+        #[serde(alias = "LeftToRight")]
+        LeftToRight,
+        #[serde(alias = "RightToLeft")]
+        RightToLeft,
+        #[serde(alias = "BottomToTop")]
+        BottomToTop,
+        #[serde(alias = "TopToBottom")]
+        TopToBottom,
+    }
+}
+
+iterable_enum! {
+    #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+    #[serde(rename_all = "snake_case")]
+    pub enum Layer {
+        #[default]
+        Background,
+        Overlay,
+        Animatable,
+    }
+}
+
+fn is_default_layer(layer: &Layer) -> bool {
+    *layer == Layer::Background
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -62,6 +223,161 @@ pub struct UvRect {
     pub y: u32,
     pub width: u32,
     pub height: u32,
+}
+
+iterable_enum! {
+    #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+    #[serde(rename_all = "snake_case")]
+    pub enum NineSliceMode {
+        Tile,
+        Stretch,
+    }
+}
+
+fn default_nine_slice_mode() -> NineSliceMode {
+    NineSliceMode::Tile
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct NineSlice {
+    pub left: u32,
+    pub right: u32,
+    pub top: u32,
+    pub bottom: u32,
+    #[serde(default = "default_nine_slice_mode")]
+    pub edge_mode: NineSliceMode,
+    #[serde(default = "default_nine_slice_mode")]
+    pub center_mode: NineSliceMode,
+}
+
+iterable_enum! {
+    #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+    #[serde(rename_all = "snake_case")]
+    pub enum TextureRenderMode {
+        #[default]
+        Plain,
+        NineSlice,
+    }
+}
+
+fn is_plain_render_mode(mode: &TextureRenderMode) -> bool {
+    *mode == TextureRenderMode::Plain
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AssetMetadata {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub width: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub height: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub nine_slice: Option<NineSlice>,
+}
+
+iterable_enum! {
+    #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+    #[serde(rename_all = "snake_case")]
+    pub enum AttachedRegionAnchor {
+        #[serde(alias = "Left")]
+        Left,
+        #[serde(alias = "Right")]
+        Right,
+        #[serde(alias = "Top")]
+        Top,
+        #[serde(alias = "Bottom")]
+        Bottom,
+        #[serde(alias = "Free")]
+        Free,
+    }
+}
+
+iterable_enum! {
+    #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+    #[serde(rename_all = "snake_case")]
+    pub enum AttachedRegionState {
+        #[serde(alias = "Static")]
+        Static,
+        #[serde(alias = "Toggleable")]
+        Toggleable,
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AttachedRegion {
+    pub id: String,
+    pub anchor: AttachedRegionAnchor,
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+    pub state: AttachedRegionState,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub semantic_group: Option<String>,
+    #[serde(default = "default_true", skip_serializing_if = "is_true")]
+    pub visible: bool,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct VisualBounds {
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub struct GlyphInfo {
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+    pub ascent: i32,
+    #[serde(default)]
+    pub advance: u32,
+    #[serde(default)]
+    pub bearing_x: i32,
+    #[serde(default)]
+    pub bearing_y: i32,
+}
+
+pub type GlyphMap = HashMap<char, GlyphInfo>;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct BitmapProvider {
+    pub file: String,
+    pub ascent: i32,
+    pub chars: Vec<String>,
+    #[serde(skip)]
+    pub image_data: Vec<u8>,
+    #[serde(skip)]
+    pub image_width: u32,
+    #[serde(skip)]
+    pub image_height: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case", tag = "type")]
+pub enum FontSource {
+    #[serde(rename = "minecraft")]
+    Minecraft {
+        providers: Vec<BitmapProvider>,
+        glyph_map: GlyphMap,
+    },
+    #[serde(rename = "ttf")]
+    Ttf {
+        #[serde(default)]
+        atlas_png: Vec<u8>,
+        font_size: u32,
+        glyph_map: GlyphMap,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FontAsset {
+    pub id: String,
+    pub source: FontSource,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -80,6 +396,12 @@ pub struct Element {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub asset: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub icon_uv: Option<UvRect>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tooltip: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub direction: Option<FillDirection>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content: Option<String>,
@@ -95,6 +417,61 @@ pub struct Element {
     pub visible: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub uv: Option<UvRect>,
+    #[serde(default, skip_serializing_if = "is_plain_render_mode")]
+    pub render_mode: TextureRenderMode,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub nine_slice: Option<NineSlice>,
+    #[serde(default, skip_serializing_if = "is_default_layer")]
+    pub layer: Layer,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub slot_role: Option<SlotRole>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub slot_index: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub inventory_group: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scroll_binding: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scroll_min: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scroll_max: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub visible_rows: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total_rows: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub columns: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_group: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub binding: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dock: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub open_width: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub open_height: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attached_region: Option<String>,
+}
+
+impl Element {
+    pub fn render_size(&self) -> Size {
+        let (default_width, default_height) = match self.element_type {
+            ElementType::Slot | ElementType::VirtualSlotCell => (18, 18),
+            ElementType::Button | ElementType::ToggleButton => (20, 20),
+            ElementType::Scrollbar => (12, 54),
+            // Texture compositing uses the source PNG dimensions when no explicit size is
+            // provided, but visual bounds cannot decode project texture_data without I/O.
+            ElementType::Texture => (16, 16),
+            _ => (16, 16),
+        };
+
+        Size {
+            width: self.width.or(self.size).unwrap_or(default_width),
+            height: self.height.or(self.size).unwrap_or(default_height),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -114,12 +491,22 @@ pub struct Project {
     pub groups: Vec<Group>,
     pub animations: Vec<crate::animation::Animation>,
     pub assets: Vec<String>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub asset_metadata: HashMap<String, AssetMetadata>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub semantic_groups: Vec<SemanticGroup>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attached_regions: Vec<AttachedRegion>,
+    #[serde(default)]
+    pub export_settings: ProjectExportSettings,
     #[serde(skip)]
     pub project_path: Option<String>,
     #[serde(skip)]
     pub is_dirty: bool,
     #[serde(skip)]
     pub texture_data: HashMap<String, Vec<u8>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fonts: Vec<FontAsset>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -313,9 +700,14 @@ impl Project {
             groups: Vec::new(),
             animations: Vec::new(),
             assets: Vec::new(),
+            asset_metadata: HashMap::new(),
+            semantic_groups: Vec::new(),
+            attached_regions: Vec::new(),
+            export_settings: ProjectExportSettings::default(),
             project_path: None,
             is_dirty: true,
             texture_data: HashMap::new(),
+            fonts: Vec::new(),
         }
     }
 
@@ -325,6 +717,74 @@ impl Project {
 
     pub fn find_element_mut(&mut self, id: &str) -> Option<&mut Element> {
         self.elements.iter_mut().find(|e| e.id == id)
+    }
+
+    pub fn find_attached_region(&self, id: &str) -> Option<&AttachedRegion> {
+        self.attached_regions.iter().find(|region| region.id == id)
+    }
+
+    pub fn find_attached_region_mut(&mut self, id: &str) -> Option<&mut AttachedRegion> {
+        self.attached_regions
+            .iter_mut()
+            .find(|region| region.id == id)
+    }
+
+    pub fn visual_bounds(&self) -> VisualBounds {
+        let mut min_x = 0_i64;
+        let mut min_y = 0_i64;
+        let mut max_x = i64::from(self.gui_size.width);
+        let mut max_y = i64::from(self.gui_size.height);
+
+        for element in self.elements.iter().filter(|element| element.visible) {
+            let x = i64::from(element.x);
+            let y = i64::from(element.y);
+            let size = self.element_visual_size(element);
+            let width = i64::from(size.width);
+            let height = i64::from(size.height);
+            min_x = min_x.min(x);
+            min_y = min_y.min(y);
+            max_x = max_x.max(x + width);
+            max_y = max_y.max(y + height);
+        }
+
+        for region in self.attached_regions.iter().filter(|region| region.visible) {
+            let x = i64::from(region.x);
+            let y = i64::from(region.y);
+            let width = i64::from(region.width);
+            let height = i64::from(region.height);
+            min_x = min_x.min(x);
+            min_y = min_y.min(y);
+            max_x = max_x.max(x + width);
+            max_y = max_y.max(y + height);
+        }
+
+        VisualBounds {
+            x: min_x.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32,
+            y: min_y.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32,
+            width: u32::try_from((max_x - min_x).max(1)).unwrap_or(u32::MAX),
+            height: u32::try_from((max_y - min_y).max(1)).unwrap_or(u32::MAX),
+        }
+    }
+
+    fn element_visual_size(&self, element: &Element) -> Size {
+        if element.element_type != ElementType::Texture {
+            return element.render_size();
+        }
+
+        let Some(asset_name) = element.asset.as_deref() else {
+            return element.render_size();
+        };
+        let Some(data) = self.texture_data.get(asset_name) else {
+            return element.render_size();
+        };
+        let Ok(texture) = image::load_from_memory(data) else {
+            return element.render_size();
+        };
+
+        Size {
+            width: element.width.or(element.size).unwrap_or(texture.width()),
+            height: element.height.or(element.size).unwrap_or(texture.height()),
+        }
     }
 
     pub fn remove_element(&mut self, id: &str) -> Option<Element> {
@@ -407,31 +867,140 @@ impl Project {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use image::{Rgba, RgbaImage};
 
-    fn sample_element(id: &str) -> Element {
+    #[test]
+    fn semantic_group_member_ids_round_trip_with_default_empty() {
+        let json = serde_json::json!({
+            "id": "controls",
+            "kind": "control_buttons",
+            "member_ids": ["settings_button", "lock_button"],
+            "data_source": "pouch_settings"
+        });
+
+        let group: SemanticGroup = serde_json::from_value(json.clone()).unwrap();
+        assert_eq!(group.member_ids, vec!["settings_button", "lock_button"]);
+        assert_eq!(
+            serde_json::to_value(&group).unwrap()["member_ids"],
+            json["member_ids"]
+        );
+
+        let without_members: SemanticGroup = serde_json::from_value(serde_json::json!({
+            "id": "inventory",
+            "kind": "player_inventory"
+        }))
+        .unwrap();
+        assert!(without_members.member_ids.is_empty());
+        assert!(serde_json::to_value(&without_members)
+            .unwrap()
+            .get("member_ids")
+            .is_none());
+    }
+
+    fn sample_element_defaults() -> Element {
         Element {
-            id: id.to_string(),
+            id: String::new(),
             element_type: ElementType::Slot,
-            x: 8,
-            y: 18,
+            x: 0,
+            y: 0,
             width: None,
             height: None,
-            size: Some(18),
+            size: None,
             asset: None,
-            direction: Some(FillDirection::LeftToRight),
+            icon: None,
+            icon_uv: None,
+            tooltip: None,
+            direction: None,
             content: None,
             font: None,
             color: None,
             shadow: None,
             animation: None,
             visible: true,
+            uv: None,
+            render_mode: crate::project::TextureRenderMode::Plain,
+            nine_slice: None,
+            layer: Layer::Background,
+            slot_role: None,
+            slot_index: None,
+            inventory_group: None,
+            scroll_binding: None,
+            scroll_min: None,
+            scroll_max: None,
+            visible_rows: None,
+            total_rows: None,
+            columns: None,
+            target_group: None,
+            binding: None,
+            dock: None,
+            open_width: None,
+            open_height: None,
+            attached_region: None,
+        }
+    }
+
+    fn sample_element(id: &str) -> Element {
+        Element {
+            id: id.to_string(),
+            direction: Some(FillDirection::LeftToRight),
+            size: Some(18),
             uv: Some(UvRect {
                 x: 1,
                 y: 2,
                 width: 16,
                 height: 16,
             }),
+            ..sample_element_defaults()
         }
+    }
+
+    fn base_element_for_test(id: &str, element_type: ElementType, x: i32, y: i32) -> Element {
+        Element {
+            id: id.to_string(),
+            element_type,
+            x,
+            y,
+            ..sample_element_defaults()
+        }
+    }
+
+    fn test_png(width: u32, height: u32, color: Rgba<u8>) -> Vec<u8> {
+        let image = RgbaImage::from_pixel(width, height, color);
+        let mut bytes = Vec::new();
+        image
+            .write_to(
+                &mut std::io::Cursor::new(&mut bytes),
+                image::ImageFormat::Png,
+            )
+            .unwrap();
+        bytes
+    }
+
+    #[test]
+    fn element_button_icon_tooltip_fields_round_trip() {
+        let json = serde_json::json!({
+            "id": "settings_button",
+            "type": "button",
+            "x": 12,
+            "y": 18,
+            "width": 20,
+            "height": 20,
+            "asset": "textures/generated/button.png",
+            "icon": "textures/gui/widgets.png",
+            "icon_uv": { "x": 16, "y": 0, "width": 16, "height": 16 },
+            "tooltip": "Open settings",
+            "content": "Settings"
+        });
+
+        let element: Element = serde_json::from_value(json.clone()).unwrap();
+        assert_eq!(element.icon.as_deref(), Some("textures/gui/widgets.png"));
+        assert_eq!(element.icon_uv.as_ref().unwrap().x, 16);
+        assert_eq!(element.tooltip.as_deref(), Some("Open settings"));
+
+        let serialized = serde_json::to_value(element).unwrap();
+        assert_eq!(serialized["icon"], "textures/gui/widgets.png");
+        assert_eq!(serialized["icon_uv"]["width"], 16);
+        assert_eq!(serialized["tooltip"], "Open settings");
     }
 
     #[test]
@@ -464,6 +1033,517 @@ mod tests {
         let element: Element = serde_json::from_value(value).unwrap();
 
         assert!(element.visible);
+    }
+
+    #[test]
+    fn element_layer_defaults_to_background_when_missing() {
+        let value = serde_json::json!({
+            "id": "slot_1",
+            "type": "slot",
+            "x": 8,
+            "y": 18,
+            "size": 18
+        });
+        let element: Element = serde_json::from_value(value).unwrap();
+        assert_eq!(element.layer, Layer::Background);
+    }
+
+    #[test]
+    fn element_layer_serializes_animatable() {
+        let element = Element {
+            id: "arrow".into(),
+            element_type: ElementType::Progress,
+            x: 79,
+            y: 35,
+            layer: Layer::Animatable,
+            slot_role: None,
+            slot_index: None,
+            inventory_group: None,
+            scroll_binding: None,
+            scroll_min: None,
+            scroll_max: None,
+            visible_rows: None,
+            total_rows: None,
+            columns: None,
+            target_group: None,
+            binding: None,
+            dock: None,
+            open_width: None,
+            open_height: None,
+            attached_region: None,
+            ..sample_element_defaults()
+        };
+        let value = serde_json::to_value(&element).unwrap();
+        assert_eq!(value["layer"], "animatable");
+    }
+
+    #[test]
+    fn element_layer_skips_background_default() {
+        let element = Element {
+            id: "bg".into(),
+            element_type: ElementType::Texture,
+            x: 0,
+            y: 0,
+            layer: Layer::Background,
+            slot_role: None,
+            slot_index: None,
+            inventory_group: None,
+            scroll_binding: None,
+            scroll_min: None,
+            scroll_max: None,
+            visible_rows: None,
+            total_rows: None,
+            columns: None,
+            target_group: None,
+            binding: None,
+            dock: None,
+            open_width: None,
+            open_height: None,
+            attached_region: None,
+            ..sample_element_defaults()
+        };
+        let value = serde_json::to_value(&element).unwrap();
+        assert!(!value.as_object().unwrap().contains_key("layer"));
+    }
+
+    #[test]
+    fn font_asset_serialization() {
+        let mut glyph_map = GlyphMap::new();
+        glyph_map.insert(
+            'A',
+            GlyphInfo {
+                x: 0,
+                y: 0,
+                width: 8,
+                height: 8,
+                ascent: 7,
+                advance: 9,
+                bearing_x: 1,
+                bearing_y: 2,
+            },
+        );
+
+        let font = FontAsset {
+            id: "minecraft:default".into(),
+            source: FontSource::Ttf {
+                atlas_png: vec![1, 2, 3],
+                font_size: 16,
+                glyph_map: glyph_map.clone(),
+            },
+        };
+
+        let value = serde_json::to_value(&font).unwrap();
+        assert_eq!(value["id"], "minecraft:default");
+        assert_eq!(value["source"]["type"], "ttf");
+        assert!(value["source"]["atlas_png"].as_array().is_some());
+        assert_eq!(value["source"]["font_size"], 16);
+
+        let glyph_map_val = &value["source"]["glyph_map"];
+        let glyph = glyph_map_val.get("A").unwrap();
+        assert_eq!(glyph["advance"], 9);
+        assert_eq!(glyph["bearing_x"], 1);
+        assert_eq!(glyph["bearing_y"], 2);
+    }
+
+    #[test]
+    fn glyph_info_deserializes_legacy_maps_without_metrics() {
+        let value = serde_json::json!({
+            "x": 1,
+            "y": 2,
+            "width": 3,
+            "height": 4,
+            "ascent": 5
+        });
+
+        let glyph: GlyphInfo = serde_json::from_value(value).unwrap();
+
+        assert_eq!(glyph.advance, 0);
+        assert_eq!(glyph.bearing_x, 0);
+        assert_eq!(glyph.bearing_y, 0);
+    }
+
+    #[test]
+    fn project_fonts_defaults_to_empty() {
+        let value = serde_json::json!({
+            "name": "Test",
+            "gui_size": { "width": 176, "height": 166 },
+            "mod_target": "forge",
+            "elements": [],
+            "groups": [],
+            "animations": [],
+            "assets": []
+        });
+        let project: Project = serde_json::from_value(value).unwrap();
+        assert!(project.fonts.is_empty());
+    }
+
+    #[test]
+    fn asset_metadata_round_trips_nine_slice_defaults() {
+        let json = serde_json::json!({
+            "name": "Meta",
+            "gui_size": { "width": 176, "height": 166 },
+            "mod_target": "forge",
+            "elements": [],
+            "groups": [],
+            "animations": [],
+            "assets": ["textures/gui/panel_atlas.png"],
+            "asset_metadata": {
+                "textures/gui/panel_atlas.png": {
+                    "width": 64,
+                    "height": 64,
+                    "nine_slice": {
+                        "left": 4,
+                        "right": 4,
+                        "top": 4,
+                        "bottom": 4
+                    }
+                }
+            }
+        });
+
+        let project: Project = serde_json::from_value(json).unwrap();
+        let metadata = project
+            .asset_metadata
+            .get("textures/gui/panel_atlas.png")
+            .unwrap();
+        assert_eq!(metadata.width, Some(64));
+        assert_eq!(metadata.height, Some(64));
+        assert_eq!(metadata.nine_slice.as_ref().unwrap().left, 4);
+        assert_eq!(
+            metadata.nine_slice.as_ref().unwrap().edge_mode,
+            NineSliceMode::Tile
+        );
+        assert_eq!(
+            metadata.nine_slice.as_ref().unwrap().center_mode,
+            NineSliceMode::Tile
+        );
+        let serialized = serde_json::to_value(&project).unwrap();
+        assert_eq!(
+            serialized["asset_metadata"]["textures/gui/panel_atlas.png"]["nine_slice"]["edge_mode"],
+            serde_json::json!("tile")
+        );
+        assert_eq!(
+            serialized["asset_metadata"]["textures/gui/panel_atlas.png"]["nine_slice"]
+                ["center_mode"],
+            serde_json::json!("tile")
+        );
+    }
+
+    #[test]
+    fn texture_element_round_trips_nine_slice_render_mode() {
+        let json = serde_json::json!({
+            "id": "background",
+            "type": "texture",
+            "x": 0,
+            "y": 0,
+            "width": 176,
+            "height": 166,
+            "asset": "textures/gui/panel_atlas.png",
+            "render_mode": "nine_slice",
+            "nine_slice": {
+                "left": 4,
+                "right": 4,
+                "top": 4,
+                "bottom": 4,
+                "edge_mode": "tile",
+                "center_mode": "tile"
+            }
+        });
+
+        let element: Element = serde_json::from_value(json).unwrap();
+        assert_eq!(element.render_mode, TextureRenderMode::NineSlice);
+        assert_eq!(
+            element.nine_slice.as_ref().unwrap().center_mode,
+            NineSliceMode::Tile
+        );
+        assert_eq!(
+            serde_json::to_value(&element).unwrap()["render_mode"],
+            serde_json::json!("nine_slice")
+        );
+    }
+
+    #[test]
+    fn project_defaults_missing_semantic_fields() {
+        let json = r#"{
+            "name": "Legacy",
+            "gui_size": { "width": 176, "height": 166 },
+            "mod_target": "forge",
+            "elements": [],
+            "groups": [],
+            "animations": [],
+            "assets": []
+        }"#;
+
+        let project: Project = serde_json::from_str(json).unwrap();
+        assert!(project.semantic_groups.is_empty());
+        assert_eq!(project.export_settings.codegen_mode, CodegenMode::Simple);
+        assert!(project.export_settings.generate_runtime_helpers);
+        assert!(!project.export_settings.generate_semantic_registry);
+    }
+
+    #[test]
+    fn project_defaults_attached_regions_to_empty() {
+        let json = r#"{
+            "name": "Legacy",
+            "gui_size": { "width": 176, "height": 166 },
+            "mod_target": "forge",
+            "elements": [],
+            "groups": [],
+            "animations": [],
+            "assets": []
+        }"#;
+
+        let project: Project = serde_json::from_str(json).unwrap();
+
+        assert!(project.attached_regions.is_empty());
+    }
+
+    #[test]
+    fn attached_region_and_element_membership_round_trip() {
+        let mut project = Project::new("Attached", 100, 200, ModTarget::Forge);
+        project.attached_regions.push(AttachedRegion {
+            id: "returns_pocket".into(),
+            anchor: AttachedRegionAnchor::Right,
+            x: 100,
+            y: 18,
+            width: 54,
+            height: 72,
+            state: AttachedRegionState::Static,
+            kind: Some("returns_pocket".into()),
+            semantic_group: Some("food_returns".into()),
+            visible: true,
+        });
+        let mut element = base_element_for_test("returns_0", ElementType::Slot, 108, 26);
+        element.attached_region = Some("returns_pocket".into());
+        project.elements.push(element);
+
+        let json = serde_json::to_string(&project).unwrap();
+        let loaded: Project = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(loaded.attached_regions.len(), 1);
+        assert_eq!(
+            loaded.attached_regions[0].anchor,
+            AttachedRegionAnchor::Right
+        );
+        assert_eq!(
+            loaded.attached_regions[0].state,
+            AttachedRegionState::Static
+        );
+        assert_eq!(
+            loaded.elements[0].attached_region.as_deref(),
+            Some("returns_pocket")
+        );
+    }
+
+    #[test]
+    fn visual_bounds_include_main_negative_elements_and_regions() {
+        let mut project = Project::new("Visual", 100, 200, ModTarget::Forge);
+        let mut flair = base_element_for_test("flair", ElementType::Texture, 84, -16);
+        flair.width = Some(32);
+        flair.height = Some(32);
+        project.elements.push(flair);
+        project.attached_regions.push(AttachedRegion {
+            id: "side".into(),
+            anchor: AttachedRegionAnchor::Right,
+            x: 100,
+            y: 20,
+            width: 44,
+            height: 80,
+            state: AttachedRegionState::Static,
+            kind: Some("side_controls".into()),
+            semantic_group: None,
+            visible: true,
+        });
+
+        let bounds = project.visual_bounds();
+
+        assert_eq!(bounds.x, 0);
+        assert_eq!(bounds.y, -16);
+        assert_eq!(bounds.width, 144);
+        assert_eq!(bounds.height, 216);
+    }
+
+    #[test]
+    fn visual_bounds_ignore_hidden_elements_and_regions() {
+        let mut project = Project::new("Hidden Visual", 100, 200, ModTarget::Forge);
+        let mut hidden = base_element_for_test("hidden", ElementType::Texture, -40, -40);
+        hidden.width = Some(20);
+        hidden.height = Some(20);
+        hidden.visible = false;
+        project.elements.push(hidden);
+        project.attached_regions.push(AttachedRegion {
+            id: "hidden_region".into(),
+            anchor: AttachedRegionAnchor::Left,
+            x: -60,
+            y: 0,
+            width: 20,
+            height: 20,
+            state: AttachedRegionState::Static,
+            kind: None,
+            semantic_group: None,
+            visible: false,
+        });
+
+        let bounds = project.visual_bounds();
+
+        assert_eq!(
+            bounds,
+            VisualBounds {
+                x: 0,
+                y: 0,
+                width: 100,
+                height: 200
+            }
+        );
+    }
+
+    #[test]
+    fn visual_bounds_clamps_width_when_visible_region_exceeds_u32_extent() {
+        let mut project = Project::new("Huge Visual", 1, 1, ModTarget::Forge);
+        project.attached_regions.push(AttachedRegion {
+            id: "huge_region".into(),
+            anchor: AttachedRegionAnchor::Right,
+            x: i32::MAX,
+            y: 0,
+            width: u32::MAX,
+            height: 1,
+            state: AttachedRegionState::Static,
+            kind: None,
+            semantic_group: None,
+            visible: true,
+        });
+
+        let bounds = project.visual_bounds();
+
+        assert_eq!(bounds.x, 0);
+        assert_eq!(bounds.width, u32::MAX);
+        assert_eq!(bounds.height, 1);
+    }
+
+    #[test]
+    fn visual_bounds_use_render_defaults_for_slot_and_scrollbar() {
+        let mut slot_project = Project::new("Slot Visual", 10, 10, ModTarget::Forge);
+        slot_project
+            .elements
+            .push(base_element_for_test("slot", ElementType::Slot, 10, 0));
+
+        let slot_bounds = slot_project.visual_bounds();
+
+        assert_eq!(slot_bounds.width, 28);
+        assert_eq!(slot_bounds.height, 18);
+
+        let mut scrollbar_project = Project::new("Scrollbar Visual", 10, 10, ModTarget::Forge);
+        scrollbar_project.elements.push(base_element_for_test(
+            "scrollbar",
+            ElementType::Scrollbar,
+            10,
+            10,
+        ));
+
+        let scrollbar_bounds = scrollbar_project.visual_bounds();
+
+        assert_eq!(scrollbar_bounds.width, 22);
+        assert_eq!(scrollbar_bounds.height, 64);
+    }
+
+    #[test]
+    fn visual_bounds_use_texture_asset_size_when_explicit_size_missing() {
+        let mut project = Project::new("Texture Visual", 100, 80, ModTarget::Forge);
+        project.texture_data.insert(
+            "textures/flair.png".into(),
+            test_png(32, 24, Rgba([0xd7, 0xa3, 0x39, 0xff])),
+        );
+        let mut flair = base_element_for_test("flair", ElementType::Texture, 84, 70);
+        flair.asset = Some("textures/flair.png".into());
+        project.elements.push(flair);
+
+        let bounds = project.visual_bounds();
+
+        assert_eq!(
+            bounds,
+            VisualBounds {
+                x: 0,
+                y: 0,
+                width: 116,
+                height: 94,
+            }
+        );
+
+        let atlas = crate::texture::composite_atlas_for_layer(&project, Layer::Background).unwrap();
+        let image = image::load_from_memory(&atlas).unwrap().to_rgba8();
+
+        assert_eq!(image.dimensions(), (116, 94));
+        assert_eq!(image.get_pixel(115, 93).0, [0xd7, 0xa3, 0x39, 0xff]);
+    }
+
+    #[test]
+    fn project_export_settings_defaults_missing_codegen_mode() {
+        let json = r#"{
+            "name": "Partial",
+            "gui_size": { "width": 176, "height": 166 },
+            "mod_target": "forge",
+            "elements": [],
+            "groups": [],
+            "animations": [],
+            "assets": [],
+            "export_settings": {
+                "generate_semantic_registry": true
+            }
+        }"#;
+
+        let project: Project = serde_json::from_str(json).unwrap();
+        assert_eq!(project.export_settings.codegen_mode, CodegenMode::Simple);
+        assert!(project.export_settings.generate_runtime_helpers);
+        assert!(project.export_settings.generate_semantic_registry);
+    }
+
+    #[test]
+    fn element_semantics_round_trip() {
+        let element = Element {
+            id: "buffer_slot_0".into(),
+            element_type: ElementType::Slot,
+            x: 34,
+            y: 54,
+            width: None,
+            height: None,
+            size: Some(18),
+            asset: None,
+            icon: None,
+            icon_uv: None,
+            tooltip: None,
+            direction: None,
+            content: None,
+            font: None,
+            color: None,
+            shadow: None,
+            animation: None,
+            visible: true,
+            uv: None,
+            render_mode: crate::project::TextureRenderMode::Plain,
+            nine_slice: None,
+            layer: Layer::Background,
+            slot_role: Some(SlotRole::ScrollableInventory),
+            slot_index: Some(0),
+            inventory_group: Some("machine_buffer".into()),
+            scroll_binding: Some("buffer_scroll".into()),
+            scroll_min: None,
+            scroll_max: None,
+            visible_rows: None,
+            total_rows: None,
+            columns: None,
+            target_group: None,
+            binding: None,
+            dock: None,
+            open_width: None,
+            open_height: None,
+            attached_region: None,
+        };
+
+        let value = serde_json::to_value(&element).unwrap();
+        assert_eq!(value["slot_role"], "scrollable_inventory");
+        assert_eq!(value["inventory_group"], "machine_buffer");
+        let decoded: Element = serde_json::from_value(value).unwrap();
+        assert_eq!(decoded, element);
     }
 
     #[test]

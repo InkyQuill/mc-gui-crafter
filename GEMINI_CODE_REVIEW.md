@@ -1,92 +1,89 @@
-# GEMINI Code Review — MCGUI Crafter
+# Gemini Code Review: mc-gui-crafter
 
-**Date:** Sunday, May 17, 2026
-**Scope:** Phases 1–5 Verification
+A comprehensive review of the `mc-gui-crafter` project, focusing on architecture, code quality, performance, and security.
 
-## Executive Summary
-The project is in a highly advanced state. Contrary to the "Not started" status in `docs/roadmap.md`, Phases 1–5 are largely **implemented and functional**. The architecture is clean, using Svelte 5 runes for state management and a robust Rust backend for I/O and MCP services.
+## 1. Project Overview
+`mc-gui-crafter` is a desktop application for designing and exporting Minecraft machine/container GUIs. It uses a modern tech stack:
+- **Frontend**: Svelte 5 (using Runes), PixiJS 8, TypeScript.
+- **Backend**: Rust, Tauri v2.
+- **Features**: Visual GUI editing, asset management, multi-loader export (Forge, Fabric, NeoForge), MCP integration.
 
-However, some critical rendering bugs and minor stubs in the export pipeline were identified that need immediate attention before a "Phase 5 Complete" sign-off.
+## 2. Architecture & Design
 
----
+### Frontend (Svelte 5 + PixiJS)
+- **State Management**: Excellent use of Svelte 5 Runes (`$state`, `$derived`, `get`). The `ProjectStore` centralizes complex logic effectively.
+- **Renderer**: The `GuiRenderer` is a robust PixiJS-based implementation. It handles Minecraft-specific rendering (slots, progress bars) well. The separation of grid, elements, and overlay into containers is clean.
+- **Optimistic UI**: Moving and resizing elements are performed locally before committing to the backend, ensuring a snappy user experience.
 
-## Phase Audit Results
+### Backend (Rust + Tauri)
+- **Session Management**: `ProjectSessionManager` handles multiple open projects and undo/redo stacks using full snapshots. While memory-intensive for massive projects, it's appropriate for Minecraft GUIs.
+- **Command Structure**: Large but well-structured commands in `commands.rs`. Most commands are scoped to projects and use `Result<T, String>` for error handling.
+- **Export Logic**: Highly sophisticated export system in `export/mod.rs` that generates entire Gradle projects and Java code.
 
-### Phase 1: Foundation (v0.1) — **95% Complete**
-- [x] Tauri 2 + Svelte 5 + Vite project scaffold.
-- [x] `.mcgui` format read/write (Rust backend + Zip archive).
-- [x] Canvas renderer: zoom/pan, grid, element rendering.
-- [x] Element palette: placement of slots, textures, text.
-- [x] Property panel: coordinate editing.
-- [x] Basic toolbar: project I/O.
-- [x] Project store with full undo/redo.
-- [!] **CRITICAL BUG:** `src/lib/engine/renderer.ts`: `drawSlot` method is missing `container.addChild(g)` and `return container`, causing slots to be invisible on canvas.
-
-### Phase 2: Editing & Templates (v0.2) — **90% Complete**
-- [x] Selection, drag-to-move, and resize handles.
-- [x] Layer panel (functional but basic).
-- [x] Template system (Furnace, Crafting, Chests).
-- [x] Animation timeline: preview and scrubber.
-- [x] Auto-save (atomic rename with `.tmp`).
-- [x] Recent projects list (localStorage).
-- [ ] **MISSING:** Multi-select (the store supports it, but the renderer/selection logic needs refinement for multi-drag).
-
-### Phase 3: Texture Tools (v0.3) — **80% Complete**
-- [x] Texture import.
-- [x] Asset library (sidebar).
-- [x] Pixel art editor (Pencil, Eraser, Eyedropper, Fill).
-- [x] Color palette management (Minecraft presets).
-- [x] Texture replacement on elements.
-- [ ] **STUBBED:** UV region selector for sprite sheets is missing; textures are treated as full images.
-
-### Phase 4: MCP Server (v0.4) — **100% Complete**
-- [x] MCP server core (JSON-RPC over stdio).
-- [x] Full tool implementation (30+ tools for every aspect of the app).
-- [x] Shared project state between UI and MCP.
-- [x] Real-time sync: UI emits and reacts to MCP changes via events.
-
-### Phase 5: Export Pipeline (v0.5) — **75% Complete**
-- [x] Texture atlas compositor (composed PNG).
-- [x] Layout JSON exporter.
-- [x] `GuiLayout` runtime library (Java).
-- [x] Forge/Fabric Screen class codegen.
-- [!] **STUBBED:** `generate_animation_calls` in `export/mod.rs` only generates a placeholder comment. Actual binding of animations to Menu data is not yet automated.
-- [!] **STUBBED:** `GuiLayout.java` rendering logic for `text` and `slot` is currently empty.
+### IPC (Integration)
+- Standard Tauri `invoke` pattern.
+- The `api.ts` file includes a large `mockInvoke` function, suggesting a commitment to testability or a potential web-only target.
 
 ---
 
-## Detailed Findings
+## 3. Detailed Review
 
-### 1. Rendering Engine (`src/lib/engine/renderer.ts`)
-The `drawSlot` method is broken. It prepares the Graphics object but never adds it to the container or returns it.
-```typescript
-// Current implementation
-private drawSlot(el: Element): Container {
-  const container = new Container();
-  const g = new Graphics();
-  // ... drawing calls ...
-  // MISSING: container.addChild(g);
-  // MISSING: return container;
-}
-```
+### Frontend: Svelte 5 & TypeScript
+- **Pros**:
+    - Clean use of `$state` for reactive properties.
+    - Effective use of `SvelteMap` for asset and font data.
+    - Strong typing across the board.
+- **Improvements**:
+    - `nextId` in `ProjectStore` is a global variable. It might be better stored within the project state itself to avoid issues when switching projects rapidly or in a multi-window scenario.
+    - `textTextureCache` in `GuiRenderer` grows indefinitely. Consider a LRU cache or clearing it periodically.
 
-### 2. Export Pipeline (`src-tauri/src/export/mod.rs`)
-The Java codegen is impressive but incomplete. The `GuiLayout.java` class is a great start for a runtime library, but the `renderBg` method needs to handle `slot` rendering (at least as a debug overlay) and `text` rendering using Minecraft's FontRenderer.
+### Backend: Rust
+- **Pros**:
+    - Idiomatic Rust usage (mostly).
+    - Good use of `thiserror` for error management.
+    - Strong validation logic in the export module.
+- **Improvements**:
+    - **Performance Bottleneck**: `asset_list` command decodes every image using the `image` crate and base64-encodes it *every time* it's called. This will scale poorly with many assets. Recommendation: Cache the base64 strings or return a list of asset names/metadata and fetch data URLs only when needed.
+    - **Lock Contention**: `AppState` uses a single `Mutex<ProjectSessionManager>`. For heavy operations like export or texture generation, this could block other commands. Consider more granular locking or using `dashmap` for sessions.
+    - **Code Consistency**: `rename_all` in Tauri commands is inconsistent. Some use `snake_case`, others `camelCase`. It's better to stick to one (usually `camelCase` for JS compatibility, but Tauri v2 handles conversion if specified).
 
-### 3. MCP Server (`src-tauri/src/mcp/mod.rs`)
-This is the strongest part of the backend. It's fully featured and provides a deep integration for AI tools. One minor improvement would be to add a "Read Resource" tool to allow AIs to read the actual `.mcgui` file content for context.
-
-### 4. Roadmap Status
-The `docs/roadmap.md` file is severely outdated and shows "Not started" for all phases. This should be updated immediately to reflect the actual progress.
+### Texture Generation & Compositing
+- The project does a lot of image processing in Rust. Using the `image` crate is appropriate, but be mindful of CPU usage during live previews if they trigger compositing.
 
 ---
 
-## Recommendations
+## 4. Performance & Optimization
 
-1.  **Fix Slot Rendering:** Immediately patch `renderer.ts` to restore slot visibility.
-2.  **Flesh out Export Logic:** Implement the animation binding logic in `export/mod.rs` so the exported screens are more than just skeletons.
-3.  **Update Roadmap:** Sync `roadmap.md` with current reality.
-4.  **Sprite Sheet Support:** Implement the UV selector to allow using segments of a single texture atlas (common in MC modding).
-5.  **Multi-select Polish:** Improve the UI feedback when multiple elements are selected and ensure drag-and-drop works reliably for the entire selection group.
+### 1. Asset Loading
+As noted, `api.assetList()` returns all assets with full data URLs. For a project with 50+ textures, this payload can be several megabytes, processed on every project load or sync.
+- **Fix**: Return metadata first; fetch actual image data on demand or use Tauri's custom protocol (e.g., `asset://`).
 
-**Overall Status:** **STABLE PROTOTYPE**. Ready for Phase 6 (Polish) after the identified bugs and stubs are addressed.
+### 2. Snapshots for Undo/Redo
+Storing full `Project` clones for every action is simple but grows memory linearly with history depth.
+- **Fix**: Consider delta-based undo/redo or limiting the history stack size.
+
+### 3. PixiJS Resource Management
+Ensure that `Texture` objects created from data URLs are properly destroyed. The current `GuiRenderer::destroy` handles this, but rapid project switching might lead to leaks if not careful.
+
+---
+
+## 5. Security Considerations
+
+### 1. IPC Exposure
+Tauri commands that take file paths (like `project_open`, `font_import`) should be carefully audited. Tauri v2's permission system (capabilities) is used, which is good.
+
+### 2. Path Traversal
+The `export` module sanitizes names (mod ID, package), but ensure that `output_dir` provided by the user is validated to prevent writing files outside intended directories.
+
+---
+
+## 6. Recommendations
+
+1.  **Optimize Asset Sync**: Refactor `asset_list` to avoid repeated image decoding and base64 encoding.
+2.  **Refactor `api.ts`**: The `mockInvoke` logic is massive. If it's only for testing, consider moving it to a separate mock layer or using a proper MSW (Mock Service Worker) setup.
+3.  **Linter Integration**: Add a linter for Rust (clippy) and ensure Svelte 5 snippets are used more extensively for repetitive UI patterns.
+4.  **Testing**: While there are some Rust tests (e.g., in `startup.rs`), the frontend could benefit from Playwright or Vitest coverage for the `ProjectStore` logic.
+5.  **Modularize `commands.rs`**: It's currently ~3000 lines. Splitting it into `commands/project.rs`, `commands/assets.rs`, etc., would improve maintainability.
+
+## 7. Conclusion
+The `mc-gui-crafter` project is built on a solid foundation. The choice of Svelte 5 and Tauri v2 is forward-thinking, and the implementation of the Minecraft GUI logic is very thorough. With some performance optimizations around asset handling and code modularization, it will be a highly professional tool.

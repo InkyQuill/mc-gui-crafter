@@ -3,10 +3,11 @@
   import { editor } from "../stores/editor.svelte";
   import type { Animation } from "../types";
 
-  let collapsed = $state(false);
+  let collapsed = $state(true);
   let previewValue = $state(0.5);
   let isPlaying = $state(false);
   let playInterval: ReturnType<typeof setInterval> | null = null;
+  let panelEl: HTMLDivElement | undefined = $state();
 
   // New animation form
   let newName = $state("");
@@ -28,6 +29,16 @@
     }
   }
 
+  function toggleCollapsed() {
+    collapsed = !collapsed;
+  }
+
+  function handleHeaderKeydown(event: KeyboardEvent) {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    event.preventDefault();
+    toggleCollapsed();
+  }
+
   function startPlay() {
     isPlaying = true;
     previewValue = 0;
@@ -47,6 +58,7 @@
   // Keyboard: Space to toggle play
   function onKeydown(e: KeyboardEvent) {
     if (e.target instanceof HTMLInputElement) return;
+    if (!panelEl?.contains(e.target as Node)) return;
     if (e.key === " " && !e.ctrlKey) {
       e.preventDefault();
       togglePlay();
@@ -56,12 +68,19 @@
 
 <svelte:window onkeydown={onKeydown} />
 
-<div class="animation-panel" class:collapsed>
-  <div class="panel-header">
+<div class="animation-panel" class:collapsed bind:this={panelEl}>
+  <div
+    class="panel-header"
+    role="button"
+    tabindex="0"
+    aria-expanded={!collapsed}
+    onclick={toggleCollapsed}
+    onkeydown={handleHeaderKeydown}
+  >
     <button
       type="button"
       class="panel-toggle"
-      onclick={() => collapsed = !collapsed}
+      onclick={(e: MouseEvent) => { e.stopPropagation(); toggleCollapsed(); }}
       aria-expanded={!collapsed}
     >
       <span class="header-title">Animations</span>
@@ -188,8 +207,8 @@
 
 <style>
   .animation-panel {
-    background: #16213e;
-    border-top: 1px solid #0f3460;
+    background: var(--surface);
+    border-top: 1px solid var(--border);
     flex-shrink: 0;
     user-select: none;
   }
@@ -208,13 +227,14 @@
     gap: 8px;
     padding: 4px 12px;
     font-size: 11px;
-    color: #808090;
+    color: var(--muted-text);
     height: 28px;
+    cursor: pointer;
   }
 
   .panel-header:hover,
   .panel-toggle:hover {
-    background: #1a1a3e;
+    background: var(--surface-raised);
   }
 
   .panel-toggle {
@@ -232,14 +252,14 @@
 
   .header-title {
     font-weight: 600;
-    color: #a0a0b0;
+    color: var(--muted-text);
     text-transform: uppercase;
     letter-spacing: 1px;
     font-size: 10px;
   }
 
   .header-count {
-    color: #e94560;
+    color: var(--accent);
     font-family: monospace;
   }
 
@@ -254,7 +274,7 @@
   .ctrl-btn {
     background: transparent;
     border: 1px solid transparent;
-    color: #808090;
+    color: var(--muted-text);
     font-size: 12px;
     padding: 1px 4px;
     cursor: pointer;
@@ -263,32 +283,32 @@
   }
 
   .ctrl-btn:hover {
-    background: #0f3460;
-    color: #e0e0e0;
+    background: var(--surface-raised);
+    color: var(--text);
   }
 
   .scrubber {
     width: 100px;
     height: 4px;
-    accent-color: #e94560;
+    accent-color: var(--accent);
     cursor: pointer;
   }
 
   .value-label {
     font-size: 10px;
-    color: #606080;
+    color: var(--muted-text);
     font-family: monospace;
     min-width: 30px;
   }
 
   .collapse-icon {
     font-size: 10px;
-    color: #505060;
+    color: var(--muted-text);
   }
 
   .panel-body {
     padding: 8px 12px;
-    border-top: 1px solid #0f3460;
+    border-top: 1px solid var(--border);
   }
 
   .add-form {
@@ -298,9 +318,9 @@
   }
 
   .form-input, .form-select {
-    background: #12121f;
-    border: 1px solid #0f3460;
-    color: #e0e0e0;
+    background: var(--app-bg);
+    border: 1px solid var(--border);
+    color: var(--text);
     padding: 3px 6px;
     font-size: 11px;
     font-family: monospace;
@@ -312,13 +332,13 @@
 
   .form-input:focus, .form-select:focus {
     outline: none;
-    border-color: #e94560;
+    border-color: var(--accent);
   }
 
   .add-btn {
-    background: #e94560;
+    background: var(--accent);
     border: none;
-    color: #12121f;
+    color: var(--app-bg);
     width: 24px;
     font-size: 14px;
     font-weight: 700;
@@ -340,8 +360,8 @@
   }
 
   .anim-item {
-    background: #12121f;
-    border: 1px solid #0f3460;
+    background: var(--app-bg);
+    border: 1px solid var(--border);
     border-radius: 4px;
     padding: 6px;
   }
@@ -354,15 +374,15 @@
 
   .anim-name {
     font-size: 12px;
-    color: #e0e0e0;
+    color: var(--text);
     font-family: monospace;
     min-width: 80px;
   }
 
   .anim-type {
     font-size: 10px;
-    color: #e94560;
-    background: #1a0f1f;
+    color: var(--accent);
+    background: var(--surface);
     padding: 1px 6px;
     border-radius: 2px;
     text-transform: uppercase;
@@ -370,7 +390,7 @@
 
   .anim-key {
     font-size: 10px;
-    color: #e9a23b;
+    color: var(--warning);
     font-family: monospace;
     flex: 1;
   }
@@ -381,14 +401,14 @@
 
   .mini-bar {
     height: 6px;
-    background: #1a1a2e;
+    background: var(--surface);
     border-radius: 3px;
     overflow: hidden;
   }
 
   .mini-fill {
     height: 100%;
-    background: #e94560;
+    background: var(--accent);
     border-radius: 3px;
     transition: width 0.05s linear;
   }
@@ -396,7 +416,7 @@
   .remove-btn {
     background: transparent;
     border: none;
-    color: #606080;
+    color: var(--muted-text);
     font-size: 14px;
     cursor: pointer;
     padding: 0 4px;
@@ -404,7 +424,7 @@
   }
 
   .remove-btn:hover {
-    color: #e94560;
+    color: var(--danger);
   }
 
   .anim-edit {
@@ -413,13 +433,13 @@
     gap: 8px;
     margin-top: 6px;
     padding-top: 6px;
-    border-top: 1px solid #0f3460;
+    border-top: 1px solid var(--border);
     flex-wrap: wrap;
   }
 
   .anim-edit label {
     font-size: 10px;
-    color: #606080;
+    color: var(--muted-text);
     display: flex;
     align-items: center;
     gap: 3px;
@@ -427,9 +447,9 @@
 
   .anim-edit select,
   .anim-edit input[type="number"] {
-    background: #1a1a2e;
-    border: 1px solid #0f3460;
-    color: #e0e0e0;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    color: var(--text);
     padding: 2px 4px;
     font-size: 10px;
     font-family: monospace;
@@ -440,13 +460,13 @@
   .anim-edit select { width: auto; }
   .anim-edit select:focus, .anim-edit input:focus {
     outline: none;
-    border-color: #e94560;
+    border-color: var(--accent);
   }
 
   .bind-btn {
     background: transparent;
-    border: 1px solid #e94560;
-    color: #e94560;
+    border: 1px solid var(--accent);
+    color: var(--accent);
     padding: 2px 8px;
     font-size: 10px;
     cursor: pointer;
@@ -455,12 +475,12 @@
   }
 
   .bind-btn:hover, .bind-btn.bound {
-    background: #e94560;
-    color: #12121f;
+    background: var(--accent);
+    color: var(--app-bg);
   }
 
   .muted {
-    color: #505060;
+    color: var(--muted-text);
     font-size: 11px;
     text-align: center;
     padding: 8px;

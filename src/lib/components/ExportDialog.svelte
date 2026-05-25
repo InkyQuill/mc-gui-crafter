@@ -2,7 +2,7 @@
   import { project } from "../stores/project.svelte";
   import { status, readableError } from "../stores/status.svelte";
   import * as api from "../api";
-  import type { ModTarget } from "../types";
+  import type { CodegenMode, ModTarget } from "../types";
 
   let { onclose }: { onclose: () => void } = $props();
 
@@ -10,6 +10,10 @@
   let modId = $state("mymod");
   let packageName = $state("com.example.mymod");
   let className = $state(project.name.replace(/[^a-zA-Z0-9]/g, ""));
+  let codegenMode = $state<CodegenMode>(project.exportSettings.codegen_mode);
+  let generateRuntimeHelpers = $state(project.exportSettings.generate_runtime_helpers);
+  let generateSemanticRegistry = $derived(codegenMode === "modular");
+  let overwriteExisting = $state(false);
   let outputDir = $state("");
   let exporting = $state(false);
   let resultFiles = $state<string[]>([]);
@@ -36,6 +40,10 @@
       outputDir,
       projectId: project.activeProjectId ?? undefined,
       revision: project.revision,
+      codegenMode,
+      generateRuntimeHelpers,
+      generateSemanticRegistry,
+      overwriteExisting,
     };
 
     resultFiles = [];
@@ -59,6 +67,12 @@
           request.className,
           request.outputDir,
           request.projectId,
+          {
+            codegen_mode: request.codegenMode,
+            generate_runtime_helpers: request.generateRuntimeHelpers,
+            generate_semantic_registry: request.generateSemanticRegistry,
+            overwrite: request.overwriteExisting,
+          },
         );
         if (requestId === previewRequestId) {
           preview = nextPreview;
@@ -108,6 +122,12 @@
         className,
         outputDir,
         project.activeProjectId ?? undefined,
+        {
+          codegen_mode: codegenMode,
+          generate_runtime_helpers: generateRuntimeHelpers,
+          generate_semantic_registry: generateSemanticRegistry,
+          overwrite: overwriteExisting,
+        },
       );
       resultFiles = files;
       status.success(`Exported ${files.length} files.`);
@@ -168,6 +188,28 @@
         <label for="exp-class">Class Name</label>
         <input id="exp-class" type="text" bind:value={className} />
       </div>
+
+      <div class="form-row">
+        <label for="exp-codegen">Code Generation</label>
+        <select id="exp-codegen" bind:value={codegenMode}>
+          <option value="simple">Simple</option>
+          <option value="modular">Modular</option>
+        </select>
+      </div>
+
+      <label class="check-row">
+        <input type="checkbox" bind:checked={generateRuntimeHelpers} />
+        <span>Generate runtime helpers</span>
+      </label>
+
+      <label class="check-row">
+        <input type="checkbox" bind:checked={overwriteExisting} />
+        <span>Overwrite existing files</span>
+      </label>
+
+      {#if codegenMode === "modular" && project.semanticGroups.length === 0}
+        <div class="warning">Modular export has no semantic groups.</div>
+      {/if}
 
       <div class="form-row">
         <label for="exp-output">Output</label>
@@ -263,73 +305,85 @@
   }
   .dialog {
     width: min(560px, calc(100vw - 32px));
-    background: #1a1a2e;
-    border: 1px solid #0f3460;
+    background: var(--surface);
+    border: 1px solid var(--border);
     border-radius: 8px; padding: 16px;
     max-height: calc(100vh - 32px);
     overflow: auto;
     box-shadow: 0 8px 32px rgba(0,0,0,0.5);
   }
-  h2 { font-size: 15px; color: #e0e0e0; margin: 0 0 12px; }
-  h3 { font-size: 12px; color: #a0a0b0; margin: 12px 0 6px; }
+  h2 { font-size: 15px; color: var(--text); margin: 0 0 12px; }
+  h3 { font-size: 12px; color: var(--muted-text); margin: 12px 0 6px; }
   .form { display: flex; flex-direction: column; gap: 10px; }
   .form-row { display: flex; align-items: center; gap: 8px; }
-  .form-row label { font-size: 11px; color: #606080; width: 85px; flex-shrink: 0; }
+  .form-row label { font-size: 11px; color: var(--muted-text); width: 85px; flex-shrink: 0; }
+  .check-row {
+    display: flex; align-items: center; gap: 8px;
+    color: var(--muted-text); font-size: 12px;
+    padding-left: 93px;
+  }
+  .check-row input { flex: 0 0 auto; }
   input, select {
-    flex: 1; background: #12121f; border: 1px solid #0f3460;
-    color: #e0e0e0; padding: 5px 8px; font-size: 12px;
+    flex: 1; background: var(--app-bg); border: 1px solid var(--border);
+    color: var(--text); padding: 5px 8px; font-size: 12px;
     font-family: monospace; border-radius: 4px;
   }
-  input:focus, select:focus { outline: 2px solid #e94560; outline-offset: 2px; }
+  input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: 2px; }
   .pick-btn {
-    flex: 1; background: #0f3460; border: 1px solid #1a5aa0;
-    color: #a0b0d0; padding: 5px 8px; font-size: 12px;
+    flex: 1; background: var(--surface-raised); border: 1px solid var(--accent-2);
+    color: var(--muted-text); padding: 5px 8px; font-size: 12px;
     cursor: pointer; border-radius: 4px; font-family: inherit;
     text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
-  .pick-btn:hover { background: #1a5aa0; color: #e0e0e0; }
+  .pick-btn:hover { background: var(--accent-2); color: var(--text); }
   .preview, .result { margin-top: 12px; }
   .preview-header {
     display: flex; align-items: center; justify-content: space-between; gap: 8px;
   }
-  .preview-header span { color: #606080; font-size: 11px; }
+  .preview-header span { color: var(--muted-text); font-size: 11px; }
   .planned-files ul, .result ul, .warning-list ul, .error-list ul {
     list-style: none; padding: 0; margin: 0;
   }
   .planned-files li, .result li {
     display: flex; align-items: center; gap: 4px;
-    padding: 3px 0; font-size: 11px; color: #808090;
+    padding: 3px 0; font-size: 11px; color: var(--muted-text);
   }
   .planned-files code, .result code {
-    font-family: monospace; font-size: 11px; color: #e9a23b;
+    font-family: monospace; font-size: 11px; color: var(--warning);
     overflow-wrap: anywhere;
   }
   .warning-list li, .error-list li {
     padding: 3px 0; font-size: 11px; line-height: 1.4;
   }
-  .warning-list li { color: #e9a23b; }
-  .error-list li { color: #e94560; }
+  .warning {
+    color: var(--warning); font-size: 11px;
+    border: 1px solid color-mix(in srgb, var(--warning) 45%, transparent);
+    border-radius: 4px; padding: 6px 8px;
+    background: color-mix(in srgb, var(--warning) 10%, transparent);
+  }
+  .warning-list li { color: var(--warning); }
+  .error-list li { color: var(--danger); }
   .copy-btn {
-    background: transparent; border: none; color: #505060;
+    background: transparent; border: none; color: var(--muted-text);
     font-size: 12px; cursor: pointer;
     width: 26px; height: 26px; padding: 0;
     border-radius: 3px;
     display: inline-flex; align-items: center; justify-content: center;
     flex: 0 0 26px;
   }
-  .copy-btn:hover { color: #e0e0e0; }
-  .error { color: #e94560; font-size: 12px; margin-top: 8px; }
+  .copy-btn:hover { color: var(--text); }
+  .error { color: var(--danger); font-size: 12px; margin-top: 8px; }
   .actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
   .cancel-btn, .export-btn {
     padding: 6px 16px; font-size: 12px; border-radius: 4px;
     cursor: pointer; font-family: inherit;
   }
   .cancel-btn {
-    background: transparent; border: 1px solid #0f3460; color: #808090;
+    background: transparent; border: 1px solid var(--border); color: var(--muted-text);
   }
   .export-btn {
-    background: #e94560; border: 1px solid #e94560; color: #12121f; font-weight: 600;
+    background: var(--accent); border: 1px solid var(--accent); color: var(--app-bg); font-weight: 600;
   }
   .export-btn:disabled { opacity: 0.4; cursor: default; }
-  button:focus-visible { outline: 2px solid #e94560; outline-offset: 2px; }
+  button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 </style>

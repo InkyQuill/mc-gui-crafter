@@ -1,15 +1,27 @@
-use crate::project::Project;
-use serde::Deserialize;
+use crate::project::{AssetMetadata, Project};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use zip::ZipArchive;
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 struct LayoutData {
     #[serde(default)]
     elements: Vec<crate::project::Element>,
     #[serde(default)]
     groups: Vec<crate::project::Group>,
+    #[serde(default)]
+    semantic_groups: Vec<crate::project::SemanticGroup>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    asset_metadata: HashMap<String, AssetMetadata>,
+    #[serde(default)]
+    export_settings: crate::project::ProjectExportSettings,
+}
+
+#[derive(Deserialize)]
+struct FontsData {
+    #[serde(default)]
+    fonts: Vec<crate::project::FontAsset>,
 }
 
 pub fn load_from_mcgui(path: &str) -> Result<Project, String> {
@@ -40,11 +52,20 @@ pub fn load_from_mcgui(path: &str) -> Result<Project, String> {
     let mut project = Project::new(&name, gui_width, gui_height, mod_target);
     project.elements = layout.elements;
     project.groups = layout.groups;
+    project.semantic_groups = layout.semantic_groups;
+    project.asset_metadata = layout.asset_metadata;
+    project.export_settings = layout.export_settings;
 
     // Read animations
     if let Ok(anim_json) = read_json_entry(&mut archive, "animations.json") {
         project.animations = serde_json::from_str(&anim_json)
             .map_err(|e| format!("Failed to parse animations.json: {e}"))?;
+    }
+
+    if let Ok(fonts_json) = read_json_entry(&mut archive, "fonts.json") {
+        let fonts: FontsData = serde_json::from_str(&fonts_json)
+            .map_err(|e| format!("Failed to parse fonts.json: {e}"))?;
+        project.fonts = fonts.fonts;
     }
 
     // Collect asset names and read texture data
@@ -102,10 +123,13 @@ pub fn save_to_mcgui(project: &Project) -> Result<(), String> {
         .map_err(|e| format!("Write error: {e}"))?;
 
     // Write layout (elements + groups, minus non-serializable fields)
-    let layout = serde_json::json!({
-        "elements": project.elements,
-        "groups": project.groups,
-    });
+    let layout = LayoutData {
+        elements: project.elements.clone(),
+        groups: project.groups.clone(),
+        semantic_groups: project.semantic_groups.clone(),
+        asset_metadata: project.asset_metadata.clone(),
+        export_settings: project.export_settings.clone(),
+    };
     zip_writer
         .start_file("layout.json", options)
         .map_err(|e| format!("Zip error: {e}"))?;
@@ -124,6 +148,18 @@ pub fn save_to_mcgui(project: &Project) -> Result<(), String> {
                     .unwrap()
                     .as_bytes(),
             )
+            .map_err(|e| format!("Write error: {e}"))?;
+    }
+
+    if !project.fonts.is_empty() {
+        let fonts = serde_json::json!({
+            "fonts": project.fonts,
+        });
+        zip_writer
+            .start_file("fonts.json", options)
+            .map_err(|e| format!("Zip error: {e}"))?;
+        zip_writer
+            .write_all(serde_json::to_string_pretty(&fonts).unwrap().as_bytes())
             .map_err(|e| format!("Write error: {e}"))?;
     }
 
@@ -162,7 +198,11 @@ fn read_json_entry(archive: &mut ZipArchive<std::fs::File>, name: &str) -> Resul
 mod tests {
     use super::*;
     use crate::animation::{Animation, AnimationType};
-    use crate::project::{Element, ElementType, FillDirection, Group, ModTarget, Project, UvRect};
+    use crate::project::{
+        AssetMetadata, CodegenMode, Element, ElementType, FillDirection, FontAsset, FontSource,
+        GlyphInfo, GlyphMap, Group, Layer, ModTarget, NineSlice, NineSliceMode, Project,
+        ProjectExportSettings, SemanticGroup, SemanticGroupKind, UvRect,
+    };
 
     fn temp_project_path() -> String {
         std::env::temp_dir()
@@ -188,6 +228,9 @@ mod tests {
             height: Some(16),
             size: None,
             asset: Some("textures/widget.png".to_string()),
+            icon: None,
+            icon_uv: None,
+            tooltip: None,
             direction: Some(FillDirection::LeftToRight),
             content: None,
             font: None,
@@ -201,6 +244,24 @@ mod tests {
                 width: 12,
                 height: 10,
             }),
+            render_mode: crate::project::TextureRenderMode::Plain,
+            nine_slice: None,
+            layer: Layer::Background,
+            slot_role: None,
+            slot_index: None,
+            inventory_group: None,
+            scroll_binding: None,
+            scroll_min: None,
+            scroll_max: None,
+            visible_rows: None,
+            total_rows: None,
+            columns: None,
+            target_group: None,
+            binding: None,
+            dock: None,
+            open_width: None,
+            open_height: None,
+            attached_region: None,
         });
         project.groups.push(Group {
             id: "group_1".to_string(),
@@ -233,9 +294,131 @@ mod tests {
         assert_eq!(loaded.elements, project.elements);
         assert_eq!(loaded.groups, project.groups);
         assert_eq!(loaded.animations, project.animations);
+        assert!(loaded.fonts.is_empty());
         assert_eq!(
             loaded.texture_data.get("textures/widget.png"),
             Some(&vec![137, 80, 78, 71])
+        );
+    }
+
+    #[test]
+    fn mcgui_round_trip_preserves_ttf_fonts() {
+        let path = temp_project_path();
+        let mut project = Project::new("Fonts", 176, 166, ModTarget::Forge);
+        project.project_path = Some(path.clone());
+        let mut glyph_map = GlyphMap::new();
+        glyph_map.insert(
+            'A',
+            GlyphInfo {
+                x: 4,
+                y: 5,
+                width: 6,
+                height: 7,
+                ascent: 8,
+                advance: 9,
+                bearing_x: 1,
+                bearing_y: -2,
+            },
+        );
+        project.fonts.push(FontAsset {
+            id: "custom".to_string(),
+            source: FontSource::Ttf {
+                atlas_png: vec![1, 2, 3, 4],
+                font_size: 16,
+                glyph_map,
+            },
+        });
+
+        save_to_mcgui(&project).unwrap();
+        let loaded = load_from_mcgui(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+
+        assert_eq!(loaded.fonts.len(), 1);
+        assert_eq!(loaded.fonts[0].id, "custom");
+        match &loaded.fonts[0].source {
+            FontSource::Ttf {
+                atlas_png,
+                font_size,
+                glyph_map,
+            } => {
+                assert_eq!(atlas_png, &vec![1, 2, 3, 4]);
+                assert_eq!(*font_size, 16);
+                let glyph = glyph_map.get(&'A').unwrap();
+                assert_eq!(glyph.advance, 9);
+                assert_eq!(glyph.bearing_x, 1);
+                assert_eq!(glyph.bearing_y, -2);
+            }
+            FontSource::Minecraft { .. } => panic!("expected TTF font"),
+        }
+    }
+
+    #[test]
+    fn mcgui_round_trip_preserves_semantic_groups_and_export_settings() {
+        let path = temp_project_path();
+        let mut project = Project::new("Semantic", 176, 166, ModTarget::Forge);
+        project.project_path = Some(path.clone());
+        project.semantic_groups.push(SemanticGroup {
+            id: "buffer".to_string(),
+            kind: SemanticGroupKind::VirtualSlotGrid,
+            columns: Some(9),
+            visible_rows: Some(3),
+            total_rows: Some(6),
+            slot_count: Some(54),
+            member_ids: Vec::new(),
+            data_source: Some("machine_buffer".to_string()),
+            scroll_binding: Some("buffer_scroll".to_string()),
+            dynamic_height: true,
+        });
+        project.export_settings = ProjectExportSettings {
+            codegen_mode: CodegenMode::Modular,
+            generate_runtime_helpers: false,
+            generate_semantic_registry: true,
+        };
+
+        save_to_mcgui(&project).unwrap();
+        let loaded = load_from_mcgui(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+
+        assert_eq!(loaded.semantic_groups, project.semantic_groups);
+        assert_eq!(loaded.export_settings, project.export_settings);
+    }
+
+    #[test]
+    fn mcgui_round_trip_preserves_asset_metadata() {
+        let path = temp_project_path();
+        let mut project = Project::new("Asset Metadata", 176, 166, ModTarget::Forge);
+        project.project_path = Some(path.clone());
+        project.assets.push("textures/gui/panel.png".to_string());
+        project
+            .texture_data
+            .insert("textures/gui/panel.png".to_string(), vec![137, 80, 78, 71]);
+        project.asset_metadata.insert(
+            "textures/gui/panel.png".to_string(),
+            AssetMetadata {
+                width: Some(64),
+                height: Some(64),
+                nine_slice: Some(NineSlice {
+                    left: 4,
+                    right: 5,
+                    top: 6,
+                    bottom: 7,
+                    edge_mode: NineSliceMode::Tile,
+                    center_mode: NineSliceMode::Stretch,
+                }),
+            },
+        );
+
+        save_to_mcgui(&project).unwrap();
+        let loaded = load_from_mcgui(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+
+        assert!(loaded
+            .assets
+            .iter()
+            .any(|asset| asset == "textures/gui/panel.png"));
+        assert_eq!(
+            loaded.asset_metadata.get("textures/gui/panel.png"),
+            project.asset_metadata.get("textures/gui/panel.png")
         );
     }
 }

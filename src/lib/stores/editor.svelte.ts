@@ -1,6 +1,7 @@
 import { preferences } from "./preferences.svelte";
+import type { Size } from "../types";
 
-export type EditorTool = "select" | "pan" | "slot" | "texture" | "text";
+export type EditorTool = "select" | "pan" | "slot" | "texture" | "text" | "button" | "toggle_button";
 
 export function snap(value: number, snapSize: number): number {
   if (snapSize <= 1) return Math.round(value);
@@ -9,9 +10,13 @@ export function snap(value: number, snapSize: number): number {
 
 class EditorStore {
   selectedElementId = $state<string | null>(null);
+  selectedAttachedRegionId = $state<string | null>(null);
   selectedIds = $state<Set<string>>(new Set());
   zoom = $state(2);
-  tool = $state<EditorTool>("select");
+  activeTool = $state<EditorTool>("select");
+  toolRevision = $state(0);
+  selectionRevision = $state(0);
+  regionSelectionRevision = $state(0);
 
   // Mouse position in GUI pixel coordinates (relative to GUI top-left)
   mouseGuiX = $state(0);
@@ -24,6 +29,16 @@ class EditorStore {
   // Canvas container dimensions
   canvasWidth = $state(800);
   canvasHeight = $state(600);
+
+  get tool() {
+    return this.activeTool;
+  }
+
+  set tool(value: EditorTool) {
+    if (this.activeTool === value) return;
+    this.activeTool = value;
+    this.toolRevision += 1;
+  }
 
   get showGrid() {
     return preferences.values.showGrid;
@@ -66,6 +81,10 @@ class EditorStore {
   resizeOrigH = $state(0);
 
   selectElement(id: string | null, additive = false) {
+    if (this.selectedAttachedRegionId !== null) {
+      this.selectedAttachedRegionId = null;
+      this.regionSelectionRevision += 1;
+    }
     if (additive && id) {
       const next = new Set(this.selectedIds);
       if (next.has(id)) {
@@ -79,11 +98,25 @@ class EditorStore {
       this.selectedElementId = id;
       this.selectedIds = id ? new Set([id]) : new Set();
     }
+    this.selectionRevision += 1;
+  }
+
+  selectAttachedRegion(id: string | null) {
+    this.selectedAttachedRegionId = id;
+    this.selectedElementId = null;
+    this.selectedIds = new Set();
+    this.selectionRevision += 1;
+    this.regionSelectionRevision += 1;
   }
 
   clearSelection() {
+    if (this.selectedAttachedRegionId !== null) {
+      this.selectedAttachedRegionId = null;
+      this.regionSelectionRevision += 1;
+    }
     this.selectedElementId = null;
     this.selectedIds = new Set();
+    this.selectionRevision += 1;
   }
 
   isSelected(id: string): boolean {
@@ -98,10 +131,14 @@ class EditorStore {
     this.zoom = Math.max(1, this.zoom - 1);
   }
 
-  resetView() {
+  resetView(guiSize: Size = { width: 176, height: 166 }) {
     this.zoom = 2;
-    this.panX = 0;
-    this.panY = 0;
+    this.centerView(guiSize);
+  }
+
+  centerView(guiSize: Size) {
+    this.panX = Math.round((this.canvasWidth - guiSize.width * this.zoom) / 2);
+    this.panY = Math.round((this.canvasHeight - guiSize.height * this.zoom) / 2);
   }
 
   screenToGui(screenX: number, screenY: number, canvasEl: HTMLElement): { x: number; y: number } {
@@ -114,14 +151,13 @@ class EditorStore {
     };
   }
 
-  startDragElement(id: string, screenX: number, screenY: number, canvasEl: HTMLElement) {
-    const gui = this.screenToGui(screenX, screenY, canvasEl);
+  startDragElementAt(id: string, canvasX: number, canvasY: number, elementX: number, elementY: number) {
     this.isDragging = true;
     this.dragElementId = id;
-    this.dragStartX = screenX;
-    this.dragStartY = screenY;
-    this.dragOrigX = gui.x;
-    this.dragOrigY = gui.y;
+    this.dragStartX = canvasX;
+    this.dragStartY = canvasY;
+    this.dragOrigX = elementX;
+    this.dragOrigY = elementY;
   }
 
   startResize(id: string, corner: "tl" | "tr" | "bl" | "br", screenX: number, screenY: number, origX: number, origY: number, origW: number, origH: number) {

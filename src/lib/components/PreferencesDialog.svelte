@@ -178,6 +178,7 @@
         <label for="{dialogId}-theme">Theme</label>
         <select id="{dialogId}-theme" value={preferences.values.theme} onchange={updateTheme}>
           <option value="dark">Dark</option>
+          <option value="light">Light</option>
           <option value="high_contrast">High contrast</option>
         </select>
       </div>
@@ -204,8 +205,8 @@
 
   .dialog {
     width: min(460px, calc(100vw - 32px));
-    background: #1a1a2e;
-    border: 1px solid #0f3460;
+    background: var(--surface);
+    border: 1px solid var(--border);
     border-radius: 8px;
     padding: 16px;
     max-height: calc(100vh - 32px);
@@ -223,13 +224,13 @@
   }
 
   h2 {
-    color: #e0e0e0;
+    color: var(--text);
     font-size: 15px;
     margin: 0;
   }
 
   h3 {
-    color: #8080a0;
+    color: var(--muted-text);
     font-size: 11px;
     font-weight: 700;
     letter-spacing: 0;
@@ -238,7 +239,7 @@
   }
 
   .section {
-    border-top: 1px solid #0f3460;
+    border-top: 1px solid var(--border);
     padding: 12px 0;
   }
 
@@ -252,12 +253,12 @@
     display: flex;
     align-items: center;
     gap: 8px;
-    color: #d8d8e0;
+    color: var(--muted-text);
     min-height: 26px;
   }
 
   .check-row input {
-    accent-color: #e94560;
+    accent-color: var(--accent);
   }
 
   .field-grid {
@@ -277,17 +278,17 @@
   }
 
   label {
-    color: #8080a0;
+    color: var(--muted-text);
   }
 
   input[type="number"],
   select {
     width: 100%;
     min-width: 0;
-    background: #12121f;
-    border: 1px solid #0f3460;
+    background: var(--app-bg);
+    border: 1px solid var(--border);
     border-radius: 4px;
-    color: #e0e0e0;
+    color: var(--text);
     font: inherit;
     font-size: 12px;
     padding: 5px 7px;
@@ -300,7 +301,7 @@
   input:focus,
   select:focus,
   button:focus-visible {
-    outline: 2px solid #e94560;
+    outline: 2px solid var(--accent);
     outline-offset: 2px;
   }
 
@@ -323,14 +324,14 @@
     height: 28px;
     background: transparent;
     border: 1px solid transparent;
-    color: #a0a0b0;
+    color: var(--muted-text);
     font-size: 18px;
     line-height: 1;
   }
 
   .close-btn:hover {
-    background: #0f3460;
-    color: #e0e0e0;
+    background: var(--surface-raised);
+    color: var(--text);
   }
 
   .reset-btn,
@@ -340,24 +341,24 @@
 
   .reset-btn {
     background: transparent;
-    border: 1px solid #0f3460;
-    color: #a0a0b0;
+    border: 1px solid var(--border);
+    color: var(--muted-text);
   }
 
   .reset-btn:hover {
-    background: #0f3460;
-    color: #e0e0e0;
+    background: var(--surface-raised);
+    color: var(--text);
   }
 
   .done-btn {
-    background: #e94560;
-    border: 1px solid #e94560;
-    color: #12121f;
+    background: var(--accent);
+    border: 1px solid var(--accent);
+    color: var(--app-bg);
     font-weight: 700;
   }
 
   .done-btn:hover {
-    background: #ff5a7a;
+    background: var(--accent);
   }
 
   :global(:root[data-theme="high_contrast"] body) {

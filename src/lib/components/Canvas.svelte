@@ -9,18 +9,30 @@
   let initialized = $state(false);
 
   $effect(() => {
-    if (!containerEl || initialized) return;
+    if (!containerEl) return;
     initialized = true;
 
     const r = new GuiRenderer(containerEl);
-    renderer = r;
-    r.init().then(() => {
-      r.render();
-    });
+    let disposed = false;
+    r.init()
+      .then(() => {
+        if (disposed) return;
+        renderer = r;
+        editor.resetView(project.guiSize);
+        r.render();
+      })
+      .catch(error => {
+        if (disposed) return;
+        console.error("Failed to initialize GUI renderer", error);
+        initialized = false;
+      });
 
     return () => {
+      disposed = true;
       r.destroy();
-      renderer = null;
+      if (renderer === r) {
+        renderer = null;
+      }
       initialized = false;
     };
   });
@@ -35,17 +47,30 @@
     void project.assets.length;
     void project.animations.length;
     void project.groups.length;
+    void project.fontRenderDataVersion;
     for (const group of project.groups) {
       void group.id;
       void group.elements.length;
     }
     for (const element of project.elements) {
+      void element.type;
       void element.x;
       void element.y;
       void element.width;
       void element.height;
       void element.size;
       void element.asset;
+      void element.icon;
+      void element.icon_uv?.x;
+      void element.icon_uv?.y;
+      void element.icon_uv?.width;
+      void element.icon_uv?.height;
+      void element.content;
+      void element.font;
+      void element.color;
+      void element.shadow;
+      void element.tooltip;
+      void element.binding;
       void element.visible;
       void element.animation;
       void element.uv?.x;
@@ -75,6 +100,7 @@
 
   // Re-render when selection changes
   $effect(() => {
+    void editor.selectionRevision;
     void editor.selectedElementId;
     if (renderer) {
       renderer.render();
