@@ -97,6 +97,7 @@ export interface AttachedRegion {
   kind?: string | null;
   semantic_group?: string | null;
   visible?: boolean;
+  state_owned?: string[];
 }
 
 export type CodegenMode = "simple" | "modular";
@@ -182,6 +183,75 @@ export interface Group {
   x: number;
   y: number;
   elements: string[];
+  state_owned?: string[];
+}
+
+export interface ProjectState {
+  id: string;
+  label: string;
+  description?: string | null;
+  initial?: boolean;
+  export_role?: string | null;
+}
+
+export type EditScope = "base" | "state";
+export type StateOverrideTargetKind = "element" | "attached_region" | "group";
+
+export interface ElementStateOverride {
+  visible?: boolean | null;
+  x?: number | null;
+  y?: number | null;
+  width?: number | null;
+  height?: number | null;
+  attached_region?: string | null;
+  layer?: Layer | null;
+}
+
+export interface AttachedRegionStateOverride {
+  visible?: boolean | null;
+  x?: number | null;
+  y?: number | null;
+  width?: number | null;
+  height?: number | null;
+}
+
+export interface GroupStateOverride {
+  visible?: boolean | null;
+}
+
+export interface ProjectStateOverrides {
+  elements?: Record<string, ElementStateOverride>;
+  groups?: Record<string, GroupStateOverride>;
+  attached_regions?: Record<string, AttachedRegionStateOverride>;
+}
+
+export interface StateAddRequest {
+  id: string;
+  label: string;
+  description?: string | null;
+  initial?: boolean;
+  export_role?: string | null;
+}
+
+export interface StateUpdateRequest {
+  label?: string;
+  description?: string | null;
+  initial?: boolean;
+  export_role?: string | null;
+}
+
+export interface StateOverrideUpdateRequest {
+  state_id: string;
+  target_type: StateOverrideTargetKind;
+  target_id: string;
+  fields: Record<string, unknown>;
+}
+
+export interface StateOverrideClearRequest {
+  state_id: string;
+  target_type: StateOverrideTargetKind;
+  target_id: string;
+  field?: string | null;
 }
 
 export interface Animation {
@@ -263,6 +333,8 @@ export interface ProjectData {
   mod_target: ModTarget;
   elements: Element[];
   groups: Group[];
+  states?: ProjectState[];
+  state_overrides?: Record<string, ProjectStateOverrides>;
   animations: Animation[];
   assets: string[];
   asset_metadata?: Record<string, AssetMetadata>;
@@ -284,6 +356,8 @@ export interface ProjectSessionSummary {
   element_count: number;
   can_undo: boolean;
   can_redo: boolean;
+  active_state_id?: string | null;
+  edit_scope?: EditScope;
 }
 
 export interface ActiveProjectPayload {

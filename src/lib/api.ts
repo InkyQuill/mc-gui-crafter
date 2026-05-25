@@ -6,6 +6,7 @@ import type {
   AttachedRegion,
   AttachedRegionAnchor,
   AttachedRegionState,
+  EditScope,
   Element,
   EditorLayoutConfig,
   FontAsset,
@@ -18,10 +19,15 @@ import type {
   CodegenMode,
   ProjectData,
   ProjectExportSettings,
+  ProjectState,
   ProjectSessionSummary,
   ProjectSummary,
   SaveProjectResult,
   SemanticGroup,
+  StateAddRequest,
+  StateOverrideClearRequest,
+  StateOverrideUpdateRequest,
+  StateUpdateRequest,
   WindowConfig,
 } from "./types";
 
@@ -52,6 +58,8 @@ interface MockSession {
   id: string;
   project: ProjectData;
   revision: number;
+  active_state_id: string | null;
+  edit_scope: EditScope;
   can_undo: boolean;
   can_redo: boolean;
   undoStack: ProjectData[];
@@ -114,6 +122,8 @@ function mockSummary(session: MockSession): ProjectSessionSummary {
     element_count: session.project.elements.length,
     can_undo: session.can_undo,
     can_redo: session.can_redo,
+    active_state_id: session.active_state_id,
+    edit_scope: session.edit_scope,
   };
 }
 
@@ -137,6 +147,8 @@ function createMockSession(project: ProjectData): ProjectSummary {
     id,
     project: clone(project),
     revision: 0,
+    active_state_id: (project.states ?? []).find(state => state.initial)?.id ?? project.states?.[0]?.id ?? null,
+    edit_scope: "base",
     can_undo: false,
     can_redo: false,
     undoStack: [],
@@ -232,6 +244,69 @@ function mockAssetMetadataForSession(session: MockSession): Map<string, AssetMet
 
 function syncMockAssetMetadataFromProject(session: MockSession): void {
   mockAssetMetadata.set(session.id, new Map(Object.entries(session.project.asset_metadata ?? {})));
+}
+
+function applyMockStateOverrideUpdate(session: MockSession, request: StateOverrideUpdateRequest): void {
+  if (!(session.project.states ?? []).some(state => state.id === request.state_id)) {
+    throw `unknown state '${request.state_id}'`;
+  }
+  if (request.target_type === "element" && !session.project.elements.some(element => element.id === request.target_id)) {
+    throw `unknown element '${request.target_id}'`;
+  }
+  if (
+    request.target_type === "attached_region" &&
+    !(session.project.attached_regions ?? []).some(region => region.id === request.target_id)
+  ) {
+    throw `unknown attached region '${request.target_id}'`;
+  }
+  if (request.target_type === "group" && !session.project.groups.some(group => group.id === request.target_id)) {
+    throw `unknown group '${request.target_id}'`;
+  }
+
+  const previous = clone(session.project);
+  const overrides = session.project.state_overrides ?? {};
+  const stateOverrides = overrides[request.state_id] ?? {};
+  if (request.target_type === "element") {
+    stateOverrides.elements = stateOverrides.elements ?? {};
+    stateOverrides.elements[request.target_id] = {
+      ...(stateOverrides.elements[request.target_id] ?? {}),
+      ...request.fields,
+    };
+  } else if (request.target_type === "attached_region") {
+    stateOverrides.attached_regions = stateOverrides.attached_regions ?? {};
+    stateOverrides.attached_regions[request.target_id] = {
+      ...(stateOverrides.attached_regions[request.target_id] ?? {}),
+      ...request.fields,
+    };
+  } else {
+    stateOverrides.groups = stateOverrides.groups ?? {};
+    stateOverrides.groups[request.target_id] = {
+      ...(stateOverrides.groups[request.target_id] ?? {}),
+      ...request.fields,
+    };
+  }
+  overrides[request.state_id] = stateOverrides;
+  session.project.state_overrides = overrides;
+  markMockChanged(session, previous);
+}
+
+function applyMockStateOverrideClear(session: MockSession, request: StateOverrideClearRequest): void {
+  if (!(session.project.states ?? []).some(state => state.id === request.state_id)) {
+    throw `unknown state '${request.state_id}'`;
+  }
+  const previous = clone(session.project);
+  const stateOverrides = session.project.state_overrides?.[request.state_id];
+  const bucket =
+    request.target_type === "element"
+      ? stateOverrides?.elements
+      : request.target_type === "attached_region"
+        ? stateOverrides?.attached_regions
+        : stateOverrides?.groups;
+  if (bucket?.[request.target_id]) {
+    if (request.field) delete bucket[request.target_id][request.field as never];
+    else delete bucket[request.target_id];
+  }
+  markMockChanged(session, previous);
 }
 
 function dataUrlPayloadBytes(dataUrl: string): number {
@@ -692,6 +767,103 @@ async function mockInvoke(cmd: string, args?: Record<string, unknown>): Promise<
     case "attached_region_list": {
       const session = mockSession(args?.project_id);
       return clone(session.project.attached_regions ?? []);
+    }
+    case "state_list": {
+      const session = mockSession(args?.project_id);
+      return clone(session.project.states ?? []);
+    }
+    case "state_add": {
+      const session = mockSession(args?.project_id);
+      const request = clone(args?.request as StateAddRequest);
+      const id = request.id?.trim();
+      const label = request.label?.trim();
+      if (!id) throw "state id cannot be empty";
+      if (!label) throw "state label cannot be empty";
+      if ((session.project.states ?? []).some(state => state.id === id)) {
+        throw `state id '${id}' already exists`;
+      }
+      const previous = clone(session.project);
+      if (request.initial) {
+        session.project.states = (session.project.states ?? []).map(state => ({ ...state, initial: false }));
+      }
+      session.project.states = [
+        ...(session.project.states ?? []),
+        {
+          id,
+          label,
+          description: request.description ?? undefined,
+          initial: request.initial ?? false,
+          export_role: request.export_role ?? undefined,
+        },
+      ];
+      markMockChanged(session, previous);
+      return clone(session.project);
+    }
+    case "state_update": {
+      const session = mockSession(args?.project_id);
+      const id = String(args?.id);
+      const request = clone(args?.request as StateUpdateRequest);
+      const states = session.project.states ?? [];
+      const index = states.findIndex(state => state.id === id);
+      if (index === -1) throw `unknown state '${id}'`;
+      if (request.label !== undefined && request.label.trim() === "") throw "state label cannot be empty";
+      const previous = clone(session.project);
+      const updated = { ...states[index] };
+      if (request.label !== undefined) updated.label = request.label.trim();
+      if ("description" in request) updated.description = request.description;
+      if (request.initial !== undefined) updated.initial = request.initial;
+      if ("export_role" in request) updated.export_role = request.export_role;
+      session.project.states = states.map((state, stateIndex) => {
+        if (updated.initial && stateIndex !== index) return { ...state, initial: false };
+        return stateIndex === index ? updated : state;
+      });
+      markMockChanged(session, previous);
+      return clone(session.project);
+    }
+    case "state_remove": {
+      const session = mockSession(args?.project_id);
+      const id = String(args?.id);
+      if (!(session.project.states ?? []).some(state => state.id === id)) throw `unknown state '${id}'`;
+      const previous = clone(session.project);
+      session.project.states = (session.project.states ?? []).filter(state => state.id !== id);
+      if (session.project.state_overrides) delete session.project.state_overrides[id];
+      session.project.groups = session.project.groups.map(group => ({
+        ...group,
+        state_owned: group.state_owned?.filter(stateId => stateId !== id),
+      }));
+      session.project.attached_regions = (session.project.attached_regions ?? []).map(region => ({
+        ...region,
+        state_owned: region.state_owned?.filter(stateId => stateId !== id),
+      }));
+      if (session.active_state_id === id) {
+        session.active_state_id = (session.project.states ?? []).find(state => state.initial)?.id ?? session.project.states?.[0]?.id ?? null;
+        session.edit_scope = "base";
+      }
+      markMockChanged(session, previous);
+      return clone(session.project);
+    }
+    case "state_set_active": {
+      const session = mockSession(args?.project_id);
+      const stateId = args?.state_id as string | null | undefined;
+      if (stateId && !(session.project.states ?? []).some(state => state.id === stateId)) {
+        throw `unknown state '${stateId}'`;
+      }
+      session.active_state_id = stateId ?? null;
+      if (args?.edit_scope) session.edit_scope = args.edit_scope as EditScope;
+      if (!stateId && !args?.edit_scope) session.edit_scope = "base";
+      return mockSummary(session);
+    }
+    case "state_override_update": {
+      const session = mockSession(args?.project_id);
+      const request = clone(args?.request as StateOverrideUpdateRequest);
+      applyMockStateOverrideUpdate(session, request);
+      return clone(session.project);
+    }
+    case "state_override_clear": {
+      const session = mockSession(args?.project_id);
+      const request = clone(args?.request as StateOverrideClearRequest);
+      applyMockStateOverrideClear(session, request);
+      return clone(session.project);
     }
     case "attached_region_move_with_elements": {
       const session = mockSession(args?.project_id);
@@ -1168,6 +1340,45 @@ export async function attachedRegionList(projectId?: string): Promise<AttachedRe
 export async function attachedRegionMoveWithElements(id: string, x: number, y: number, projectId?: string): Promise<AttachedRegion> {
   const invoke = await getInvoke();
   return invoke("attached_region_move_with_elements", { id, x, y, project_id: projectId }) as Promise<AttachedRegion>;
+}
+
+export async function stateList(projectId?: string): Promise<ProjectState[]> {
+  const invoke = await getInvoke();
+  return invoke("state_list", { project_id: projectId }) as Promise<ProjectState[]>;
+}
+
+export async function stateAdd(request: StateAddRequest, projectId?: string): Promise<ProjectData> {
+  const invoke = await getInvoke();
+  return invoke("state_add", { request, project_id: projectId }) as Promise<ProjectData>;
+}
+
+export async function stateUpdate(id: string, request: StateUpdateRequest, projectId?: string): Promise<ProjectData> {
+  const invoke = await getInvoke();
+  return invoke("state_update", { id, request, project_id: projectId }) as Promise<ProjectData>;
+}
+
+export async function stateRemove(id: string, projectId?: string): Promise<ProjectData> {
+  const invoke = await getInvoke();
+  return invoke("state_remove", { id, project_id: projectId }) as Promise<ProjectData>;
+}
+
+export async function stateSetActive(
+  stateId: string | null,
+  editScope?: EditScope,
+  projectId?: string,
+): Promise<ProjectSessionSummary> {
+  const invoke = await getInvoke();
+  return invoke("state_set_active", { state_id: stateId, edit_scope: editScope, project_id: projectId }) as Promise<ProjectSessionSummary>;
+}
+
+export async function stateOverrideUpdate(request: StateOverrideUpdateRequest, projectId?: string): Promise<ProjectData> {
+  const invoke = await getInvoke();
+  return invoke("state_override_update", { request, project_id: projectId }) as Promise<ProjectData>;
+}
+
+export async function stateOverrideClear(request: StateOverrideClearRequest, projectId?: string): Promise<ProjectData> {
+  const invoke = await getInvoke();
+  return invoke("state_override_clear", { request, project_id: projectId }) as Promise<ProjectData>;
 }
 
 export async function elementAdd(element: Element, projectId?: string): Promise<Element> {

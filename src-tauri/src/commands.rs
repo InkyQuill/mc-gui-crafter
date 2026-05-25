@@ -2,11 +2,13 @@ use crate::animation::Animation;
 use crate::config::{AppConfig, EditorLayoutConfig, WindowConfig};
 use crate::format;
 use crate::project::{
-    AssetMetadata, AttachedRegion, CodegenMode, Element, Group, ModTarget, Project,
-    ProjectExportSettings, ProjectSessionSummary, SemanticGroup,
+    AssetMetadata, AttachedRegion, AttachedRegionStateOverridePatch, CodegenMode, EditScope,
+    Element, ElementStateOverridePatch, Group, ModTarget, Project, ProjectExportSettings,
+    ProjectSessionSummary, ProjectState, SemanticGroup, StateOverrideTarget,
 };
 use crate::templates::TemplateInfo;
 use crate::AppState;
+use serde::Deserialize;
 use tauri::State;
 
 const MAX_FONT_FILE_SIZE: u64 = 16 * 1024 * 1024;
@@ -16,6 +18,55 @@ pub struct ElementMove {
     id: String,
     x: i32,
     y: i32,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct StateAddRequest {
+    pub id: String,
+    pub label: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub initial: bool,
+    #[serde(default)]
+    pub export_role: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct StateUpdateRequest {
+    #[serde(default)]
+    pub label: Option<String>,
+    #[serde(default)]
+    pub description: Option<Option<String>>,
+    #[serde(default)]
+    pub initial: Option<bool>,
+    #[serde(default)]
+    pub export_role: Option<Option<String>>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum StateOverrideTargetKind {
+    Element,
+    AttachedRegion,
+    Group,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct StateOverrideUpdateRequest {
+    pub state_id: String,
+    pub target_type: StateOverrideTargetKind,
+    pub target_id: String,
+    pub fields: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct StateOverrideClearRequest {
+    pub state_id: String,
+    pub target_type: StateOverrideTargetKind,
+    pub target_id: String,
+    #[serde(default)]
+    pub field: Option<String>,
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -339,6 +390,83 @@ pub fn attached_region_move_with_elements(
 ) -> Result<AttachedRegion, String> {
     let mut sessions = state.sessions.lock().unwrap();
     move_attached_region_with_elements_in_session(&mut sessions, project_id.as_deref(), id, x, y)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub fn state_list(
+    state: State<AppState>,
+    project_id: Option<String>,
+) -> Result<Vec<ProjectState>, String> {
+    let sessions = state.sessions.lock().unwrap();
+    let session = sessions.resolve(project_id.as_deref())?;
+    Ok(session.project.states.clone())
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub fn state_add(
+    state: State<AppState>,
+    request: StateAddRequest,
+    project_id: Option<String>,
+) -> Result<Project, String> {
+    let mut sessions = state.sessions.lock().unwrap();
+    add_state_in_session(&mut sessions, project_id.as_deref(), request)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub fn state_update(
+    state: State<AppState>,
+    id: String,
+    request: StateUpdateRequest,
+    project_id: Option<String>,
+) -> Result<Project, String> {
+    let mut sessions = state.sessions.lock().unwrap();
+    update_state_in_session(&mut sessions, project_id.as_deref(), &id, request)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub fn state_remove(
+    state: State<AppState>,
+    id: String,
+    project_id: Option<String>,
+) -> Result<Project, String> {
+    let mut sessions = state.sessions.lock().unwrap();
+    remove_state_in_session(&mut sessions, project_id.as_deref(), &id)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub fn state_set_active(
+    state: State<AppState>,
+    state_id: Option<String>,
+    edit_scope: Option<EditScope>,
+    project_id: Option<String>,
+) -> Result<ProjectSessionSummary, String> {
+    let mut sessions = state.sessions.lock().unwrap();
+    set_active_state_in_session(
+        &mut sessions,
+        project_id.as_deref(),
+        state_id.as_deref(),
+        edit_scope,
+    )
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub fn state_override_update(
+    state: State<AppState>,
+    request: StateOverrideUpdateRequest,
+    project_id: Option<String>,
+) -> Result<Project, String> {
+    let mut sessions = state.sessions.lock().unwrap();
+    update_state_override_in_session(&mut sessions, project_id.as_deref(), request)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub fn state_override_clear(
+    state: State<AppState>,
+    request: StateOverrideClearRequest,
+    project_id: Option<String>,
+) -> Result<Project, String> {
+    let mut sessions = state.sessions.lock().unwrap();
+    clear_state_override_in_session(&mut sessions, project_id.as_deref(), request)
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -1255,6 +1383,613 @@ fn apply_attached_region_changes(
         .map_err(|error| format!("Invalid attached region update: {error}"))
 }
 
+fn add_state_in_session(
+    sessions: &mut crate::project::ProjectSessionManager,
+    project_id: Option<&str>,
+    request: StateAddRequest,
+) -> Result<Project, String> {
+    let id = request.id.trim();
+    let label = request.label.trim();
+    if id.is_empty() {
+        return Err("state id cannot be empty".into());
+    }
+    if label.is_empty() {
+        return Err("state label cannot be empty".into());
+    }
+    sessions
+        .resolve(project_id)?
+        .project
+        .validate_state_id_available(id)?;
+
+    sessions.record_history(project_id)?;
+    let session = sessions.resolve_mut(project_id)?;
+    if request.initial {
+        for state in &mut session.project.states {
+            state.initial = false;
+        }
+    }
+    session.project.states.push(ProjectState {
+        id: id.to_string(),
+        label: label.to_string(),
+        description: request.description,
+        initial: request.initial,
+        export_role: request.export_role,
+    });
+    sessions.mark_changed(project_id)?;
+    Ok(sessions.resolve(project_id)?.project.clone())
+}
+
+fn update_state_in_session(
+    sessions: &mut crate::project::ProjectSessionManager,
+    project_id: Option<&str>,
+    id: &str,
+    request: StateUpdateRequest,
+) -> Result<Project, String> {
+    if let Some(label) = request.label.as_deref() {
+        if label.trim().is_empty() {
+            return Err("state label cannot be empty".into());
+        }
+    }
+    let current = sessions
+        .resolve(project_id)?
+        .project
+        .find_state(id)
+        .ok_or_else(|| format!("unknown state '{id}'"))?;
+    let mut updated = current.clone();
+    if let Some(label) = request.label {
+        updated.label = label.trim().to_string();
+    }
+    if let Some(description) = request.description {
+        updated.description = description;
+    }
+    if let Some(initial) = request.initial {
+        updated.initial = initial;
+    }
+    if let Some(export_role) = request.export_role {
+        updated.export_role = export_role;
+    }
+    if updated == *current {
+        return Ok(sessions.resolve(project_id)?.project.clone());
+    }
+
+    sessions.record_history(project_id)?;
+    let session = sessions.resolve_mut(project_id)?;
+    if updated.initial {
+        for state in &mut session.project.states {
+            state.initial = false;
+        }
+    }
+    let state = session
+        .project
+        .find_state_mut(id)
+        .ok_or_else(|| format!("unknown state '{id}'"))?;
+    *state = updated;
+    sessions.mark_changed(project_id)?;
+    Ok(sessions.resolve(project_id)?.project.clone())
+}
+
+fn remove_state_in_session(
+    sessions: &mut crate::project::ProjectSessionManager,
+    project_id: Option<&str>,
+    id: &str,
+) -> Result<Project, String> {
+    if sessions
+        .resolve(project_id)?
+        .project
+        .find_state(id)
+        .is_none()
+    {
+        return Err(format!("unknown state '{id}'"));
+    }
+
+    sessions.record_history(project_id)?;
+    let session = sessions.resolve_mut(project_id)?;
+    session.project.states.retain(|state| state.id != id);
+    session.project.state_overrides.remove(id);
+    for group in &mut session.project.groups {
+        group.state_owned.retain(|state_id| state_id != id);
+    }
+    for region in &mut session.project.attached_regions {
+        region.state_owned.retain(|state_id| state_id != id);
+    }
+    if session.active_state_id.as_deref() == Some(id) {
+        session.active_state_id = session.project.initial_state_id().map(str::to_owned);
+        session.edit_scope = EditScope::Base;
+    }
+    sessions.mark_changed(project_id)?;
+    Ok(sessions.resolve(project_id)?.project.clone())
+}
+
+fn set_active_state_in_session(
+    sessions: &mut crate::project::ProjectSessionManager,
+    project_id: Option<&str>,
+    state_id: Option<&str>,
+    edit_scope: Option<EditScope>,
+) -> Result<ProjectSessionSummary, String> {
+    if let Some(state_id) = state_id {
+        if sessions
+            .resolve(project_id)?
+            .project
+            .find_state(state_id)
+            .is_none()
+        {
+            return Err(format!("unknown state '{state_id}'"));
+        }
+    }
+
+    let session_id = {
+        let session = sessions.resolve_mut(project_id)?;
+        session.active_state_id = state_id.map(str::to_owned);
+        if let Some(edit_scope) = edit_scope {
+            session.edit_scope = edit_scope;
+        } else if state_id.is_none() {
+            session.edit_scope = EditScope::Base;
+        }
+        session.id.clone()
+    };
+    session_summary(sessions, &session_id)
+}
+
+fn update_state_override_in_session(
+    sessions: &mut crate::project::ProjectSessionManager,
+    project_id: Option<&str>,
+    request: StateOverrideUpdateRequest,
+) -> Result<Project, String> {
+    validate_state_override_target(&sessions.resolve(project_id)?.project, &request)?;
+
+    let changed = {
+        let project = &sessions.resolve(project_id)?.project;
+        let mut preview = project.clone();
+        apply_state_override_update(&mut preview, request.clone())?;
+        preview.state_overrides != project.state_overrides
+    };
+    if !changed {
+        return Ok(sessions.resolve(project_id)?.project.clone());
+    }
+
+    sessions.record_history(project_id)?;
+    let session = sessions.resolve_mut(project_id)?;
+    apply_state_override_update(&mut session.project, request)?;
+    sessions.mark_changed(project_id)?;
+    Ok(sessions.resolve(project_id)?.project.clone())
+}
+
+fn clear_state_override_in_session(
+    sessions: &mut crate::project::ProjectSessionManager,
+    project_id: Option<&str>,
+    request: StateOverrideClearRequest,
+) -> Result<Project, String> {
+    validate_state_override_clear(&sessions.resolve(project_id)?.project, &request)?;
+
+    let changed = {
+        let project = &sessions.resolve(project_id)?.project;
+        let mut preview = project.clone();
+        apply_state_override_clear(&mut preview, request.clone())?;
+        preview.state_overrides != project.state_overrides
+    };
+    if !changed {
+        return Ok(sessions.resolve(project_id)?.project.clone());
+    }
+
+    sessions.record_history(project_id)?;
+    let session = sessions.resolve_mut(project_id)?;
+    apply_state_override_clear(&mut session.project, request)?;
+    sessions.mark_changed(project_id)?;
+    Ok(sessions.resolve(project_id)?.project.clone())
+}
+
+fn validate_state_override_target(
+    project: &Project,
+    request: &StateOverrideUpdateRequest,
+) -> Result<(), String> {
+    if project.find_state(&request.state_id).is_none() {
+        return Err(format!("unknown state '{}'", request.state_id));
+    }
+    match request.target_type {
+        StateOverrideTargetKind::Element => {
+            if project.find_element(&request.target_id).is_none() {
+                return Err(format!("unknown element '{}'", request.target_id));
+            }
+            parse_element_state_patch(&request.fields)?;
+        }
+        StateOverrideTargetKind::AttachedRegion => {
+            if project.find_attached_region(&request.target_id).is_none() {
+                return Err(format!("unknown attached region '{}'", request.target_id));
+            }
+            parse_attached_region_state_patch(&request.fields)?;
+        }
+        StateOverrideTargetKind::Group => {
+            if !project
+                .groups
+                .iter()
+                .any(|group| group.id == request.target_id)
+            {
+                return Err(format!("unknown group '{}'", request.target_id));
+            }
+            parse_group_state_patch(&request.fields)?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_state_override_clear(
+    project: &Project,
+    request: &StateOverrideClearRequest,
+) -> Result<(), String> {
+    if project.find_state(&request.state_id).is_none() {
+        return Err(format!("unknown state '{}'", request.state_id));
+    }
+    match request.target_type {
+        StateOverrideTargetKind::Element => {
+            if project.find_element(&request.target_id).is_none() {
+                return Err(format!("unknown element '{}'", request.target_id));
+            }
+            if let Some(field) = request.field.as_deref() {
+                validate_element_override_field(field)?;
+            }
+        }
+        StateOverrideTargetKind::AttachedRegion => {
+            if project.find_attached_region(&request.target_id).is_none() {
+                return Err(format!("unknown attached region '{}'", request.target_id));
+            }
+            if let Some(field) = request.field.as_deref() {
+                validate_attached_region_override_field(field)?;
+            }
+        }
+        StateOverrideTargetKind::Group => {
+            if !project
+                .groups
+                .iter()
+                .any(|group| group.id == request.target_id)
+            {
+                return Err(format!("unknown group '{}'", request.target_id));
+            }
+            if let Some(field) = request.field.as_deref() {
+                validate_group_override_field(field)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn apply_state_override_update(
+    project: &mut Project,
+    request: StateOverrideUpdateRequest,
+) -> Result<(), String> {
+    match request.target_type {
+        StateOverrideTargetKind::Element => {
+            let patch = parse_element_state_patch(&request.fields)?;
+            let override_value = project
+                .state_overrides
+                .entry(request.state_id.clone())
+                .or_default()
+                .elements
+                .entry(request.target_id.clone())
+                .or_default();
+            if let Some(value) = patch.visible {
+                override_value.visible = value;
+            }
+            if let Some(value) = patch.x {
+                override_value.x = value;
+            }
+            if let Some(value) = patch.y {
+                override_value.y = value;
+            }
+            if let Some(value) = patch.width {
+                override_value.width = value;
+            }
+            if let Some(value) = patch.height {
+                override_value.height = value;
+            }
+            if let Some(value) = patch.attached_region {
+                override_value.attached_region = value;
+            }
+            if let Some(value) = patch.layer {
+                override_value.layer = value;
+            }
+            prune_element_state_override(project, &request.state_id, &request.target_id);
+            project.is_dirty = true;
+            Ok(())
+        }
+        StateOverrideTargetKind::AttachedRegion => {
+            let patch = parse_attached_region_state_patch(&request.fields)?;
+            let override_value = project
+                .state_overrides
+                .entry(request.state_id.clone())
+                .or_default()
+                .attached_regions
+                .entry(request.target_id.clone())
+                .or_default();
+            if let Some(value) = patch.visible {
+                override_value.visible = value;
+            }
+            if let Some(value) = patch.x {
+                override_value.x = value;
+            }
+            if let Some(value) = patch.y {
+                override_value.y = value;
+            }
+            if let Some(value) = patch.width {
+                override_value.width = value;
+            }
+            if let Some(value) = patch.height {
+                override_value.height = value;
+            }
+            prune_attached_region_state_override(project, &request.state_id, &request.target_id);
+            project.is_dirty = true;
+            Ok(())
+        }
+        StateOverrideTargetKind::Group => {
+            let visible = parse_group_state_patch(&request.fields)?;
+            let override_value = project
+                .state_overrides
+                .entry(request.state_id.clone())
+                .or_default()
+                .groups
+                .entry(request.target_id.clone())
+                .or_default();
+            if let Some(value) = visible {
+                override_value.visible = value;
+            }
+            prune_group_state_override(project, &request.state_id, &request.target_id);
+            project.is_dirty = true;
+            Ok(())
+        }
+    }
+}
+
+fn apply_state_override_clear(
+    project: &mut Project,
+    request: StateOverrideClearRequest,
+) -> Result<(), String> {
+    if let Some(field) = request.field {
+        return project
+            .clear_state_override_field(
+                &request.state_id,
+                target_from_kind(request.target_type, request.target_id),
+                &field,
+            )
+            .map(|_| ());
+    }
+
+    if let Some(overrides) = project.state_overrides.get_mut(&request.state_id) {
+        match request.target_type {
+            StateOverrideTargetKind::Element => {
+                overrides.elements.remove(&request.target_id);
+            }
+            StateOverrideTargetKind::AttachedRegion => {
+                overrides.attached_regions.remove(&request.target_id);
+            }
+            StateOverrideTargetKind::Group => {
+                overrides.groups.remove(&request.target_id);
+            }
+        }
+        if overrides.elements.is_empty()
+            && overrides.groups.is_empty()
+            && overrides.attached_regions.is_empty()
+        {
+            project.state_overrides.remove(&request.state_id);
+        }
+    }
+    project.is_dirty = true;
+    Ok(())
+}
+
+fn target_from_kind(kind: StateOverrideTargetKind, id: String) -> StateOverrideTarget {
+    match kind {
+        StateOverrideTargetKind::Element => StateOverrideTarget::Element(id),
+        StateOverrideTargetKind::AttachedRegion => StateOverrideTarget::AttachedRegion(id),
+        StateOverrideTargetKind::Group => StateOverrideTarget::Group(id),
+    }
+}
+
+fn parse_element_state_patch(
+    value: &serde_json::Value,
+) -> Result<ElementStateOverridePatch, String> {
+    let object = value
+        .as_object()
+        .ok_or("state override fields must be an object")?;
+    let mut patch = ElementStateOverridePatch::default();
+    for (key, value) in object {
+        match key.as_str() {
+            "visible" => patch.visible = Some(optional_bool(value, key)?),
+            "x" => patch.x = Some(optional_i32(value, key)?),
+            "y" => patch.y = Some(optional_i32(value, key)?),
+            "width" => patch.width = Some(optional_u32(value, key)?),
+            "height" => patch.height = Some(optional_u32(value, key)?),
+            "attached_region" => patch.attached_region = Some(optional_string(value, key)?),
+            "layer" => {
+                patch.layer = Some(if value.is_null() {
+                    None
+                } else {
+                    Some(
+                        serde_json::from_value(value.clone())
+                            .map_err(|error| format!("invalid layer override: {error}"))?,
+                    )
+                });
+            }
+            _ => return Err(format!("unknown element state override field '{key}'")),
+        }
+    }
+    Ok(patch)
+}
+
+fn parse_attached_region_state_patch(
+    value: &serde_json::Value,
+) -> Result<AttachedRegionStateOverridePatch, String> {
+    let object = value
+        .as_object()
+        .ok_or("state override fields must be an object")?;
+    let mut patch = AttachedRegionStateOverridePatch::default();
+    for (key, value) in object {
+        match key.as_str() {
+            "visible" => patch.visible = Some(optional_bool(value, key)?),
+            "x" => patch.x = Some(optional_i32(value, key)?),
+            "y" => patch.y = Some(optional_i32(value, key)?),
+            "width" => patch.width = Some(optional_u32(value, key)?),
+            "height" => patch.height = Some(optional_u32(value, key)?),
+            _ => {
+                return Err(format!(
+                    "unknown attached-region state override field '{key}'"
+                ))
+            }
+        }
+    }
+    Ok(patch)
+}
+
+fn parse_group_state_patch(value: &serde_json::Value) -> Result<Option<Option<bool>>, String> {
+    let object = value
+        .as_object()
+        .ok_or("state override fields must be an object")?;
+    let mut visible = None;
+    for (key, value) in object {
+        match key.as_str() {
+            "visible" => visible = Some(optional_bool(value, key)?),
+            _ => return Err(format!("unknown group state override field '{key}'")),
+        }
+    }
+    Ok(visible)
+}
+
+fn validate_element_override_field(field: &str) -> Result<(), String> {
+    match field {
+        "visible" | "x" | "y" | "width" | "height" | "attached_region" | "layer" => Ok(()),
+        _ => Err(format!("unknown state override field '{field}'")),
+    }
+}
+
+fn validate_attached_region_override_field(field: &str) -> Result<(), String> {
+    match field {
+        "visible" | "x" | "y" | "width" | "height" => Ok(()),
+        _ => Err(format!("unknown state override field '{field}'")),
+    }
+}
+
+fn validate_group_override_field(field: &str) -> Result<(), String> {
+    match field {
+        "visible" => Ok(()),
+        _ => Err(format!("unknown state override field '{field}'")),
+    }
+}
+
+fn optional_bool(value: &serde_json::Value, field: &str) -> Result<Option<bool>, String> {
+    if value.is_null() {
+        return Ok(None);
+    }
+    value
+        .as_bool()
+        .map(Some)
+        .ok_or_else(|| format!("state override field '{field}' must be a boolean or null"))
+}
+
+fn optional_i32(value: &serde_json::Value, field: &str) -> Result<Option<i32>, String> {
+    if value.is_null() {
+        return Ok(None);
+    }
+    let value = value
+        .as_i64()
+        .ok_or_else(|| format!("state override field '{field}' must be an integer or null"))?;
+    i32::try_from(value)
+        .map(Some)
+        .map_err(|_| format!("state override field '{field}' is out of range"))
+}
+
+fn optional_u32(value: &serde_json::Value, field: &str) -> Result<Option<u32>, String> {
+    if value.is_null() {
+        return Ok(None);
+    }
+    let value = value.as_u64().ok_or_else(|| {
+        format!("state override field '{field}' must be a non-negative integer or null")
+    })?;
+    u32::try_from(value)
+        .map(Some)
+        .map_err(|_| format!("state override field '{field}' is out of range"))
+}
+
+fn optional_string(
+    value: &serde_json::Value,
+    field: &str,
+) -> Result<Option<Option<String>>, String> {
+    if value.is_null() {
+        return Ok(None);
+    }
+    value
+        .as_str()
+        .map(|value| Some(Some(value.to_string())))
+        .ok_or_else(|| format!("state override field '{field}' must be a string or null"))
+}
+
+fn prune_empty_state_overrides(project: &mut Project, state_id: &str) {
+    if project
+        .state_overrides
+        .get(state_id)
+        .is_some_and(|overrides| {
+            overrides.elements.is_empty()
+                && overrides.groups.is_empty()
+                && overrides.attached_regions.is_empty()
+        })
+    {
+        project.state_overrides.remove(state_id);
+    }
+}
+
+fn prune_element_state_override(project: &mut Project, state_id: &str, element_id: &str) {
+    let Some(overrides) = project.state_overrides.get_mut(state_id) else {
+        return;
+    };
+    if overrides
+        .elements
+        .get(element_id)
+        .is_some_and(|override_value| {
+            override_value.visible.is_none()
+                && override_value.x.is_none()
+                && override_value.y.is_none()
+                && override_value.width.is_none()
+                && override_value.height.is_none()
+                && override_value.attached_region.is_none()
+                && override_value.layer.is_none()
+        })
+    {
+        overrides.elements.remove(element_id);
+    }
+    prune_empty_state_overrides(project, state_id);
+}
+
+fn prune_attached_region_state_override(project: &mut Project, state_id: &str, region_id: &str) {
+    let Some(overrides) = project.state_overrides.get_mut(state_id) else {
+        return;
+    };
+    if overrides
+        .attached_regions
+        .get(region_id)
+        .is_some_and(|override_value| {
+            override_value.visible.is_none()
+                && override_value.x.is_none()
+                && override_value.y.is_none()
+                && override_value.width.is_none()
+                && override_value.height.is_none()
+        })
+    {
+        overrides.attached_regions.remove(region_id);
+    }
+    prune_empty_state_overrides(project, state_id);
+}
+
+fn prune_group_state_override(project: &mut Project, state_id: &str, group_id: &str) {
+    let Some(overrides) = project.state_overrides.get_mut(state_id) else {
+        return;
+    };
+    if overrides
+        .groups
+        .get(group_id)
+        .is_some_and(|override_value| override_value.visible.is_none())
+    {
+        overrides.groups.remove(group_id);
+    }
+    prune_empty_state_overrides(project, state_id);
+}
+
 fn remove_attached_region_in_session(
     sessions: &mut crate::project::ProjectSessionManager,
     project_id: Option<&str>,
@@ -1929,6 +2664,194 @@ mod tests {
             .attached_regions
             .push(sample_attached_region("returns_pocket", 100, 18));
         (sessions, project_id)
+    }
+
+    fn state_add_request(id: &str) -> StateAddRequest {
+        StateAddRequest {
+            id: id.to_string(),
+            label: id.to_string(),
+            description: None,
+            initial: false,
+            export_role: None,
+        }
+    }
+
+    #[test]
+    fn state_add_update_remove_records_history() {
+        let mut sessions = ProjectSessionManager::default();
+        let project_id =
+            sessions.create_session(Project::new("States", 176, 166, ModTarget::Forge));
+
+        add_state_in_session(
+            &mut sessions,
+            Some(&project_id),
+            StateAddRequest {
+                id: "expanded".into(),
+                label: "Expanded".into(),
+                description: None,
+                initial: true,
+                export_role: Some("expanded".into()),
+            },
+        )
+        .unwrap();
+
+        let summary = session_summary(&sessions, &project_id).unwrap();
+        assert!(summary.can_undo);
+        assert_eq!(summary.revision, 1);
+        assert_eq!(
+            sessions
+                .resolve(Some(&project_id))
+                .unwrap()
+                .project
+                .states
+                .len(),
+            1
+        );
+
+        update_state_in_session(
+            &mut sessions,
+            Some(&project_id),
+            "expanded",
+            StateUpdateRequest {
+                label: Some("Expanded drawer".into()),
+                description: Some(Some("Drawer visible".into())),
+                initial: Some(true),
+                export_role: Some(Some("expanded".into())),
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            sessions.resolve(Some(&project_id)).unwrap().project.states[0].label,
+            "Expanded drawer"
+        );
+
+        remove_state_in_session(&mut sessions, Some(&project_id), "expanded").unwrap();
+        let session = sessions.resolve(Some(&project_id)).unwrap();
+        assert!(session.project.states.is_empty());
+        assert!(session.project.state_overrides.is_empty());
+        assert_eq!(session_summary(&sessions, &project_id).unwrap().revision, 3);
+    }
+
+    #[test]
+    fn state_set_active_is_session_only_without_history() {
+        let mut sessions = ProjectSessionManager::default();
+        let project_id =
+            sessions.create_session(Project::new("States", 176, 166, ModTarget::Forge));
+        add_state_in_session(
+            &mut sessions,
+            Some(&project_id),
+            state_add_request("expanded"),
+        )
+        .unwrap();
+
+        let before = session_summary(&sessions, &project_id).unwrap().revision;
+        let summary = set_active_state_in_session(
+            &mut sessions,
+            Some(&project_id),
+            Some("expanded"),
+            Some(EditScope::State),
+        )
+        .unwrap();
+
+        assert_eq!(summary.active_state_id.as_deref(), Some("expanded"));
+        assert_eq!(summary.edit_scope, EditScope::State);
+        assert_eq!(summary.revision, before);
+        assert_eq!(
+            sessions
+                .resolve(Some(&project_id))
+                .unwrap()
+                .undo_stack
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn state_override_update_and_clear_records_history() {
+        let mut sessions = ProjectSessionManager::default();
+        let project_id =
+            sessions.create_session(Project::new("Overrides", 176, 166, ModTarget::Forge));
+        sessions
+            .resolve_mut(Some(&project_id))
+            .unwrap()
+            .project
+            .elements
+            .push(sample_element("panel", 4, 4));
+        add_state_in_session(
+            &mut sessions,
+            Some(&project_id),
+            state_add_request("expanded"),
+        )
+        .unwrap();
+
+        update_state_override_in_session(
+            &mut sessions,
+            Some(&project_id),
+            StateOverrideUpdateRequest {
+                state_id: "expanded".into(),
+                target_type: StateOverrideTargetKind::Element,
+                target_id: "panel".into(),
+                fields: serde_json::json!({ "x": 48, "visible": false }),
+            },
+        )
+        .unwrap();
+
+        let session = sessions.resolve(Some(&project_id)).unwrap();
+        let element_override = &session.project.state_overrides["expanded"].elements["panel"];
+        assert_eq!(element_override.x, Some(48));
+        assert_eq!(element_override.visible, Some(false));
+        assert_eq!(session_summary(&sessions, &project_id).unwrap().revision, 2);
+
+        clear_state_override_in_session(
+            &mut sessions,
+            Some(&project_id),
+            StateOverrideClearRequest {
+                state_id: "expanded".into(),
+                target_type: StateOverrideTargetKind::Element,
+                target_id: "panel".into(),
+                field: Some("x".into()),
+            },
+        )
+        .unwrap();
+
+        let session = sessions.resolve(Some(&project_id)).unwrap();
+        assert_eq!(
+            session.project.state_overrides["expanded"].elements["panel"].x,
+            None
+        );
+        assert_eq!(session_summary(&sessions, &project_id).unwrap().revision, 3);
+    }
+
+    #[test]
+    fn state_override_validation_error_preserves_history() {
+        let mut sessions = ProjectSessionManager::default();
+        let project_id =
+            sessions.create_session(Project::new("Overrides", 176, 166, ModTarget::Forge));
+        add_state_in_session(
+            &mut sessions,
+            Some(&project_id),
+            state_add_request("expanded"),
+        )
+        .unwrap();
+        let before = session_summary(&sessions, &project_id).unwrap();
+
+        let result = update_state_override_in_session(
+            &mut sessions,
+            Some(&project_id),
+            StateOverrideUpdateRequest {
+                state_id: "expanded".into(),
+                target_type: StateOverrideTargetKind::Element,
+                target_id: "missing".into(),
+                fields: serde_json::json!({ "x": 48 }),
+            },
+        );
+
+        assert!(result.is_err());
+        let after = session_summary(&sessions, &project_id).unwrap();
+        assert_eq!(after.revision, before.revision);
+        assert_eq!(after.can_undo, before.can_undo);
+        assert_eq!(after.can_redo, before.can_redo);
     }
 
     fn png_data_url(color: [u8; 4]) -> String {

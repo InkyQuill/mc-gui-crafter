@@ -726,10 +726,25 @@ pub struct ProjectSession {
     pub id: String,
     pub project: Project,
     pub revision: u64,
+    pub active_state_id: Option<String>,
+    pub edit_scope: EditScope,
     #[serde(skip)]
     pub undo_stack: Vec<Project>,
     #[serde(skip)]
     pub redo_stack: Vec<Project>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum EditScope {
+    Base,
+    State,
+}
+
+impl Default for EditScope {
+    fn default() -> Self {
+        Self::Base
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -743,6 +758,8 @@ pub struct ProjectSessionSummary {
     pub element_count: usize,
     pub can_undo: bool,
     pub can_redo: bool,
+    pub active_state_id: Option<String>,
+    pub edit_scope: EditScope,
 }
 
 #[derive(Debug, Default)]
@@ -754,10 +771,13 @@ pub struct ProjectSessionManager {
 impl ProjectSessionManager {
     pub fn create_session(&mut self, project: Project) -> String {
         let id = uuid::Uuid::new_v4().to_string();
+        let active_state_id = project.initial_state_id().map(str::to_owned);
         self.projects.push(ProjectSession {
             id: id.clone(),
             project,
             revision: 0,
+            active_state_id,
+            edit_scope: EditScope::Base,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
         });
@@ -899,6 +919,8 @@ fn summary_for_session_with_active(
         element_count: session.project.elements.len(),
         can_undo: !session.undo_stack.is_empty(),
         can_redo: !session.redo_stack.is_empty(),
+        active_state_id: session.active_state_id.clone(),
+        edit_scope: session.edit_scope,
     }
 }
 
