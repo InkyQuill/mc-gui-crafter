@@ -26,7 +26,7 @@
       if (!project.assets.includes(asset.name)) {
         project.assets = [...project.assets, asset.name];
       }
-      assetDataUrls.set(asset.name, asset.data_url);
+      if (asset.data_url) assetDataUrls.set(asset.name, asset.data_url);
       await project.refreshSessions();
       await project.syncFromBackend();
       status.success(`Imported ${displayName(asset.name)}.`);
@@ -66,6 +66,9 @@
         return;
       }
       project.assets = project.assets.filter(a => a !== name);
+      const metadata = { ...project.assetMetadata };
+      delete metadata[name];
+      project.assetMetadata = metadata;
       assetDataUrls.delete(name);
       if (editingAsset === name) editingAsset = null;
       status.success(`Removed ${displayName(name)}.`);
@@ -102,7 +105,7 @@
       if (!project.assets.includes(asset.name)) {
         project.assets = [...project.assets, asset.name];
       }
-      assetDataUrls.set(asset.name, asset.data_url);
+      assetDataUrls.set(asset.name, asset.data_url ?? dataUrl);
       await project.refreshSessions();
       await project.syncFromBackend();
       status.success(`Imported ${displayName(asset.name)}.`);
@@ -113,6 +116,15 @@
 
   function displayName(fullPath: string): string {
     return fullPath.replace("textures/", "").replace(".png", "");
+  }
+
+  async function startEditing(name: string) {
+    try {
+      await project.ensureAssetDataUrl(name);
+      editingAsset = name;
+    } catch (error) {
+      status.error(`Failed to load ${displayName(name)}: ${readableError(error)}`);
+    }
   }
 </script>
 
@@ -126,7 +138,7 @@
   {#if project.fonts.length > 0}
     <h3>Fonts ({project.fonts.length})</h3>
     <ul class="font-list">
-      {#each project.fonts as font}
+      {#each project.fonts as font (font.id)}
         <li class="font-item">
           <span>{font.id}</span>
           <span class="font-type">{font.source.type}</span>
@@ -153,7 +165,7 @@
               newDataUrl,
               project.activeProjectId ?? undefined,
             );
-            assetDataUrls.set(asset.name, asset.data_url);
+            assetDataUrls.set(asset.name, asset.data_url ?? newDataUrl);
             await project.refreshSessions();
             await project.syncFromBackend();
             status.success(`Updated ${displayName(asset.name)}.`);
@@ -169,10 +181,10 @@
       <p class="muted">No textures imported</p>
     {:else}
       <div class="asset-grid">
-        {#each project.assets as name}
+        {#each project.assets as name (name)}
           {@const dataUrl = assetDataUrls.get(name)}
           <div class="asset-item">
-            <button class="asset-thumb" onclick={() => editingAsset = name} title="Click to edit">
+            <button class="asset-thumb" onclick={() => startEditing(name)} title="Click to edit">
               {#if dataUrl}
                 <img src={dataUrl} alt={name} />
               {:else}

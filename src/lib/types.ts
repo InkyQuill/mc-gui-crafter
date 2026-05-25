@@ -119,6 +119,24 @@ export interface UvRect {
   height: number;
 }
 
+export type NineSliceMode = "tile" | "stretch";
+export type TextureRenderMode = "plain" | "nine_slice";
+
+export interface NineSlice {
+  left: number;
+  right: number;
+  top: number;
+  bottom: number;
+  edge_mode: NineSliceMode;
+  center_mode: NineSliceMode;
+}
+
+export interface AssetMetadata {
+  width?: number | null;
+  height?: number | null;
+  nine_slice?: NineSlice | null;
+}
+
 export interface Element {
   id: string;
   type: ElementType;
@@ -139,6 +157,8 @@ export interface Element {
   animation?: string;
   visible?: boolean;
   uv?: UvRect | null;
+  render_mode?: TextureRenderMode;
+  nine_slice?: NineSlice | null;
   layer?: Layer;
   slot_role?: SlotRole | null;
   slot_index?: number | null;
@@ -245,6 +265,7 @@ export interface ProjectData {
   groups: Group[];
   animations: Animation[];
   assets: string[];
+  asset_metadata?: Record<string, AssetMetadata>;
   project_path?: string | null;
   is_dirty?: boolean;
   fonts?: FontAsset[];
@@ -281,5 +302,8 @@ export interface AssetInfo {
   name: string;
   width: number;
   height: number;
-  data_url: string;
+  bytes: number;
+  sha256: string;
+  data_url?: string;
+  nine_slice?: NineSlice | null;
 }

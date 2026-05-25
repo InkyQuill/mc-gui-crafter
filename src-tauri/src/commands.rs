@@ -2,8 +2,8 @@ use crate::animation::Animation;
 use crate::config::{AppConfig, EditorLayoutConfig, WindowConfig};
 use crate::format;
 use crate::project::{
-    AttachedRegion, CodegenMode, Element, Group, ModTarget, Project, ProjectExportSettings,
-    ProjectSessionSummary, SemanticGroup,
+    AssetMetadata, AttachedRegion, CodegenMode, Element, Group, ModTarget, Project,
+    ProjectExportSettings, ProjectSessionSummary, SemanticGroup,
 };
 use crate::templates::TemplateInfo;
 use crate::AppState;
@@ -455,9 +455,9 @@ pub fn asset_import(
         .unwrap_or("texture");
     let asset_path = format!("textures/{name}.png");
 
-    // Base64 encode
-    use base64::Engine;
-    let b64 = base64::engine::general_purpose::STANDARD.encode(&data);
+    let data_url = data_url_png(&data);
+    let bytes = data.len();
+    let sha256 = sha256_hex(&data);
 
     let mut sessions = state.sessions.lock().unwrap();
     sessions.record_history(project_id.as_deref())?;
@@ -476,7 +476,10 @@ pub fn asset_import(
         "name": asset_path,
         "width": width,
         "height": height,
-        "data_url": format!("data:image/png;base64,{}", b64)
+        "bytes": bytes,
+        "sha256": sha256,
+        "data_url": data_url,
+        "nine_slice": serde_json::Value::Null,
     }))
 }
 
@@ -499,28 +502,38 @@ pub fn asset_list(
     let sessions = state.sessions.lock().unwrap();
     let project = &sessions.resolve(project_id.as_deref())?.project;
 
-    use base64::Engine;
     Ok(project
         .assets
         .iter()
         .map(|name| {
-            let (width, height, data_url) = if let Some(data) = project.texture_data.get(name) {
-                let dims = image::load_from_memory(data).ok();
-                let w = dims.as_ref().map(|i| i.width()).unwrap_or(16);
-                let h = dims.as_ref().map(|i| i.height()).unwrap_or(16);
-                let b64 = base64::engine::general_purpose::STANDARD.encode(data);
-                (w, h, format!("data:image/png;base64,{}", b64))
-            } else {
-                (16, 16, String::new())
-            };
-            serde_json::json!({
-                "name": name,
-                "width": width,
-                "height": height,
-                "data_url": data_url
-            })
+            compact_asset_metadata(
+                name,
+                project.texture_data.get(name).map(Vec::as_slice),
+                project.asset_metadata.get(name),
+            )
         })
         .collect())
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub fn asset_metadata_update(
+    state: State<'_, AppState>,
+    name: String,
+    metadata: AssetMetadata,
+    project_id: Option<String>,
+) -> Result<AssetMetadata, String> {
+    let mut sessions = state.sessions.lock().unwrap();
+    sessions.record_history(project_id.as_deref())?;
+    let session = sessions.resolve_mut(project_id.as_deref())?;
+    if !session.project.assets.iter().any(|asset| asset == &name) {
+        return Err(format!("Asset not found: {name}"));
+    }
+    session
+        .project
+        .asset_metadata
+        .insert(name, metadata.clone());
+    sessions.mark_changed(project_id.as_deref())?;
+    Ok(metadata)
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -682,6 +695,41 @@ fn data_url_png(data: &[u8]) -> String {
     use base64::Engine;
     let b64 = base64::engine::general_purpose::STANDARD.encode(data);
     format!("data:image/png;base64,{b64}")
+}
+
+fn sha256_hex(data: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    format!("{:x}", Sha256::digest(data))
+}
+
+fn compact_asset_metadata(
+    name: &str,
+    data: Option<&[u8]>,
+    metadata: Option<&AssetMetadata>,
+) -> serde_json::Value {
+    let image = data.and_then(|data| image::load_from_memory(data).ok());
+    let width = image
+        .as_ref()
+        .map(|image| image.width())
+        .or_else(|| metadata.and_then(|metadata| metadata.width))
+        .unwrap_or(16);
+    let height = image
+        .as_ref()
+        .map(|image| image.height())
+        .or_else(|| metadata.and_then(|metadata| metadata.height))
+        .unwrap_or(16);
+    let bytes = data.map_or(0, |data| data.len());
+    let sha256 = data.map_or_else(|| sha256_hex(&[]), sha256_hex);
+    let nine_slice = metadata.and_then(|metadata| metadata.nine_slice.clone());
+
+    serde_json::json!({
+        "name": name,
+        "width": width,
+        "height": height,
+        "bytes": bytes,
+        "sha256": sha256,
+        "nine_slice": nine_slice,
+    })
 }
 
 fn font_render_data_json(font: &crate::project::FontAsset) -> serde_json::Value {
@@ -1616,14 +1664,15 @@ fn remove_asset_from_session(
     sessions.record_history(project_id)?;
     let session = sessions.resolve_mut(project_id)?;
     let removed_texture = session.project.texture_data.remove(name).is_some();
+    let removed_metadata = session.project.asset_metadata.remove(name).is_some();
     let old_len = session.project.assets.len();
     session.project.assets.retain(|asset| asset != name);
     let removed_asset = session.project.assets.len() != old_len;
-    if removed_texture || removed_asset {
+    if removed_texture || removed_metadata || removed_asset {
         sessions.mark_changed(project_id)?;
     }
 
-    Ok(removed_texture || removed_asset)
+    Ok(removed_texture || removed_metadata || removed_asset)
 }
 
 fn update_asset_in_session(
@@ -1640,6 +1689,8 @@ fn update_asset_in_session(
     }
     let img = image::load_from_memory(&data).map_err(|e| format!("Failed to decode PNG: {e}"))?;
     let (width, height) = (img.width(), img.height());
+    let bytes = data.len();
+    let sha256 = sha256_hex(&data);
 
     {
         let project = &sessions.resolve(project_id)?.project;
@@ -1659,7 +1710,10 @@ fn update_asset_in_session(
                 "name": name,
                 "width": width,
                 "height": height,
+                "bytes": bytes,
+                "sha256": sha256,
                 "data_url": data_url,
+                "nine_slice": project.asset_metadata.get(name).and_then(|metadata| metadata.nine_slice.clone()),
             }));
         }
     }
@@ -1667,13 +1721,21 @@ fn update_asset_in_session(
     sessions.record_history(project_id)?;
     let session = sessions.resolve_mut(project_id)?;
     session.project.texture_data.insert(name.to_string(), data);
+    let nine_slice = session
+        .project
+        .asset_metadata
+        .get(name)
+        .and_then(|metadata| metadata.nine_slice.clone());
     sessions.mark_changed(project_id)?;
 
     Ok(serde_json::json!({
         "name": name,
         "width": width,
         "height": height,
+        "bytes": bytes,
+        "sha256": sha256,
         "data_url": data_url,
+        "nine_slice": nine_slice,
     }))
 }
 
@@ -1787,6 +1849,8 @@ mod tests {
             animation: None,
             visible: true,
             uv: None,
+            render_mode: crate::project::TextureRenderMode::Plain,
+            nine_slice: None,
             layer: crate::project::Layer::Background,
             slot_role: None,
             slot_index: None,

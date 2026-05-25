@@ -1,6 +1,7 @@
 import type {
   ActiveProjectPayload,
   Animation,
+  AssetMetadata,
   AttachedRegion,
   Element,
   ElementType,
@@ -42,6 +43,7 @@ export class ProjectStore {
   groups = $state<Group[]>([]);
   animations = $state<Animation[]>([]);
   assets = $state<string[]>([]);
+  assetMetadata = $state<Record<string, AssetMetadata>>({});
   fonts = $state<FontAsset[]>([]);
   semanticGroups = $state<SemanticGroup[]>([]);
   attachedRegions = $state<AttachedRegion[]>([]);
@@ -684,6 +686,7 @@ export class ProjectStore {
     this.groups = project.groups;
     this.animations = project.animations;
     this.assets = project.assets;
+    this.assetMetadata = project.asset_metadata ?? {};
     this.fonts = project.fonts ?? [];
     this.semanticGroups = project.semantic_groups ?? [];
     this.attachedRegions = project.attached_regions ?? [];
@@ -702,14 +705,43 @@ export class ProjectStore {
       this.assets = assets.map(a => a.name);
       assetDataUrls.clear();
       assetDimensions.clear();
+      const nextMetadata = { ...this.assetMetadata };
       for (const a of assets) {
-        assetDataUrls.set(a.name, a.data_url);
+        if (a.data_url) {
+          assetDataUrls.set(a.name, a.data_url);
+        }
         if (a.width > 0 && a.height > 0) {
           assetDimensions.set(a.name, { width: a.width, height: a.height });
         }
+        nextMetadata[a.name] = {
+          ...nextMetadata[a.name],
+          width: a.width,
+          height: a.height,
+          nine_slice: a.nine_slice ?? nextMetadata[a.name]?.nine_slice ?? null,
+        };
       }
+      this.assetMetadata = nextMetadata;
       this.bumpRenderVersion();
     } catch { /* assets may not be available */ }
+  }
+
+  async ensureAssetDataUrl(name: string): Promise<string | undefined> {
+    const cached = assetDataUrls.get(name);
+    if (cached) return cached;
+    if (!this.activeProjectId) return undefined;
+    const dataUrl = await api.assetGetDataUrl(name, this.activeProjectId);
+    assetDataUrls.set(name, dataUrl);
+    this.bumpRenderVersion();
+    return dataUrl;
+  }
+
+  async updateAssetMetadata(name: string, metadata: AssetMetadata): Promise<AssetMetadata> {
+    const updated = await api.assetMetadataUpdate(name, metadata, this.activeProjectId ?? undefined);
+    this.assetMetadata = { ...this.assetMetadata, [name]: updated };
+    this.isDirty = true;
+    await this.refreshSessions();
+    this.bumpRenderVersion();
+    return updated;
   }
 
   private async syncFontRenderData(fontIds: string[], projectId: string | null, requestId: number) {
@@ -772,6 +804,7 @@ export class ProjectStore {
     this.groups = [];
     this.animations = [];
     this.assets = [];
+    this.assetMetadata = {};
     this.fonts = [];
     this.semanticGroups = [];
     this.attachedRegions = [];

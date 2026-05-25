@@ -230,6 +230,55 @@ pub struct UvRect {
 }
 
 iterable_enum! {
+    #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+    #[serde(rename_all = "snake_case")]
+    pub enum NineSliceMode {
+        Tile,
+        Stretch,
+    }
+}
+
+fn default_nine_slice_mode() -> NineSliceMode {
+    NineSliceMode::Tile
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct NineSlice {
+    pub left: u32,
+    pub right: u32,
+    pub top: u32,
+    pub bottom: u32,
+    #[serde(default = "default_nine_slice_mode")]
+    pub edge_mode: NineSliceMode,
+    #[serde(default = "default_nine_slice_mode")]
+    pub center_mode: NineSliceMode,
+}
+
+iterable_enum! {
+    #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+    #[serde(rename_all = "snake_case")]
+    pub enum TextureRenderMode {
+        #[default]
+        Plain,
+        NineSlice,
+    }
+}
+
+fn is_plain_render_mode(mode: &TextureRenderMode) -> bool {
+    *mode == TextureRenderMode::Plain
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AssetMetadata {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub width: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub height: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub nine_slice: Option<NineSlice>,
+}
+
+iterable_enum! {
     #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
     #[serde(rename_all = "snake_case")]
     pub enum AttachedRegionAnchor {
@@ -372,6 +421,10 @@ pub struct Element {
     pub visible: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub uv: Option<UvRect>,
+    #[serde(default, skip_serializing_if = "is_plain_render_mode")]
+    pub render_mode: TextureRenderMode,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub nine_slice: Option<NineSlice>,
     #[serde(default, skip_serializing_if = "is_default_layer")]
     pub layer: Layer,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -442,6 +495,8 @@ pub struct Project {
     pub groups: Vec<Group>,
     pub animations: Vec<crate::animation::Animation>,
     pub assets: Vec<String>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub asset_metadata: HashMap<String, AssetMetadata>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub semantic_groups: Vec<SemanticGroup>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -649,6 +704,7 @@ impl Project {
             groups: Vec::new(),
             animations: Vec::new(),
             assets: Vec::new(),
+            asset_metadata: HashMap::new(),
             semantic_groups: Vec::new(),
             attached_regions: Vec::new(),
             export_settings: ProjectExportSettings::default(),
@@ -866,6 +922,8 @@ mod tests {
             animation: None,
             visible: true,
             uv: None,
+            render_mode: crate::project::TextureRenderMode::Plain,
+            nine_slice: None,
             layer: Layer::Background,
             slot_role: None,
             slot_index: None,
@@ -1121,6 +1179,79 @@ mod tests {
         });
         let project: Project = serde_json::from_value(value).unwrap();
         assert!(project.fonts.is_empty());
+    }
+
+    #[test]
+    fn asset_metadata_round_trips_nine_slice_defaults() {
+        let json = serde_json::json!({
+            "name": "Meta",
+            "gui_size": { "width": 176, "height": 166 },
+            "mod_target": "forge",
+            "elements": [],
+            "groups": [],
+            "animations": [],
+            "assets": ["textures/gui/panel_atlas.png"],
+            "asset_metadata": {
+                "textures/gui/panel_atlas.png": {
+                    "width": 64,
+                    "height": 64,
+                    "nine_slice": {
+                        "left": 4,
+                        "right": 4,
+                        "top": 4,
+                        "bottom": 4,
+                        "edge_mode": "tile",
+                        "center_mode": "tile"
+                    }
+                }
+            }
+        });
+
+        let project: Project = serde_json::from_value(json).unwrap();
+        let metadata = project
+            .asset_metadata
+            .get("textures/gui/panel_atlas.png")
+            .unwrap();
+        assert_eq!(metadata.width, Some(64));
+        assert_eq!(metadata.height, Some(64));
+        assert_eq!(metadata.nine_slice.as_ref().unwrap().left, 4);
+        assert_eq!(
+            metadata.nine_slice.as_ref().unwrap().edge_mode,
+            NineSliceMode::Tile
+        );
+    }
+
+    #[test]
+    fn texture_element_round_trips_nine_slice_render_mode() {
+        let json = serde_json::json!({
+            "id": "background",
+            "type": "texture",
+            "x": 0,
+            "y": 0,
+            "width": 176,
+            "height": 166,
+            "asset": "textures/gui/panel_atlas.png",
+            "render_mode": "nine_slice",
+            "nine_slice": {
+                "left": 4,
+                "right": 4,
+                "top": 4,
+                "bottom": 4,
+                "edge_mode": "tile",
+                "center_mode": "tile"
+            }
+        });
+
+        let element: Element = serde_json::from_value(json).unwrap();
+        assert_eq!(element.render_mode, TextureRenderMode::NineSlice);
+        assert_eq!(
+            element.nine_slice.as_ref().unwrap().center_mode,
+            NineSliceMode::Tile
+        );
+        assert_eq!(
+            serde_json::to_value(&element).unwrap()["render_mode"],
+            serde_json::json!("nine_slice")
+        );
     }
 
     #[test]
@@ -1380,6 +1511,8 @@ mod tests {
             animation: None,
             visible: true,
             uv: None,
+            render_mode: crate::project::TextureRenderMode::Plain,
+            nine_slice: None,
             layer: Layer::Background,
             slot_role: Some(SlotRole::ScrollableInventory),
             slot_index: Some(0),

@@ -240,6 +240,8 @@ mod tests {
                 width: 12,
                 height: 10,
             }),
+            render_mode: crate::project::TextureRenderMode::Plain,
+            nine_slice: None,
             layer: Layer::Background,
             slot_role: None,
             slot_index: None,

@@ -372,7 +372,6 @@ fn encode_png(img: RgbaImage) -> Result<Vec<u8>, String> {
     Ok(bytes)
 }
 
-
 pub fn generated_gui_panel(width: u32, height: u32) -> Result<Vec<u8>, String> {
     encode_png(generator::generate_background(width, height))
 }
@@ -418,7 +417,6 @@ pub fn generated_fluid_tank() -> Result<Vec<u8>, String> {
 pub fn generated_energy_bar() -> Result<Vec<u8>, String> {
     encode_png(generator::generate_energy_frame())
 }
-
 
 pub fn generated_scrollbar(width: u32, height: u32) -> Result<Vec<u8>, String> {
     let w = width.max(5);
@@ -499,6 +497,8 @@ mod tests {
             animation: None,
             visible: true,
             uv: None,
+            render_mode: crate::project::TextureRenderMode::Plain,
+            nine_slice: None,
             layer: Layer::Background,
             slot_role: None,
             slot_index: None,
@@ -700,6 +700,8 @@ mod tests {
                 width: 1,
                 height: 1,
             }),
+            render_mode: crate::project::TextureRenderMode::Plain,
+            nine_slice: None,
             layer: Layer::Background,
             slot_role: None,
             slot_index: None,
@@ -775,6 +777,8 @@ mod tests {
                 animation: None,
                 visible: true,
                 uv: Some(uv),
+                render_mode: crate::project::TextureRenderMode::Plain,
+                nine_slice: None,
                 layer: Layer::Background,
                 slot_role: None,
                 slot_index: None,
@@ -858,6 +862,8 @@ mod tests {
             animation: None,
             visible: true,
             uv: None,
+            render_mode: crate::project::TextureRenderMode::Plain,
+            nine_slice: None,
             layer: Layer::Background,
             slot_role: None,
             slot_index: None,
@@ -895,6 +901,8 @@ mod tests {
             animation: None,
             visible: true,
             uv: None,
+            render_mode: crate::project::TextureRenderMode::Plain,
+            nine_slice: None,
             layer: Layer::Background,
             slot_role: None,
             slot_index: None,
@@ -942,6 +950,8 @@ mod tests {
             animation: None,
             visible: true,
             uv: None,
+            render_mode: crate::project::TextureRenderMode::Plain,
+            nine_slice: None,
             layer: Layer::Background,
             slot_role: None,
             slot_index: None,

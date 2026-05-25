@@ -108,6 +108,7 @@ pub fn run() {
             commands::asset_import,
             commands::asset_update,
             commands::asset_list,
+            commands::asset_metadata_update,
             commands::asset_remove,
             commands::asset_get_data_url,
             commands::project_export_preview,

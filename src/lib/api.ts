@@ -2,6 +2,7 @@ import type {
   ActiveProjectPayload,
   Animation,
   AppConfig,
+  AssetMetadata,
   AttachedRegion,
   AttachedRegionAnchor,
   AttachedRegionState,
@@ -13,6 +14,7 @@ import type {
   Group,
   MinecraftSource,
   ModTarget,
+  NineSlice,
   CodegenMode,
   ProjectData,
   ProjectExportSettings,
@@ -64,6 +66,7 @@ export interface ElementMoveRequest {
 
 const mockSessions: MockSession[] = [];
 const mockAssetDataUrls = new Map<string, Map<string, string>>();
+const mockAssetMetadata = new Map<string, Map<string, AssetMetadata>>();
 const mockExistingExportFiles = new Set<string>();
 let mockActiveProjectId: string | null = null;
 let mockNextProjectId = 1;
@@ -140,6 +143,7 @@ function createMockSession(project: ProjectData): ProjectSummary {
   };
   mockSessions.push(session);
   mockAssetDataUrls.set(id, new Map());
+  mockAssetMetadata.set(id, new Map(Object.entries(project.asset_metadata ?? {})));
   mockActiveProjectId = id;
   return mockProjectResult(session);
 }
@@ -214,6 +218,57 @@ function mockAssetsForSession(session: MockSession): Map<string, string> {
     mockAssetDataUrls.set(session.id, assets);
   }
   return assets;
+}
+
+function mockAssetMetadataForSession(session: MockSession): Map<string, AssetMetadata> {
+  let metadata = mockAssetMetadata.get(session.id);
+  if (!metadata) {
+    metadata = new Map(Object.entries(session.project.asset_metadata ?? {}));
+    mockAssetMetadata.set(session.id, metadata);
+  }
+  return metadata;
+}
+
+function syncMockAssetMetadataFromProject(session: MockSession): void {
+  mockAssetMetadata.set(session.id, new Map(Object.entries(session.project.asset_metadata ?? {})));
+}
+
+function dataUrlPayloadBytes(dataUrl: string): number {
+  const payload = dataUrl.startsWith("data:image/png;base64,") ? dataUrl.slice("data:image/png;base64,".length) : "";
+  if (!payload) return 0;
+  const padding = payload.endsWith("==") ? 2 : payload.endsWith("=") ? 1 : 0;
+  return Math.max(0, Math.floor(payload.length * 3 / 4) - padding);
+}
+
+async function mockSha256(dataUrl: string): Promise<string> {
+  const payload = dataUrl.startsWith("data:image/png;base64,") ? dataUrl.slice("data:image/png;base64,".length) : "";
+  if (!payload || typeof crypto === "undefined" || !crypto.subtle || typeof Uint8Array === "undefined" || typeof atob === "undefined") {
+    return "0".repeat(64);
+  }
+  const binary = atob(payload);
+  const data = Uint8Array.from(binary, char => char.charCodeAt(0));
+  const hash = await crypto.subtle.digest("SHA-256", data);
+  return [...new Uint8Array(hash)].map(byte => byte.toString(16).padStart(2, "0")).join("");
+}
+
+async function mockAssetResult(
+  name: string,
+  dataUrl: string,
+  metadata?: AssetMetadata,
+  includeDataUrl = false,
+): Promise<AssetImportResult> {
+  const decoded = dataUrl
+    ? await dataUrlDimensions(dataUrl)
+    : { width: metadata?.width ?? 16, height: metadata?.height ?? 16 };
+  return {
+    name,
+    width: decoded.width,
+    height: decoded.height,
+    bytes: dataUrlPayloadBytes(dataUrl),
+    sha256: await mockSha256(dataUrl),
+    ...(includeDataUrl ? { data_url: dataUrl } : {}),
+    nine_slice: metadata?.nine_slice ?? null,
+  };
 }
 
 async function dataUrlDimensions(dataUrl: string): Promise<{ width: number; height: number }> {
@@ -525,6 +580,7 @@ async function mockInvoke(cmd: string, args?: Record<string, unknown>): Promise<
       if (index === -1) throw "Project session not found";
       const [closed] = mockSessions.splice(index, 1);
       mockAssetDataUrls.delete(closed.id);
+      mockAssetMetadata.delete(closed.id);
       if (mockActiveProjectId === closed.id) {
         mockActiveProjectId = mockSessions.length > 0 ? mockSessions[mockSessions.length - 1].id : null;
       }
@@ -552,6 +608,7 @@ async function mockInvoke(cmd: string, args?: Record<string, unknown>): Promise<
       if (!previous) throw "Nothing to undo";
       session.redoStack.push(clone(session.project));
       session.project = previous;
+      syncMockAssetMetadataFromProject(session);
       session.project.is_dirty = true;
       session.revision += 1;
       updateMockHistoryFlags(session);
@@ -563,6 +620,7 @@ async function mockInvoke(cmd: string, args?: Record<string, unknown>): Promise<
       if (!next) throw "Nothing to redo";
       session.undoStack.push(clone(session.project));
       session.project = next;
+      syncMockAssetMetadataFromProject(session);
       session.project.is_dirty = true;
       session.revision += 1;
       updateMockHistoryFlags(session);
@@ -876,14 +934,14 @@ async function mockInvoke(cmd: string, args?: Record<string, unknown>): Promise<
       const session = mockSession(args?.project_id);
       const name = `textures/${String(args?.file_path ?? "texture").split("/").pop()?.replace(/\.[^.]+$/, "") || "texture"}.png`;
       const dataUrl = typeof args?.data_url === "string" ? args.data_url : "";
+      const metadata = mockAssetMetadataForSession(session).get(name);
       if (!session.project.assets.includes(name)) {
         const previous = clone(session.project);
         session.project.assets.push(name);
         markMockChanged(session, previous);
       }
       if (dataUrl) mockAssetsForSession(session).set(name, dataUrl);
-      const dimensions = await dataUrlDimensions(dataUrl);
-      return { name, width: dimensions.width, height: dimensions.height, data_url: dataUrl };
+      return mockAssetResult(name, dataUrl, metadata);
     }
     case "asset_update": {
       const session = mockSession(args?.project_id);
@@ -891,23 +949,34 @@ async function mockInvoke(cmd: string, args?: Record<string, unknown>): Promise<
       const dataUrl = String(args?.data_url ?? "");
       if (!dataUrl.startsWith("data:image/png;base64,")) throw "Invalid asset data URL: expected data:image/png;base64,...";
       if (!session.project.assets.includes(name)) throw `Asset not found: ${name}`;
-      const dimensions = await dataUrlDimensions(dataUrl);
       const assets = mockAssetsForSession(session);
       if (assets.get(name) !== dataUrl) {
         const previous = clone(session.project);
         assets.set(name, dataUrl);
         markMockChanged(session, previous);
       }
-      return { name, width: dimensions.width, height: dimensions.height, data_url: dataUrl };
+      return mockAssetResult(name, dataUrl, mockAssetMetadataForSession(session).get(name));
     }
     case "asset_list": {
       const session = mockSession(args?.project_id);
       const assets = mockAssetsForSession(session);
+      const metadata = mockAssetMetadataForSession(session);
       return Promise.all(session.project.assets.map(async name => {
         const dataUrl = assets.get(name) ?? "";
-        const dimensions = await dataUrlDimensions(dataUrl);
-        return { name, width: dimensions.width, height: dimensions.height, data_url: dataUrl };
+        return mockAssetResult(name, dataUrl, metadata.get(name));
       }));
+    }
+    case "asset_metadata_update": {
+      const session = mockSession(args?.project_id);
+      const name = String(args?.name ?? "");
+      if (!session.project.assets.includes(name)) throw `Asset not found: ${name}`;
+      const metadata = clone(args?.metadata as AssetMetadata);
+      const previous = clone(session.project);
+      const metadataMap = mockAssetMetadataForSession(session);
+      metadataMap.set(name, metadata);
+      session.project.asset_metadata = Object.fromEntries(metadataMap.entries());
+      markMockChanged(session, previous);
+      return clone(metadata);
     }
     case "asset_remove": {
       const session = mockSession(args?.project_id);
@@ -915,6 +984,8 @@ async function mockInvoke(cmd: string, args?: Record<string, unknown>): Promise<
       const previous = clone(session.project);
       session.project.assets = session.project.assets.filter(name => name !== args?.name);
       mockAssetsForSession(session).delete(String(args?.name ?? ""));
+      mockAssetMetadataForSession(session).delete(String(args?.name ?? ""));
+      session.project.asset_metadata = Object.fromEntries(mockAssetMetadataForSession(session).entries());
       if (session.project.assets.length !== before) markMockChanged(session, previous);
       return session.project.assets.length !== before;
     }
@@ -1197,7 +1268,10 @@ export interface AssetImportResult {
   name: string;
   width: number;
   height: number;
-  data_url: string;
+  bytes: number;
+  sha256: string;
+  data_url?: string;
+  nine_slice?: NineSlice | null;
 }
 
 export interface ExportPreview {
@@ -1241,6 +1315,11 @@ export async function assetRemove(name: string, projectId?: string): Promise<boo
 export async function assetGetDataUrl(name: string, projectId?: string): Promise<string> {
   const invoke = await getInvoke();
   return invoke("asset_get_data_url", { name, project_id: projectId }) as Promise<string>;
+}
+
+export async function assetMetadataUpdate(name: string, metadata: AssetMetadata, projectId?: string): Promise<AssetMetadata> {
+  const invoke = await getInvoke();
+  return invoke("asset_metadata_update", { name, metadata, project_id: projectId }) as Promise<AssetMetadata>;
 }
 
 export async function projectExportPreview(
