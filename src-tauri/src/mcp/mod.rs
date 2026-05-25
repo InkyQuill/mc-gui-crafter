@@ -878,14 +878,7 @@ fn get_tool_definitions() -> Vec<serde_json::Value> {
             "Update metadata for an existing asset",
             project_schema(vec![
                 ("name", string_schema("Asset name"), true),
-                (
-                    "metadata",
-                    serde_json::json!({
-                        "type": "object",
-                        "description": "Asset metadata fields such as width, height, and nine_slice guides"
-                    }),
-                    true,
-                ),
+                ("metadata", asset_metadata_schema(), true),
             ]),
         ),
         td(
@@ -996,6 +989,30 @@ fn semantic_groups_props() -> serde_json::Value {
         }),
         true,
     )])
+}
+
+fn asset_metadata_schema() -> serde_json::Value {
+    serde_json::json!({
+        "type": "object",
+        "description": "Asset metadata fields such as dimensions and nine-slice guides",
+        "properties": {
+            "width": { "type": "integer", "description": "Optional asset width in pixels" },
+            "height": { "type": "integer", "description": "Optional asset height in pixels" },
+            "nine_slice": {
+                "type": "object",
+                "description": "Nine-slice guide distances and repeat modes",
+                "properties": {
+                    "left": { "type": "integer", "description": "Fixed left guide width" },
+                    "right": { "type": "integer", "description": "Fixed right guide width" },
+                    "top": { "type": "integer", "description": "Fixed top guide height" },
+                    "bottom": { "type": "integer", "description": "Fixed bottom guide height" },
+                    "edge_mode": { "type": "string", "enum": ["tile", "stretch"], "description": "How nine-slice edges repeat" },
+                    "center_mode": { "type": "string", "enum": ["tile", "stretch"], "description": "How the nine-slice center repeats" }
+                },
+                "required": ["left", "right", "top", "bottom"]
+            }
+        }
+    })
 }
 
 fn element_add_many_props() -> serde_json::Value {
@@ -4729,6 +4746,149 @@ mod tests {
         assert_eq!(value["project_id"], project_id);
         assert_eq!(value["name"], "textures/gui/panel_atlas.png");
         assert_eq!(value["metadata"]["nine_slice"]["left"], 4);
+    }
+
+    #[test]
+    fn asset_metadata_update_missing_asset_preserves_redo_snapshot() {
+        let state = test_state();
+        let project_id = {
+            let mut sessions = state.sessions.lock().unwrap();
+            let project_id = sessions.create_session(Project::new(
+                "Asset Metadata Missing",
+                176,
+                166,
+                ModTarget::Forge,
+            ));
+            sessions.record_history(Some(&project_id)).unwrap();
+            sessions
+                .resolve_mut(Some(&project_id))
+                .unwrap()
+                .project
+                .assets
+                .push("textures/gui/panel_atlas.png".to_string());
+            sessions.mark_changed(Some(&project_id)).unwrap();
+            sessions.undo(Some(&project_id)).unwrap();
+            project_id
+        };
+        let before_revision = {
+            let sessions = state.sessions.lock().unwrap();
+            sessions.resolve(Some(&project_id)).unwrap().revision
+        };
+
+        let response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "asset-metadata-missing",
+                "method": "tools/call",
+                "params": {
+                    "name": "asset_metadata_update",
+                    "arguments": {
+                        "project_id": project_id,
+                        "name": "textures/gui/missing.png",
+                        "metadata": {
+                            "width": 16,
+                            "height": 16
+                        }
+                    }
+                }
+            }),
+            &state,
+        );
+
+        assert_eq!(
+            response["error"]["message"],
+            "Asset not found: textures/gui/missing.png"
+        );
+        let sessions = state.sessions.lock().unwrap();
+        let session = sessions.resolve(Some(&project_id)).unwrap();
+        let summary = session_summary(&sessions, &project_id).unwrap();
+        assert_eq!(session.revision, before_revision);
+        assert!(!summary.can_undo);
+        assert!(summary.can_redo);
+    }
+
+    #[test]
+    fn asset_metadata_update_noop_preserves_revision_and_redo() {
+        let state = test_state();
+        let metadata = AssetMetadata {
+            width: Some(16),
+            height: Some(16),
+            nine_slice: None,
+        };
+        let project_id = {
+            let mut sessions = state.sessions.lock().unwrap();
+            let mut project = Project::new("Asset Metadata Noop", 176, 166, ModTarget::Forge);
+            project
+                .assets
+                .push("textures/gui/panel_atlas.png".to_string());
+            let project_id = sessions.create_session(project);
+            drop(sessions);
+
+            let response = response_for(
+                serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": "asset-metadata-seed",
+                    "method": "tools/call",
+                    "params": {
+                        "name": "asset_metadata_update",
+                        "arguments": {
+                            "project_id": project_id,
+                            "name": "textures/gui/panel_atlas.png",
+                            "metadata": {
+                                "width": 16,
+                                "height": 16
+                            }
+                        }
+                    }
+                }),
+                &state,
+            );
+            assert!(response["error"].is_null(), "{response:#}");
+
+            let mut sessions = state.sessions.lock().unwrap();
+            sessions.undo(Some(&project_id)).unwrap();
+            sessions
+                .resolve_mut(Some(&project_id))
+                .unwrap()
+                .project
+                .asset_metadata
+                .insert("textures/gui/panel_atlas.png".to_string(), metadata.clone());
+            project_id
+        };
+        let before_revision = {
+            let sessions = state.sessions.lock().unwrap();
+            sessions.resolve(Some(&project_id)).unwrap().revision
+        };
+
+        let response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "asset-metadata-noop",
+                "method": "tools/call",
+                "params": {
+                    "name": "asset_metadata_update",
+                    "arguments": {
+                        "project_id": project_id,
+                        "name": "textures/gui/panel_atlas.png",
+                        "metadata": {
+                            "width": 16,
+                            "height": 16
+                        }
+                    }
+                }
+            }),
+            &state,
+        );
+
+        assert!(response["error"].is_null(), "{response:#}");
+        let value = tool_text_value(&response);
+        assert_eq!(value["metadata"]["width"], 16);
+        let sessions = state.sessions.lock().unwrap();
+        let session = sessions.resolve(Some(&project_id)).unwrap();
+        let summary = session_summary(&sessions, &project_id).unwrap();
+        assert_eq!(session.revision, before_revision);
+        assert!(!summary.can_undo);
+        assert!(summary.can_redo);
     }
 
     #[test]

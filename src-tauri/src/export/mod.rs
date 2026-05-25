@@ -545,10 +545,20 @@ fn resolved_source_dimensions(
     asset: &str,
     uv: Option<&UvRect>,
 ) -> Option<(u32, u32)> {
+    let (asset_width, asset_height) = resolved_asset_dimensions(project, asset)?;
     match uv {
-        Some(uv) => Some((uv.width, uv.height)),
-        None => resolved_asset_dimensions(project, asset),
+        Some(uv) => Some(clamped_uv_dimensions(uv, asset_width, asset_height)),
+        None => Some((asset_width, asset_height)),
     }
+}
+
+fn clamped_uv_dimensions(uv: &UvRect, asset_width: u32, asset_height: u32) -> (u32, u32) {
+    let x = uv.x.min(asset_width);
+    let y = uv.y.min(asset_height);
+    (
+        uv.width.min(asset_width.saturating_sub(x)),
+        uv.height.min(asset_height.saturating_sub(y)),
+    )
 }
 
 fn resolved_asset_dimensions(project: &Project, asset: &str) -> Option<(u32, u32)> {
@@ -4241,6 +4251,65 @@ mod tests {
                 warning.contains("settings_button") && warning.contains("icon_uv")
             }),
             "invalid icon_uv warning should name the button: {:?}",
+            preview.warnings
+        );
+    }
+
+    #[test]
+    fn preview_warns_for_nine_slice_uv_clamped_outside_asset_bounds() {
+        let output_dir = TempExportDir::new("nine-slice-uv-clamp-preview");
+        let mut project = Project::new("Nine Slice UV Clamp", 24, 24, ModTarget::Forge);
+        let asset = "textures/gui/panel_atlas.png";
+        project.assets.push(asset.into());
+        project
+            .texture_data
+            .insert(asset.into(), fixture_panel_atlas());
+        project.elements.push(Element {
+            id: "background".into(),
+            element_type: ElementType::Texture,
+            x: 0,
+            y: 0,
+            width: Some(24),
+            height: Some(24),
+            asset: Some(asset.into()),
+            uv: Some(UvRect {
+                x: 6,
+                y: 0,
+                width: 4,
+                height: 4,
+            }),
+            render_mode: TextureRenderMode::NineSlice,
+            nine_slice: Some(NineSlice {
+                left: 1,
+                right: 1,
+                top: 1,
+                bottom: 1,
+                edge_mode: NineSliceMode::Tile,
+                center_mode: NineSliceMode::Tile,
+            }),
+            ..button_element("defaults", ElementType::Texture, 0, 0, None)
+        });
+
+        let preview = preview_export(
+            &project,
+            &export_config(output_dir.path(), "NineSliceUvClamp"),
+            "forge",
+        )
+        .unwrap();
+
+        assert!(
+            preview
+                .warnings
+                .iter()
+                .any(|warning| { warning.contains("background") && warning.contains("uv") }),
+            "out-of-bounds UV warning should name the element: {:?}",
+            preview.warnings
+        );
+        assert!(
+            preview.warnings.iter().any(|warning| {
+                warning.contains("background") && warning.contains("nine_slice")
+            }),
+            "clamped nine_slice guide warning should name the element: {:?}",
             preview.warnings
         );
     }
