@@ -3,8 +3,11 @@
   import { status, readableError } from "../stores/status.svelte";
   import * as api from "../api";
   import PixelEditor from "./PixelEditor.svelte";
+  import UvEditorDialog from "./UvEditorDialog.svelte";
+  import type { NineSlice, UvRect } from "../types";
 
   let editingAsset = $state<string | null>(null);
+  let editingGuidesAsset = $state<string | null>(null);
 
   async function handleImport() {
     let path: string | null = null;
@@ -71,6 +74,7 @@
       project.assetMetadata = metadata;
       assetDataUrls.delete(name);
       if (editingAsset === name) editingAsset = null;
+      if (editingGuidesAsset === name) editingGuidesAsset = null;
       status.success(`Removed ${displayName(name)}.`);
     } catch (error) {
       status.error(`Failed to remove ${displayName(name)}: ${readableError(error)}`);
@@ -124,6 +128,42 @@
       editingAsset = name;
     } catch (error) {
       status.error(`Failed to load ${displayName(name)}: ${readableError(error)}`);
+    }
+  }
+
+  async function startEditingGuides(name: string) {
+    try {
+      await project.ensureAssetDataUrl(name);
+      editingGuidesAsset = name;
+    } catch (error) {
+      status.error(`Failed to load ${displayName(name)}: ${readableError(error)}`);
+    }
+  }
+
+  async function applyAssetGuides(name: string, value: UvRect | NineSlice | null) {
+    if (!value) return;
+    try {
+      await project.updateAssetMetadata(name, {
+        ...(project.assetMetadata[name] ?? {}),
+        nine_slice: value as NineSlice,
+      });
+      editingGuidesAsset = null;
+      status.success(`Updated guides for ${displayName(name)}.`);
+    } catch (error) {
+      status.error(`Failed to update guides for ${displayName(name)}: ${readableError(error)}`);
+    }
+  }
+
+  async function clearAssetGuides(name: string) {
+    try {
+      await project.updateAssetMetadata(name, {
+        ...(project.assetMetadata[name] ?? {}),
+        nine_slice: null,
+      });
+      editingGuidesAsset = null;
+      status.success(`Cleared guides for ${displayName(name)}.`);
+    } catch (error) {
+      status.error(`Failed to clear guides for ${displayName(name)}: ${readableError(error)}`);
     }
   }
 </script>
@@ -192,13 +232,31 @@
               {/if}
               <span class="asset-label">{displayName(name)}</span>
             </button>
-            <button class="remove-btn" onclick={() => handleRemove(name)} title="Remove">×</button>
+            <div class="asset-actions">
+              <button class="guide-btn" onclick={() => startEditingGuides(name)} title="Edit guides">Guides</button>
+              <button class="remove-btn" onclick={() => handleRemove(name)} title="Remove">×</button>
+            </div>
           </div>
         {/each}
       </div>
     {/if}
   {/if}
 </aside>
+
+{#if editingGuidesAsset}
+  <UvEditorDialog
+    title={`Edit Guides: ${displayName(editingGuidesAsset)}`}
+    mode="nine_slice"
+    assets={[editingGuidesAsset]}
+    asset={editingGuidesAsset}
+    nineSlice={project.assetMetadata[editingGuidesAsset]?.nine_slice ?? null}
+    onapply={applyAssetGuides}
+    onclear={() => {
+      if (editingGuidesAsset) void clearAssetGuides(editingGuidesAsset);
+    }}
+    onclose={() => editingGuidesAsset = null}
+  />
+{/if}
 
 <style>
   .assets {
@@ -292,9 +350,31 @@
     max-width: 100%;
   }
 
+  .asset-actions {
+    display: grid;
+    grid-template-columns: 1fr 20px;
+    gap: 2px;
+  }
+
+  .guide-btn {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--muted-text);
+    font-size: 10px;
+    cursor: pointer;
+    padding: 1px 4px;
+    line-height: 1.2;
+    font-family: inherit;
+  }
+
+  .guide-btn:hover {
+    background: var(--surface-raised);
+    color: var(--text);
+  }
+
   .remove-btn {
     background: transparent;
-    border: none;
+    border: 1px solid transparent;
     color: var(--muted-text);
     font-size: 12px;
     cursor: pointer;

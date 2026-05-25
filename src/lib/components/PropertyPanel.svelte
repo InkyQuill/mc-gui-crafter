@@ -2,16 +2,25 @@
   import { project } from "../stores/project.svelte";
   import { editor } from "../stores/editor.svelte";
   import UvEditorDialog from "./UvEditorDialog.svelte";
-  import type { AttachedRegion, AttachedRegionAnchor, AttachedRegionState, CodegenMode, Element, SlotRole, UvRect } from "../types";
+  import type { AttachedRegion, AttachedRegionAnchor, AttachedRegionState, CodegenMode, Element, NineSlice, Size, SlotRole, TextureRenderMode, UvRect } from "../types";
 
   type UvTarget = "uv" | "icon_uv";
 
   let uvEditorTarget = $state<UvTarget | null>(null);
+  let editingNineSlice = $state(false);
   let selectedElementId = $derived.by(() => {
     void editor.selectionRevision;
     return editor.selectedElementId;
   });
   let selectedEl = $derived(selectedElementId ? project.elementById(selectedElementId) : null);
+  let selectedTargetSize = $derived.by((): Size | null => {
+    if (!selectedEl) return null;
+    if (selectedEl.width === undefined || selectedEl.height === undefined) return null;
+    return {
+      width: selectedEl.width,
+      height: selectedEl.height,
+    };
+  });
   let selectedGroup = $derived(selectedElementId ? project.groupForElement(selectedElementId) : null);
   let selectedRegion = $derived.by(() => {
     void editor.regionSelectionRevision;
@@ -105,8 +114,9 @@
     uvEditorTarget = target;
   }
 
-  function applyUvSelection(asset: string, uv: UvRect | null) {
+  function applyUvSelection(asset: string, value: UvRect | NineSlice | null) {
     if (!selectedEl || !uvEditorTarget) return;
+    const uv = value as UvRect | null;
     if (uvEditorTarget === "icon_uv") {
       updateSelectedElement({ icon: asset, icon_uv: uv });
     } else {
@@ -123,6 +133,31 @@
       updateSelectedElement({ uv: null });
     }
     uvEditorTarget = null;
+  }
+
+  function openNineSliceEditor() {
+    if (!selectedEl?.asset) return;
+    void project.ensureAssetDataUrl(selectedEl.asset);
+    editingNineSlice = true;
+  }
+
+  function applyNineSlice(asset: string, value: UvRect | NineSlice | null) {
+    if (!selectedEl || !value) return;
+    updateSelectedElement({
+      asset,
+      render_mode: "nine_slice",
+      nine_slice: value as NineSlice,
+    });
+    editingNineSlice = false;
+  }
+
+  function clearNineSlice() {
+    updateSelectedElement({ nine_slice: null });
+    editingNineSlice = false;
+  }
+
+  function useAssetGuides() {
+    updateSelectedElement({ nine_slice: null });
   }
 </script>
 
@@ -405,6 +440,34 @@
         </div>
       {/if}
 
+      {#if selectedEl.type === "texture"}
+        <div class="prop-section">
+          <div class="section-title">Texture Render</div>
+          <div class="prop-row">
+            <label for="prop-render-mode">Mode</label>
+            <select
+              id="prop-render-mode"
+              value={selectedEl.render_mode ?? "plain"}
+              onchange={(e) => updateSelectedElement({ render_mode: e.currentTarget.value as TextureRenderMode })}
+            >
+              <option value="plain">Plain</option>
+              <option value="nine_slice">Nine Slice</option>
+            </select>
+          </div>
+          {#if (selectedEl.render_mode ?? "plain") === "nine_slice"}
+            <button class="secondary-btn" onclick={openNineSliceEditor} disabled={!selectedEl.asset || project.assets.length === 0}>
+              Edit Guides...
+            </button>
+            <button class="secondary-btn" onclick={clearNineSlice}>
+              Clear Guides
+            </button>
+            <button class="secondary-btn" onclick={useAssetGuides} disabled={!selectedEl.asset || !project.assetMetadata[selectedEl.asset]?.nine_slice}>
+              Use Asset Guides
+            </button>
+          {/if}
+        </div>
+      {/if}
+
       {#if selectedEl.type === "progress"}
         <div class="prop-row">
           <label for="prop-direction">Direction</label>
@@ -651,6 +714,20 @@
     onapply={applyUvSelection}
     onclear={clearUvSelection}
     onclose={() => uvEditorTarget = null}
+  />
+{/if}
+
+{#if selectedEl && editingNineSlice && selectedEl.asset}
+  <UvEditorDialog
+    title="Edit Texture Guides"
+    mode="nine_slice"
+    assets={project.assets}
+    asset={selectedEl.asset}
+    nineSlice={selectedEl.nine_slice ?? null}
+    targetSize={selectedTargetSize}
+    onapply={applyNineSlice}
+    onclear={clearNineSlice}
+    onclose={() => editingNineSlice = false}
   />
 {/if}
 
