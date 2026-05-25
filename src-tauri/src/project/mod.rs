@@ -378,7 +378,8 @@ impl ElementStateOverride {
             && self.layer.is_none()
     }
 
-    fn apply_patch(&mut self, patch: ElementStateOverridePatch) {
+    fn apply_patch(&mut self, patch: ElementStateOverridePatch) -> bool {
+        let before = self.clone();
         if let Some(value) = patch.visible {
             self.visible = value;
         }
@@ -400,9 +401,11 @@ impl ElementStateOverride {
         if let Some(value) = patch.layer {
             self.layer = value;
         }
+        *self != before
     }
 
-    fn clear_field(&mut self, field: &str) -> Result<(), String> {
+    fn clear_field(&mut self, field: &str) -> Result<bool, String> {
+        let before = self.clone();
         match field {
             "visible" => self.visible = None,
             "x" => self.x = None,
@@ -413,7 +416,7 @@ impl ElementStateOverride {
             "layer" => self.layer = None,
             _ => return Err(format!("unknown state override field '{field}'")),
         }
-        Ok(())
+        Ok(*self != before)
     }
 }
 
@@ -440,7 +443,8 @@ impl AttachedRegionStateOverride {
             && self.height.is_none()
     }
 
-    fn apply_patch(&mut self, patch: AttachedRegionStateOverridePatch) {
+    fn apply_patch(&mut self, patch: AttachedRegionStateOverridePatch) -> bool {
+        let before = self.clone();
         if let Some(value) = patch.visible {
             self.visible = value;
         }
@@ -456,9 +460,11 @@ impl AttachedRegionStateOverride {
         if let Some(value) = patch.height {
             self.height = value;
         }
+        *self != before
     }
 
-    fn clear_field(&mut self, field: &str) -> Result<(), String> {
+    fn clear_field(&mut self, field: &str) -> Result<bool, String> {
+        let before = self.clone();
         match field {
             "visible" => self.visible = None,
             "x" => self.x = None,
@@ -467,7 +473,7 @@ impl AttachedRegionStateOverride {
             "height" => self.height = None,
             _ => return Err(format!("unknown state override field '{field}'")),
         }
-        Ok(())
+        Ok(*self != before)
     }
 }
 
@@ -482,12 +488,13 @@ impl GroupStateOverride {
         self.visible.is_none()
     }
 
-    fn clear_field(&mut self, field: &str) -> Result<(), String> {
+    fn clear_field(&mut self, field: &str) -> Result<bool, String> {
+        let before = self.clone();
         match field {
             "visible" => self.visible = None,
             _ => return Err(format!("unknown state override field '{field}'")),
         }
-        Ok(())
+        Ok(*self != before)
     }
 }
 
@@ -1031,7 +1038,7 @@ impl Project {
         state_id: &str,
         element_id: &str,
         patch: ElementStateOverridePatch,
-    ) -> Result<(), String> {
+    ) -> Result<bool, String> {
         if self.find_state(state_id).is_none() {
             return Err(format!("unknown state '{state_id}'"));
         }
@@ -1039,6 +1046,7 @@ impl Project {
             return Err(format!("unknown element '{element_id}'"));
         }
 
+        let before = self.state_overrides.get(state_id).cloned();
         let override_value = self
             .state_overrides
             .entry(state_id.to_string())
@@ -1046,13 +1054,18 @@ impl Project {
             .elements
             .entry(element_id.to_string())
             .or_default();
-        override_value.apply_patch(patch);
+        let changed = override_value.apply_patch(patch);
+        if !changed {
+            self.restore_state_overrides(state_id, before);
+            return Ok(false);
+        }
+
         self.prune_state_override_target(
             state_id,
             StateOverrideTarget::Element(element_id.to_string()),
         );
         self.is_dirty = true;
-        Ok(())
+        Ok(true)
     }
 
     pub fn update_attached_region_state_override(
@@ -1060,7 +1073,7 @@ impl Project {
         state_id: &str,
         region_id: &str,
         patch: AttachedRegionStateOverridePatch,
-    ) -> Result<(), String> {
+    ) -> Result<bool, String> {
         if self.find_state(state_id).is_none() {
             return Err(format!("unknown state '{state_id}'"));
         }
@@ -1068,6 +1081,7 @@ impl Project {
             return Err(format!("unknown attached region '{region_id}'"));
         }
 
+        let before = self.state_overrides.get(state_id).cloned();
         let override_value = self
             .state_overrides
             .entry(state_id.to_string())
@@ -1075,13 +1089,18 @@ impl Project {
             .attached_regions
             .entry(region_id.to_string())
             .or_default();
-        override_value.apply_patch(patch);
+        let changed = override_value.apply_patch(patch);
+        if !changed {
+            self.restore_state_overrides(state_id, before);
+            return Ok(false);
+        }
+
         self.prune_state_override_target(
             state_id,
             StateOverrideTarget::AttachedRegion(region_id.to_string()),
         );
         self.is_dirty = true;
-        Ok(())
+        Ok(true)
     }
 
     pub fn clear_state_override_field(
@@ -1089,12 +1108,12 @@ impl Project {
         state_id: &str,
         target: StateOverrideTarget,
         field: &str,
-    ) -> Result<(), String> {
+    ) -> Result<bool, String> {
         if self.find_state(state_id).is_none() {
             return Err(format!("unknown state '{state_id}'"));
         }
 
-        match &target {
+        let changed = match &target {
             StateOverrideTarget::Element(element_id) => {
                 if self.find_element(element_id).is_none() {
                     return Err(format!("unknown element '{element_id}'"));
@@ -1104,9 +1123,9 @@ impl Project {
                     .get_mut(state_id)
                     .and_then(|overrides| overrides.elements.get_mut(element_id))
                 {
-                    override_value.clear_field(field)?;
+                    override_value.clear_field(field)?
                 } else {
-                    ElementStateOverride::default().clear_field(field)?;
+                    ElementStateOverride::default().clear_field(field)?
                 }
             }
             StateOverrideTarget::AttachedRegion(region_id) => {
@@ -1118,9 +1137,9 @@ impl Project {
                     .get_mut(state_id)
                     .and_then(|overrides| overrides.attached_regions.get_mut(region_id))
                 {
-                    override_value.clear_field(field)?;
+                    override_value.clear_field(field)?
                 } else {
-                    AttachedRegionStateOverride::default().clear_field(field)?;
+                    AttachedRegionStateOverride::default().clear_field(field)?
                 }
             }
             StateOverrideTarget::Group(group_id) => {
@@ -1132,16 +1151,18 @@ impl Project {
                     .get_mut(state_id)
                     .and_then(|overrides| overrides.groups.get_mut(group_id))
                 {
-                    override_value.clear_field(field)?;
+                    override_value.clear_field(field)?
                 } else {
-                    GroupStateOverride::default().clear_field(field)?;
+                    GroupStateOverride::default().clear_field(field)?
                 }
             }
-        }
+        };
 
-        self.prune_state_override_target(state_id, target);
-        self.is_dirty = true;
-        Ok(())
+        if changed {
+            self.prune_state_override_target(state_id, target);
+            self.is_dirty = true;
+        }
+        Ok(changed)
     }
 
     fn prune_state_override_target(&mut self, state_id: &str, target: StateOverrideTarget) {
@@ -1180,6 +1201,18 @@ impl Project {
         }
 
         if overrides.is_empty() {
+            self.state_overrides.remove(state_id);
+        }
+    }
+
+    fn restore_state_overrides(
+        &mut self,
+        state_id: &str,
+        overrides: Option<ProjectStateOverrides>,
+    ) {
+        if let Some(overrides) = overrides {
+            self.state_overrides.insert(state_id.to_string(), overrides);
+        } else {
             self.state_overrides.remove(state_id);
         }
     }
@@ -1603,6 +1636,123 @@ mod tests {
         let effective = project.effective_for_state(Some("expanded")).unwrap();
         assert_eq!(effective.find_element("panel").unwrap().x, 4);
         assert_eq!(effective.find_element("panel").unwrap().y, 64);
+    }
+
+    #[test]
+    fn no_op_state_override_updates_do_not_dirty_project_or_create_overrides() {
+        let mut project = Project::new("State Variants", 176, 166, ModTarget::Forge);
+        project
+            .elements
+            .push(base_element_for_test("panel", ElementType::Texture, 4, 6));
+        project
+            .attached_regions
+            .push(test_attached_region("drawer", 176, 0, 88, 166));
+        project.states.push(ProjectState {
+            id: "expanded".into(),
+            label: "Expanded".into(),
+            description: None,
+            initial: true,
+            export_role: None,
+        });
+        project.is_dirty = false;
+
+        let changed = project
+            .update_element_state_override(
+                "expanded",
+                "panel",
+                ElementStateOverridePatch::default(),
+            )
+            .unwrap();
+        assert!(!changed);
+        assert!(!project.is_dirty);
+        assert!(project.state_overrides.is_empty());
+
+        let changed = project
+            .update_attached_region_state_override(
+                "expanded",
+                "drawer",
+                AttachedRegionStateOverridePatch::default(),
+            )
+            .unwrap();
+        assert!(!changed);
+        assert!(!project.is_dirty);
+        assert!(project.state_overrides.is_empty());
+
+        assert!(project
+            .update_element_state_override(
+                "expanded",
+                "panel",
+                ElementStateOverridePatch {
+                    x: Some(Some(48)),
+                    ..ElementStateOverridePatch::default()
+                },
+            )
+            .unwrap());
+        project.is_dirty = false;
+
+        let changed = project
+            .update_element_state_override(
+                "expanded",
+                "panel",
+                ElementStateOverridePatch {
+                    x: Some(Some(48)),
+                    ..ElementStateOverridePatch::default()
+                },
+            )
+            .unwrap();
+        assert!(!changed);
+        assert!(!project.is_dirty);
+        assert_eq!(
+            project.state_overrides["expanded"].elements["panel"].x,
+            Some(48)
+        );
+    }
+
+    #[test]
+    fn clearing_missing_or_empty_state_override_fields_is_not_dirty() {
+        let mut project = Project::new("State Variants", 176, 166, ModTarget::Forge);
+        project
+            .elements
+            .push(base_element_for_test("panel", ElementType::Texture, 4, 6));
+        project.states.push(ProjectState {
+            id: "expanded".into(),
+            label: "Expanded".into(),
+            description: None,
+            initial: true,
+            export_role: None,
+        });
+        project.is_dirty = false;
+
+        let changed = project
+            .clear_state_override_field(
+                "expanded",
+                StateOverrideTarget::Element("panel".into()),
+                "x",
+            )
+            .unwrap();
+        assert!(!changed);
+        assert!(!project.is_dirty);
+        assert!(project.state_overrides.is_empty());
+
+        let mut overrides = ProjectStateOverrides::default();
+        overrides
+            .elements
+            .insert("panel".into(), ElementStateOverride::default());
+        project.state_overrides.insert("expanded".into(), overrides);
+        project.is_dirty = false;
+
+        let changed = project
+            .clear_state_override_field(
+                "expanded",
+                StateOverrideTarget::Element("panel".into()),
+                "x",
+            )
+            .unwrap();
+        assert!(!changed);
+        assert!(!project.is_dirty);
+        assert!(project.state_overrides["expanded"]
+            .elements
+            .contains_key("panel"));
     }
 
     fn test_png(width: u32, height: u32, color: Rgba<u8>) -> Vec<u8> {
