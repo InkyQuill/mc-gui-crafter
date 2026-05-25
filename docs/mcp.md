@@ -140,9 +140,10 @@ synchronization events.
 5. Use `project_resize` only for canvas size changes; move elements explicitly.
 6. Use `project_semantic_groups_update` with `member_ids` for non-rectangular
    slot groups and control button groups.
-7. Use `project_render` after visual edits and inspect the PNG when possible.
-8. Use `project_export_preview` before `project_export`.
-9. Save source projects with `project_save_as`.
+7. Use `state_list` and `schema_discover` before editing state variants.
+8. Use `project_render` after visual edits and inspect the PNG when possible.
+9. Use `project_export_preview` before `project_export`.
+10. Save source projects with `project_save_as`.
 
 ## Generating GUIs With an Agent
 
@@ -397,6 +398,83 @@ MCP responses stay compact by default. Binary image payloads are opt-in: use
 `include_data_url: true` on `project_render` or call `asset_get_data_url` only
 when the caller explicitly needs inline PNG data.
 
+### Editable State Variants Alpha
+
+Use state variants for alternate editor layouts such as collapsed and expanded
+attached panels. State tooling is authoring metadata in this alpha; generated
+runtime toggling and codegen behavior remain deferred.
+
+Call `schema_discover` before state editing. It lists `state_variants`, accepted
+override fields, and tools that accept `state_id`.
+
+State tools:
+
+- `state_list`: read-only list of states plus session `active_state_id` and
+  `edit_scope`.
+- `state_add`: create a state with `id`, `label`, optional `description`,
+  `initial`, and `export_role`.
+- `state_update`: update state metadata. Use `description: null` or
+  `export_role: null` to clear those optional fields.
+- `state_remove`: remove a state, its overrides, and `state_owned` references.
+- `state_set_active`: session-only selector for the editor/MCP session; it does
+  not change project data or undo history.
+- `state_override_update`: write alpha overrides for `element`,
+  `attached_region`, or `group` targets.
+- `state_override_clear`: clear one override field or the whole target override.
+
+Element state overrides allow only `visible`, `x`, `y`, `width`, `height`,
+`attached_region`, and `layer`. Attached-region overrides allow only `visible`,
+`x`, `y`, `width`, and `height`. Group overrides currently allow `visible`.
+Existing `element_update` and `element_update_many` default to base-project
+edits. They write state overrides only when `state_id` is provided or
+`edit_scope` is `"state"`; base-only fields such as `content`, `asset`,
+`slot_role`, or semantic metadata are rejected in state scope.
+
+Example:
+
+```json
+{
+  "name": "state_add",
+  "arguments": {
+    "id": "expanded",
+    "label": "Expanded",
+    "initial": true,
+    "export_role": "expanded"
+  }
+}
+```
+
+```json
+{
+  "name": "state_override_update",
+  "arguments": {
+    "state_id": "expanded",
+    "target_type": "element",
+    "target_id": "returns_slot_0",
+    "fields": {
+      "x": 214,
+      "visible": true,
+      "attached_region": "returns_pocket"
+    }
+  }
+}
+```
+
+Render an effective state without mutating the base project:
+
+```json
+{
+  "name": "project_render",
+  "arguments": {
+    "state_id": "expanded",
+    "output_path": "/tmp/mcgui-expanded.png"
+  }
+}
+```
+
+`project_render` is preferred for visual verification. `project_screenshot` is a
+deprecated alias and accepts the same `state_id`.
+
 ### Attached Regions
 
 Use attached regions when a GUI has visible or interactive elements outside the
@@ -601,9 +679,11 @@ rendered by the generated Java screen classes.
 ### Visual Verification
 
 Use `project_render` after meaningful visual edits. It writes a PNG and returns
-compact metadata: `project_id`, `path`, `width`, `height`, `bytes`, and
-`sha256`. Set `include_data_url: true` only when the caller explicitly needs the
-PNG payload. `project_screenshot` remains available as a deprecated alias.
+compact metadata: `project_id`, optional `state_id`, `path`, `width`, `height`,
+`bytes`, and `sha256`. Pass `state_id` to render the effective state layout
+without mutating the base project. Set `include_data_url: true` only when the
+caller explicitly needs the PNG payload. `project_screenshot` remains available
+as a deprecated alias with the same arguments.
 
 ```json
 {
@@ -685,9 +765,9 @@ as UI-driven edits.
 ### `schema_discover`
 
 Call this before authoring unfamiliar projects. It returns accepted enum values,
-editable element fields, export settings, attached-region values, layer values,
-progress direction values, and notes about default fields that may be omitted
-from serialized project JSON.
+editable element fields, state variant fields, state override allowlists, export
+settings, attached-region values, layer values, progress direction values, and
+notes about default fields that may be omitted from serialized project JSON.
 
 ### `project_resize`
 
@@ -723,6 +803,18 @@ explicitly after resizing.
 | `project_get_active` | Get the active session and project |
 | `project_undo` | Undo the last backend mutation |
 | `project_redo` | Redo the last undone backend mutation |
+
+### States
+
+| Tool | Description |
+|------|-------------|
+| `state_list` | List editable state variants and active session state |
+| `state_add` | Add an editable state variant |
+| `state_update` | Update editable state metadata |
+| `state_remove` | Remove a state and its overrides |
+| `state_set_active` | Set session active state/edit scope without project mutation |
+| `state_override_update` | Update element, attached-region, or group state overrides |
+| `state_override_clear` | Clear a state override target or field |
 
 ### Elements
 

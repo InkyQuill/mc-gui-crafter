@@ -9,9 +9,11 @@ use tauri::{AppHandle, Emitter, Manager};
 
 use crate::animation::Animation;
 use crate::project::{
-    AssetMetadata, AttachedRegion, AttachedRegionAnchor, AttachedRegionState, CodegenMode, Element,
-    ElementType, FillDirection, Layer, ModTarget, NineSliceMode, Project, ProjectExportSettings,
-    ProjectSessionManager, SemanticGroup, SemanticGroupKind, SlotRole, TextureRenderMode,
+    AssetMetadata, AttachedRegion, AttachedRegionAnchor, AttachedRegionState,
+    AttachedRegionStateOverridePatch, CodegenMode, EditScope, Element, ElementStateOverridePatch,
+    ElementType, FillDirection, GroupStateOverride, Layer, ModTarget, NineSliceMode, Project,
+    ProjectExportSettings, ProjectSessionManager, ProjectState, SemanticGroup, SemanticGroupKind,
+    SlotRole, StateOverrideTarget, TextureRenderMode,
 };
 use crate::{templates, AppState};
 
@@ -527,6 +529,8 @@ fn is_mutating_tool(tool_name: &str) -> bool {
             | "project_export"
             | "project_render"
             | "project_screenshot"
+            | "state_list"
+            | "state_set_active"
             | "element_list"
             | "group_list"
             | "attached_region_list"
@@ -606,6 +610,12 @@ fn get_tool_definitions() -> Vec<serde_json::Value> {
                     "Include data:image/png;base64 payload; defaults to false",
                     false,
                 ),
+                (
+                    "state_id",
+                    "string",
+                    "Optional editable state ID to render as an effective layout",
+                    false,
+                ),
             ]),
         ),
         td(
@@ -622,6 +632,12 @@ fn get_tool_definitions() -> Vec<serde_json::Value> {
                     "include_data_url",
                     "boolean",
                     "Include data:image/png;base64 payload; defaults to false",
+                    false,
+                ),
+                (
+                    "state_id",
+                    "string",
+                    "Optional editable state ID to render as an effective layout",
                     false,
                 ),
             ]),
@@ -673,6 +689,125 @@ fn get_tool_definitions() -> Vec<serde_json::Value> {
             props(&[]),
         ),
         td(
+            "state_list",
+            "List editable state variants",
+            project_props(&[]),
+        ),
+        td(
+            "state_add",
+            "Add an editable state variant",
+            project_schema(vec![
+                ("id", string_schema("State ID"), true),
+                ("label", string_schema("Human-readable state label"), true),
+                (
+                    "description",
+                    string_schema("Optional state description"),
+                    false,
+                ),
+                (
+                    "initial",
+                    string_type_schema("boolean", "Mark this as the initial state"),
+                    false,
+                ),
+                (
+                    "export_role",
+                    string_schema("Optional export role, such as collapsed or expanded"),
+                    false,
+                ),
+            ]),
+        ),
+        td(
+            "state_update",
+            "Update an editable state variant",
+            project_schema(vec![
+                ("id", string_schema("State ID"), true),
+                ("label", string_schema("Human-readable state label"), false),
+                (
+                    "description",
+                    string_schema("Optional state description; null clears it"),
+                    false,
+                ),
+                (
+                    "initial",
+                    string_type_schema("boolean", "Mark this as the initial state"),
+                    false,
+                ),
+                (
+                    "export_role",
+                    string_schema("Optional export role; null clears it"),
+                    false,
+                ),
+            ]),
+        ),
+        td(
+            "state_remove",
+            "Remove an editable state variant and its overrides",
+            project_props(&[("id", "string", "State ID", true)]),
+        ),
+        td(
+            "state_set_active",
+            "Set the session active state and edit scope without changing project data",
+            project_schema(vec![
+                (
+                    "state_id",
+                    serde_json::json!({
+                        "type": ["string", "null"],
+                        "description": "State ID to activate; null clears active state"
+                    }),
+                    false,
+                ),
+                (
+                    "edit_scope",
+                    serde_json::json!({
+                        "type": "string",
+                        "enum": ["base", "state"],
+                        "description": "Editor edit scope"
+                    }),
+                    false,
+                ),
+            ]),
+        ),
+        td(
+            "state_override_update",
+            "Update alpha state overrides for an element, attached region, or group",
+            project_schema(vec![
+                ("state_id", string_schema("State ID"), true),
+                (
+                    "target_type",
+                    serde_json::json!({
+                        "type": "string",
+                        "enum": ["element", "attached_region", "group"],
+                        "description": "Override target kind"
+                    }),
+                    true,
+                ),
+                ("target_id", string_schema("Target ID"), true),
+                ("fields", object_schema(Vec::new()), true),
+            ]),
+        ),
+        td(
+            "state_override_clear",
+            "Clear alpha state overrides for a target or one override field",
+            project_schema(vec![
+                ("state_id", string_schema("State ID"), true),
+                (
+                    "target_type",
+                    serde_json::json!({
+                        "type": "string",
+                        "enum": ["element", "attached_region", "group"],
+                        "description": "Override target kind"
+                    }),
+                    true,
+                ),
+                ("target_id", string_schema("Target ID"), true),
+                (
+                    "field",
+                    string_schema("Override field to clear; omit to clear target"),
+                    false,
+                ),
+            ]),
+        ),
+        td(
             "project_undo",
             "Undo the last project mutation",
             project_props(&[]),
@@ -717,6 +852,18 @@ fn get_tool_definitions() -> Vec<serde_json::Value> {
             project_props(&[
                 ("id", "string", "Element ID", true),
                 ("changes", "object", "Element fields to update", true),
+                (
+                    "state_id",
+                    "string",
+                    "Optional state ID; when present writes alpha state overrides instead of base fields",
+                    false,
+                ),
+                (
+                    "edit_scope",
+                    "string",
+                    "Set to state to write alpha state overrides; defaults to base",
+                    false,
+                ),
             ]),
         ),
         td(
@@ -729,10 +876,19 @@ fn get_tool_definitions() -> Vec<serde_json::Value> {
                     "description": "Element update patches",
                     "items": {
                         "type": "object",
-                        "properties": {
-                            "id": { "type": "string" },
-                            "changes": { "type": "object" }
-                        },
+                            "properties": {
+                                "id": { "type": "string" },
+                                "changes": { "type": "object" },
+                                "state_id": {
+                                    "type": "string",
+                                    "description": "Optional state ID for this update"
+                                },
+                                "edit_scope": {
+                                    "type": "string",
+                                    "enum": ["base", "state"],
+                                    "description": "Set to state to write alpha state overrides"
+                                }
+                            },
                         "required": ["id", "changes"]
                     }
                 }),
@@ -1370,6 +1526,30 @@ fn schema_discover() -> serde_json::Value {
             "open_height",
             "attached_region"
         ],
+        "state_variants": {
+            "state_fields": ["id", "label", "description", "initial", "export_role"],
+            "element_override_fields": ["visible", "x", "y", "width", "height", "attached_region", "layer"],
+            "attached_region_override_fields": ["visible", "x", "y", "width", "height"],
+            "group_override_fields": ["visible"],
+            "edit_scopes": ["base", "state"],
+            "tools": [
+                "state_list",
+                "state_add",
+                "state_update",
+                "state_remove",
+                "state_set_active",
+                "state_override_update",
+                "state_override_clear"
+            ]
+        },
+        "tools_accepting_state_id": [
+            "element_update",
+            "element_update_many",
+            "project_render",
+            "project_screenshot",
+            "project_export_preview",
+            "project_export"
+        ],
         "asset_metadata_fields": ["width", "height", "nine_slice"],
         "serialization_defaults": schema_serialization_defaults()
     })
@@ -1489,6 +1669,13 @@ fn execute_tool(
         "project_list_sessions" => Ok(serde_json::json!({ "sessions": sessions.list_sessions() })),
         "project_get_active" => project_get_active(&sessions),
         "schema_discover" => Ok(schema_discover()),
+        "state_list" => state_list(&sessions, project_id),
+        "state_add" => state_add(&mut sessions, project_id, args),
+        "state_update" => state_update(&mut sessions, project_id, args),
+        "state_remove" => state_remove(&mut sessions, project_id, args),
+        "state_set_active" => state_set_active(&mut sessions, project_id, args),
+        "state_override_update" => state_override_update(&mut sessions, project_id, args),
+        "state_override_clear" => state_override_clear(&mut sessions, project_id, args),
         "project_undo" => Ok(serde_json::to_value(sessions.undo(project_id)?).unwrap()),
         "project_redo" => Ok(serde_json::to_value(sessions.redo(project_id)?).unwrap()),
         "element_add" => element_add(&mut sessions, project_id, args),
@@ -2107,10 +2294,332 @@ fn validate_new_element_ids(
     Ok(())
 }
 
+fn state_list(
+    sessions: &ProjectSessionManager,
+    project_id: Option<&str>,
+) -> Result<serde_json::Value, String> {
+    let session = sessions.resolve(project_id)?;
+    Ok(serde_json::json!({
+        "project_id": session.id,
+        "revision": session.revision,
+        "active_state_id": session.active_state_id,
+        "edit_scope": session.edit_scope,
+        "states": session.project.states,
+    }))
+}
+
+fn state_add(
+    sessions: &mut ProjectSessionManager,
+    project_id: Option<&str>,
+    args: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let id = required_str(args, "id")?.trim();
+    let label = required_str(args, "label")?.trim();
+    if id.is_empty() {
+        return Err("state id cannot be empty".to_string());
+    }
+    if label.is_empty() {
+        return Err("state label cannot be empty".to_string());
+    }
+    let description = nullable_string(
+        args.get("description").unwrap_or(&serde_json::Value::Null),
+        "description",
+    )?;
+    let initial = optional_bool(args, "initial")?.unwrap_or(false);
+    let export_role = nullable_string(
+        args.get("export_role").unwrap_or(&serde_json::Value::Null),
+        "export_role",
+    )?;
+
+    sessions
+        .resolve(project_id)?
+        .project
+        .validate_state_id_available(id)?;
+    sessions.record_history(project_id)?;
+    let session = sessions.resolve_mut(project_id)?;
+    if initial {
+        for state in &mut session.project.states {
+            state.initial = false;
+        }
+    }
+    let state = ProjectState {
+        id: id.to_string(),
+        label: label.to_string(),
+        description,
+        initial,
+        export_role,
+    };
+    session.project.states.push(state.clone());
+    sessions.mark_changed(project_id)?;
+    let session = sessions.resolve(project_id)?;
+    Ok(serde_json::json!({
+        "project_id": session.id,
+        "revision": session.revision,
+        "state": state,
+        "states": session.project.states,
+    }))
+}
+
+fn state_update(
+    sessions: &mut ProjectSessionManager,
+    project_id: Option<&str>,
+    args: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let id = required_str(args, "id")?;
+    let current = sessions
+        .resolve(project_id)?
+        .project
+        .find_state(id)
+        .ok_or_else(|| format!("unknown state '{id}'"))?;
+    let mut updated = current.clone();
+    if let Some(label) = args.get("label") {
+        let label = label.as_str().ok_or("label must be a string")?.trim();
+        if label.is_empty() {
+            return Err("state label cannot be empty".to_string());
+        }
+        updated.label = label.to_string();
+    }
+    if let Some(description) = args.get("description") {
+        updated.description = nullable_string(description, "description")?;
+    }
+    if let Some(initial) = optional_bool(args, "initial")? {
+        updated.initial = initial;
+    }
+    if let Some(export_role) = args.get("export_role") {
+        updated.export_role = nullable_string(export_role, "export_role")?;
+    }
+
+    if updated == *current {
+        let session = sessions.resolve(project_id)?;
+        return Ok(serde_json::json!({
+            "project_id": session.id,
+            "revision": session.revision,
+            "state": current,
+            "states": session.project.states,
+        }));
+    }
+
+    sessions.record_history(project_id)?;
+    let session = sessions.resolve_mut(project_id)?;
+    if updated.initial {
+        for state in &mut session.project.states {
+            state.initial = false;
+        }
+    }
+    *session
+        .project
+        .find_state_mut(id)
+        .ok_or_else(|| format!("unknown state '{id}'"))? = updated.clone();
+    sessions.mark_changed(project_id)?;
+    let session = sessions.resolve(project_id)?;
+    Ok(serde_json::json!({
+        "project_id": session.id,
+        "revision": session.revision,
+        "state": updated,
+        "states": session.project.states,
+    }))
+}
+
+fn state_remove(
+    sessions: &mut ProjectSessionManager,
+    project_id: Option<&str>,
+    args: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let id = required_str(args, "id")?;
+    if sessions
+        .resolve(project_id)?
+        .project
+        .find_state(id)
+        .is_none()
+    {
+        return Err(format!("unknown state '{id}'"));
+    }
+
+    sessions.record_history(project_id)?;
+    let session = sessions.resolve_mut(project_id)?;
+    session.project.states.retain(|state| state.id != id);
+    session.project.state_overrides.remove(id);
+    for group in &mut session.project.groups {
+        group.state_owned.retain(|state_id| state_id != id);
+    }
+    for region in &mut session.project.attached_regions {
+        region.state_owned.retain(|state_id| state_id != id);
+    }
+    if session.active_state_id.as_deref() == Some(id) {
+        session.active_state_id = session.project.initial_state_id().map(str::to_owned);
+        session.edit_scope = EditScope::Base;
+    }
+    sessions.mark_changed(project_id)?;
+    let session = sessions.resolve(project_id)?;
+    Ok(serde_json::json!({
+        "project_id": session.id,
+        "revision": session.revision,
+        "removed": true,
+        "states": session.project.states,
+        "active_state_id": session.active_state_id,
+    }))
+}
+
+fn state_set_active(
+    sessions: &mut ProjectSessionManager,
+    project_id: Option<&str>,
+    args: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let state_id = if args.get("state_id").is_some_and(serde_json::Value::is_null) {
+        None
+    } else {
+        optional_string(args, "state_id")
+    };
+    if let Some(state_id) = state_id.as_deref() {
+        if sessions
+            .resolve(project_id)?
+            .project
+            .find_state(state_id)
+            .is_none()
+        {
+            return Err(format!("unknown state '{state_id}'"));
+        }
+    }
+    let edit_scope = parse_edit_scope(args)?;
+    let session_id = {
+        let session = sessions.resolve_mut(project_id)?;
+        session.active_state_id = state_id;
+        if let Some(edit_scope) = edit_scope {
+            session.edit_scope = edit_scope;
+        } else if session.active_state_id.is_none() {
+            session.edit_scope = EditScope::Base;
+        }
+        session.id.clone()
+    };
+    let summary = session_summary(sessions, &session_id)?;
+    Ok(serde_json::json!({
+        "project_id": session_id,
+        "active_state_id": summary.active_state_id,
+        "edit_scope": summary.edit_scope,
+        "summary": summary,
+    }))
+}
+
+fn state_override_update(
+    sessions: &mut ProjectSessionManager,
+    project_id: Option<&str>,
+    args: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let state_id = required_str(args, "state_id")?;
+    let target_type = required_str(args, "target_type")?;
+    let target_id = required_str(args, "target_id")?;
+    let fields = args
+        .get("fields")
+        .and_then(|value| value.as_object())
+        .ok_or("fields must be an object")?;
+
+    match target_type {
+        "element" => {
+            update_element_state_override_for_mcp(sessions, project_id, target_id, state_id, fields)
+        }
+        "attached_region" => {
+            let patch = parse_attached_region_state_patch(fields)?;
+            let changed = {
+                let mut preview = sessions.resolve(project_id)?.project.clone();
+                preview.update_attached_region_state_override(state_id, target_id, patch.clone())?
+            };
+            if changed {
+                sessions.record_history(project_id)?;
+                let session = sessions.resolve_mut(project_id)?;
+                session
+                    .project
+                    .update_attached_region_state_override(state_id, target_id, patch)?;
+                sessions.mark_changed(project_id)?;
+            }
+            state_override_response(
+                sessions,
+                project_id,
+                state_id,
+                target_type,
+                target_id,
+                changed,
+            )
+        }
+        "group" => {
+            let visible = parse_group_state_patch(fields)?;
+            let changed = {
+                let project = &sessions.resolve(project_id)?.project;
+                validate_group_state_override_target(project, state_id, target_id)?;
+                let mut preview = project.clone();
+                apply_group_state_override(&mut preview, state_id, target_id, visible);
+                preview.state_overrides != project.state_overrides
+            };
+            if changed {
+                sessions.record_history(project_id)?;
+                let session = sessions.resolve_mut(project_id)?;
+                apply_group_state_override(&mut session.project, state_id, target_id, visible);
+                session.project.is_dirty = true;
+                sessions.mark_changed(project_id)?;
+            }
+            state_override_response(
+                sessions,
+                project_id,
+                state_id,
+                target_type,
+                target_id,
+                changed,
+            )
+        }
+        _ => Err(format!(
+            "unknown state override target_type '{target_type}'"
+        )),
+    }
+}
+
+fn state_override_clear(
+    sessions: &mut ProjectSessionManager,
+    project_id: Option<&str>,
+    args: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let state_id = required_str(args, "state_id")?;
+    let target_type = required_str(args, "target_type")?;
+    let target_id = required_str(args, "target_id")?;
+    let field = optional_string(args, "field");
+    let changed = {
+        let project = &sessions.resolve(project_id)?.project;
+        let mut preview = project.clone();
+        apply_state_override_clear_for_mcp(
+            &mut preview,
+            state_id,
+            target_type,
+            target_id,
+            field.as_deref(),
+        )?;
+        preview.state_overrides != project.state_overrides
+    };
+    if changed {
+        sessions.record_history(project_id)?;
+        let session = sessions.resolve_mut(project_id)?;
+        apply_state_override_clear_for_mcp(
+            &mut session.project,
+            state_id,
+            target_type,
+            target_id,
+            field.as_deref(),
+        )?;
+        sessions.mark_changed(project_id)?;
+    }
+    state_override_response(
+        sessions,
+        project_id,
+        state_id,
+        target_type,
+        target_id,
+        changed,
+    )
+}
+
 #[derive(Debug)]
 struct ElementPatch {
     id: String,
     changes: serde_json::Map<String, serde_json::Value>,
+    state_id: Option<String>,
+    edit_scope: Option<EditScope>,
 }
 
 fn parse_element_patches(args: &serde_json::Value) -> Result<Vec<ElementPatch>, String> {
@@ -2139,7 +2648,25 @@ fn parse_element_patches(args: &serde_json::Value) -> Result<Vec<ElementPatch>, 
             .and_then(|value| value.as_object())
             .ok_or("Each update requires object changes")?
             .clone();
-        patches.push(ElementPatch { id, changes });
+        let state_id = object
+            .get("state_id")
+            .and_then(|value| value.as_str())
+            .map(String::from)
+            .or_else(|| optional_string(args, "state_id"));
+        let edit_scope = object
+            .get("edit_scope")
+            .or_else(|| args.get("edit_scope"))
+            .map(|value| {
+                serde_json::from_value(value.clone())
+                    .map_err(|error| format!("Invalid edit_scope: {error}"))
+            })
+            .transpose()?;
+        patches.push(ElementPatch {
+            id,
+            changes,
+            state_id,
+            edit_scope,
+        });
     }
     Ok(patches)
 }
@@ -2190,6 +2717,303 @@ fn apply_element_changes(
     serde_json::from_value(value).map_err(|error| format!("Invalid element update: {error}"))
 }
 
+fn parse_edit_scope(args: &serde_json::Value) -> Result<Option<EditScope>, String> {
+    args.get("edit_scope")
+        .map(|value| {
+            serde_json::from_value(value.clone())
+                .map_err(|error| format!("Invalid edit_scope: {error}"))
+        })
+        .transpose()
+}
+
+fn effective_state_id_for_element_update(
+    session_active_state_id: Option<&str>,
+    state_id: Option<&str>,
+    edit_scope: Option<EditScope>,
+) -> Result<Option<String>, String> {
+    if state_id.is_some() || edit_scope == Some(EditScope::State) {
+        return state_id
+            .or(session_active_state_id)
+            .map(|value| Some(value.to_string()))
+            .ok_or(
+                "state_id is required when edit_scope is state and no active state is set"
+                    .to_string(),
+            );
+    }
+    Ok(None)
+}
+
+fn parse_element_state_patch(
+    changes: &serde_json::Map<String, serde_json::Value>,
+) -> Result<ElementStateOverridePatch, String> {
+    let unsupported = changes
+        .keys()
+        .filter(|key| {
+            !matches!(
+                key.as_str(),
+                "visible" | "x" | "y" | "width" | "height" | "attached_region" | "layer"
+            )
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    if !unsupported.is_empty() {
+        return Err(format!(
+            "unsupported element state override field(s): {}",
+            unsupported.join(", ")
+        ));
+    }
+
+    let mut patch = ElementStateOverridePatch::default();
+    for (key, value) in changes {
+        match key.as_str() {
+            "visible" => patch.visible = Some(nullable_bool(value, key)?),
+            "x" => patch.x = Some(nullable_i32(value, key)?),
+            "y" => patch.y = Some(nullable_i32(value, key)?),
+            "width" => patch.width = Some(nullable_u32(value, key)?),
+            "height" => patch.height = Some(nullable_u32(value, key)?),
+            "attached_region" => patch.attached_region = Some(Some(nullable_string(value, key)?)),
+            "layer" => {
+                patch.layer = Some(if value.is_null() {
+                    None
+                } else {
+                    Some(
+                        serde_json::from_value(value.clone())
+                            .map_err(|error| format!("Invalid layer override: {error}"))?,
+                    )
+                });
+            }
+            _ => unreachable!(),
+        }
+    }
+    Ok(patch)
+}
+
+fn parse_attached_region_state_patch(
+    changes: &serde_json::Map<String, serde_json::Value>,
+) -> Result<AttachedRegionStateOverridePatch, String> {
+    let unsupported = changes
+        .keys()
+        .filter(|key| !matches!(key.as_str(), "visible" | "x" | "y" | "width" | "height"))
+        .cloned()
+        .collect::<Vec<_>>();
+    if !unsupported.is_empty() {
+        return Err(format!(
+            "unsupported attached-region state override field(s): {}",
+            unsupported.join(", ")
+        ));
+    }
+
+    let mut patch = AttachedRegionStateOverridePatch::default();
+    for (key, value) in changes {
+        match key.as_str() {
+            "visible" => patch.visible = Some(nullable_bool(value, key)?),
+            "x" => patch.x = Some(nullable_i32(value, key)?),
+            "y" => patch.y = Some(nullable_i32(value, key)?),
+            "width" => patch.width = Some(nullable_u32(value, key)?),
+            "height" => patch.height = Some(nullable_u32(value, key)?),
+            _ => unreachable!(),
+        }
+    }
+    Ok(patch)
+}
+
+fn parse_group_state_patch(
+    changes: &serde_json::Map<String, serde_json::Value>,
+) -> Result<Option<Option<bool>>, String> {
+    let unsupported = changes
+        .keys()
+        .filter(|key| key.as_str() != "visible")
+        .cloned()
+        .collect::<Vec<_>>();
+    if !unsupported.is_empty() {
+        return Err(format!(
+            "unsupported group state override field(s): {}",
+            unsupported.join(", ")
+        ));
+    }
+    changes
+        .get("visible")
+        .map(|value| nullable_bool(value, "visible"))
+        .transpose()
+}
+
+fn validate_group_state_override_target(
+    project: &Project,
+    state_id: &str,
+    group_id: &str,
+) -> Result<(), String> {
+    if project.find_state(state_id).is_none() {
+        return Err(format!("unknown state '{state_id}'"));
+    }
+    if !project.groups.iter().any(|group| group.id == group_id) {
+        return Err(format!("unknown group '{group_id}'"));
+    }
+    Ok(())
+}
+
+fn apply_group_state_override(
+    project: &mut Project,
+    state_id: &str,
+    group_id: &str,
+    visible: Option<Option<bool>>,
+) {
+    let override_value = project
+        .state_overrides
+        .entry(state_id.to_string())
+        .or_default()
+        .groups
+        .entry(group_id.to_string())
+        .or_insert_with(GroupStateOverride::default);
+    if let Some(value) = visible {
+        override_value.visible = value;
+    }
+    if override_value.visible.is_none() {
+        if let Some(overrides) = project.state_overrides.get_mut(state_id) {
+            overrides.groups.remove(group_id);
+            if overrides.elements.is_empty()
+                && overrides.groups.is_empty()
+                && overrides.attached_regions.is_empty()
+            {
+                project.state_overrides.remove(state_id);
+            }
+        }
+    }
+}
+
+fn apply_state_override_clear_for_mcp(
+    project: &mut Project,
+    state_id: &str,
+    target_type: &str,
+    target_id: &str,
+    field: Option<&str>,
+) -> Result<(), String> {
+    if let Some(field) = field {
+        let target = match target_type {
+            "element" => StateOverrideTarget::Element(target_id.to_string()),
+            "attached_region" => StateOverrideTarget::AttachedRegion(target_id.to_string()),
+            "group" => StateOverrideTarget::Group(target_id.to_string()),
+            _ => {
+                return Err(format!(
+                    "unknown state override target_type '{target_type}'"
+                ))
+            }
+        };
+        project.clear_state_override_field(state_id, target, field)?;
+        return Ok(());
+    }
+
+    if project.find_state(state_id).is_none() {
+        return Err(format!("unknown state '{state_id}'"));
+    }
+    match target_type {
+        "element" => {
+            if project.find_element(target_id).is_none() {
+                return Err(format!("unknown element '{target_id}'"));
+            }
+            if let Some(overrides) = project.state_overrides.get_mut(state_id) {
+                overrides.elements.remove(target_id);
+            }
+        }
+        "attached_region" => {
+            if project.find_attached_region(target_id).is_none() {
+                return Err(format!("unknown attached region '{target_id}'"));
+            }
+            if let Some(overrides) = project.state_overrides.get_mut(state_id) {
+                overrides.attached_regions.remove(target_id);
+            }
+        }
+        "group" => {
+            if !project.groups.iter().any(|group| group.id == target_id) {
+                return Err(format!("unknown group '{target_id}'"));
+            }
+            if let Some(overrides) = project.state_overrides.get_mut(state_id) {
+                overrides.groups.remove(target_id);
+            }
+        }
+        _ => {
+            return Err(format!(
+                "unknown state override target_type '{target_type}'"
+            ))
+        }
+    }
+    if project
+        .state_overrides
+        .get(state_id)
+        .is_some_and(|overrides| {
+            overrides.elements.is_empty()
+                && overrides.groups.is_empty()
+                && overrides.attached_regions.is_empty()
+        })
+    {
+        project.state_overrides.remove(state_id);
+    }
+    project.is_dirty = true;
+    Ok(())
+}
+
+fn state_override_response(
+    sessions: &ProjectSessionManager,
+    project_id: Option<&str>,
+    state_id: &str,
+    target_type: &str,
+    target_id: &str,
+    changed: bool,
+) -> Result<serde_json::Value, String> {
+    let session = sessions.resolve(project_id)?;
+    Ok(serde_json::json!({
+        "project_id": session.id,
+        "revision": session.revision,
+        "state_id": state_id,
+        "target_type": target_type,
+        "target_id": target_id,
+        "changed": changed,
+        "state_overrides": session.project.state_overrides.get(state_id),
+    }))
+}
+
+fn update_element_state_override_for_mcp(
+    sessions: &mut ProjectSessionManager,
+    project_id: Option<&str>,
+    element_id: &str,
+    state_id: &str,
+    changes: &serde_json::Map<String, serde_json::Value>,
+) -> Result<serde_json::Value, String> {
+    let patch = parse_element_state_patch(changes)?;
+    let changed = {
+        let mut preview = sessions.resolve(project_id)?.project.clone();
+        preview.update_element_state_override(state_id, element_id, patch.clone())?
+    };
+    if !changed {
+        let session = sessions.resolve(project_id)?;
+        return Ok(serde_json::json!({
+            "project_id": session.id,
+            "revision": session.revision,
+            "state_id": state_id,
+            "target_type": "element",
+            "target_id": element_id,
+            "changed": false,
+            "state_overrides": session.project.state_overrides.get(state_id),
+        }));
+    }
+
+    sessions.record_history(project_id)?;
+    let session = sessions.resolve_mut(project_id)?;
+    session
+        .project
+        .update_element_state_override(state_id, element_id, patch)?;
+    sessions.mark_changed(project_id)?;
+    let session = sessions.resolve(project_id)?;
+    Ok(serde_json::json!({
+        "project_id": session.id,
+        "revision": session.revision,
+        "state_id": state_id,
+        "target_type": "element",
+        "target_id": element_id,
+        "changed": true,
+        "state_overrides": session.project.state_overrides.get(state_id),
+    }))
+}
+
 fn element_update(
     sessions: &mut ProjectSessionManager,
     project_id: Option<&str>,
@@ -2201,6 +3025,20 @@ fn element_update(
         .ok_or("Missing changes")?
         .as_object()
         .ok_or("Element changes must be an object")?;
+    let edit_scope = parse_edit_scope(args)?;
+    let explicit_state_id = optional_string(args, "state_id");
+    let active_state_id = sessions
+        .resolve(project_id)?
+        .active_state_id
+        .as_deref()
+        .map(str::to_owned);
+    if let Some(state_id) = effective_state_id_for_element_update(
+        active_state_id.as_deref(),
+        explicit_state_id.as_deref(),
+        edit_scope,
+    )? {
+        return update_element_state_override_for_mcp(sessions, project_id, id, &state_id, changes);
+    }
     let current = sessions
         .resolve(project_id)?
         .project
@@ -2226,6 +3064,13 @@ fn element_update_many(
     args: &serde_json::Value,
 ) -> Result<serde_json::Value, String> {
     let patches = parse_element_patches(args)?;
+    if patches
+        .iter()
+        .any(|patch| patch.state_id.is_some() || patch.edit_scope == Some(EditScope::State))
+    {
+        return element_update_many_state_overrides(sessions, project_id, &patches);
+    }
+
     let (session_id, updated, changed_count) = {
         let session = sessions.resolve(project_id)?;
         let mut updated = Vec::with_capacity(patches.len());
@@ -2270,6 +3115,64 @@ fn element_update_many(
         "project_id": session_id,
         "updated_count": changed_count,
         "results": updated.iter().map(element_for_mcp).collect::<Vec<_>>()
+    }))
+}
+
+fn element_update_many_state_overrides(
+    sessions: &mut ProjectSessionManager,
+    project_id: Option<&str>,
+    patches: &[ElementPatch],
+) -> Result<serde_json::Value, String> {
+    let session = sessions.resolve(project_id)?;
+    let active_state_id = session.active_state_id.as_deref();
+    let session_id = session.id.clone();
+    let mut parsed = Vec::with_capacity(patches.len());
+    for patch in patches {
+        let state_id = effective_state_id_for_element_update(
+            active_state_id,
+            patch.state_id.as_deref(),
+            patch.edit_scope,
+        )?
+        .ok_or("state_id or edit_scope:'state' is required for state override updates")?;
+        let override_patch = parse_element_state_patch(&patch.changes)?;
+        parsed.push((patch.id.clone(), state_id, override_patch));
+    }
+
+    let changed_count = {
+        let mut preview = session.project.clone();
+        let mut changed_count = 0usize;
+        for (element_id, state_id, patch) in &parsed {
+            if preview.update_element_state_override(state_id, element_id, patch.clone())? {
+                changed_count += 1;
+            }
+        }
+        changed_count
+    };
+
+    if changed_count == 0 {
+        let session = sessions.resolve(project_id)?;
+        return Ok(serde_json::json!({
+            "project_id": session_id,
+            "revision": session.revision,
+            "updated_count": 0,
+            "state_overrides": session.project.state_overrides,
+        }));
+    }
+
+    sessions.record_history(project_id)?;
+    let session = sessions.resolve_mut(project_id)?;
+    for (element_id, state_id, patch) in &parsed {
+        session
+            .project
+            .update_element_state_override(state_id, element_id, patch.clone())?;
+    }
+    sessions.mark_changed(project_id)?;
+    let session = sessions.resolve(project_id)?;
+    Ok(serde_json::json!({
+        "project_id": session_id,
+        "revision": session.revision,
+        "updated_count": changed_count,
+        "state_overrides": session.project.state_overrides,
     }))
 }
 
@@ -3086,7 +3989,9 @@ fn project_render(
     args: &serde_json::Value,
 ) -> Result<serde_json::Value, String> {
     let session = sessions.resolve(project_id)?;
-    let png = crate::texture::composite_project_preview(&session.project)?;
+    let state_id = optional_string(args, "state_id");
+    let render_project = session.project.effective_for_state(state_id.as_deref())?;
+    let png = crate::texture::composite_project_preview(&render_project)?;
     let path = optional_string(args, "output_path")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| {
@@ -3117,6 +4022,9 @@ fn project_render(
         image.height(),
     );
     metadata["project_id"] = serde_json::json!(session.id);
+    if let Some(state_id) = state_id {
+        metadata["state_id"] = serde_json::json!(state_id);
+    }
     metadata["path"] = serde_json::json!(path.to_string_lossy().to_string());
     if optional_bool(args, "include_data_url")?.unwrap_or(false) {
         metadata["data_url"] = serde_json::json!(data_url_for_png(&png));
@@ -3276,6 +4184,50 @@ fn optional_bool(value: &serde_json::Value, key: &str) -> Result<Option<bool>, S
         .get(key)
         .map(|value| value.as_bool().ok_or(format!("{key} must be boolean")))
         .transpose()
+}
+
+fn nullable_string(value: &serde_json::Value, key: &str) -> Result<Option<String>, String> {
+    if value.is_null() {
+        return Ok(None);
+    }
+    value
+        .as_str()
+        .map(|value| Some(value.to_string()))
+        .ok_or_else(|| format!("{key} must be a string or null"))
+}
+
+fn nullable_bool(value: &serde_json::Value, key: &str) -> Result<Option<bool>, String> {
+    if value.is_null() {
+        return Ok(None);
+    }
+    value
+        .as_bool()
+        .map(Some)
+        .ok_or_else(|| format!("{key} must be boolean or null"))
+}
+
+fn nullable_i32(value: &serde_json::Value, key: &str) -> Result<Option<i32>, String> {
+    if value.is_null() {
+        return Ok(None);
+    }
+    if let Some(value) = value.as_i64() {
+        return i32::try_from(value)
+            .map(Some)
+            .map_err(|_| format!("{key} is out of range"));
+    }
+    if let Some(value) = value.as_u64() {
+        return i32::try_from(value)
+            .map(Some)
+            .map_err(|_| format!("{key} is out of range"));
+    }
+    Err(format!("{key} must be an integer or null"))
+}
+
+fn nullable_u32(value: &serde_json::Value, key: &str) -> Result<Option<u32>, String> {
+    if value.is_null() {
+        return Ok(None);
+    }
+    json_number_to_u32(value, key).map(Some)
 }
 
 fn required_str<'a>(value: &'a serde_json::Value, key: &str) -> Result<&'a str, String> {
@@ -3792,6 +4744,27 @@ mod tests {
     }
 
     #[test]
+    fn tools_list_exposes_state_variant_tools() {
+        let tools = get_tool_definitions();
+        let names = tools
+            .iter()
+            .filter_map(|tool| tool["name"].as_str())
+            .collect::<Vec<_>>();
+
+        for name in [
+            "state_list",
+            "state_add",
+            "state_update",
+            "state_remove",
+            "state_set_active",
+            "state_override_update",
+            "state_override_clear",
+        ] {
+            assert!(names.contains(&name), "{name} should be listed");
+        }
+    }
+
+    #[test]
     fn schema_discover_lists_visual_authoring_fields() {
         let state = test_state();
         let response = response_for(
@@ -3825,6 +4798,38 @@ mod tests {
             .as_array()
             .unwrap()
             .contains(&serde_json::json!("nine_slice")));
+    }
+
+    #[test]
+    fn schema_discover_lists_state_override_fields() {
+        let state = test_state();
+        let response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "schema-state-variants",
+                "method": "tools/call",
+                "params": {
+                    "name": "schema_discover",
+                    "arguments": {}
+                }
+            }),
+            &state,
+        );
+
+        assert!(response["error"].is_null(), "{response:#}");
+        let value = tool_text_value(&response);
+        assert!(value["state_variants"]["element_override_fields"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!("visible")));
+        assert!(value["state_variants"]["attached_region_override_fields"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!("width")));
+        assert!(value["tools_accepting_state_id"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!("project_render")));
     }
 
     #[test]
@@ -6038,6 +7043,247 @@ mod tests {
     }
 
     #[test]
+    fn state_override_update_changes_effective_render_not_base() {
+        let state = test_state();
+        let project_id = {
+            let mut sessions = state.sessions.lock().unwrap();
+            let mut project = Project::new("State Render", 96, 48, ModTarget::Forge);
+            project.elements.push(
+                parse_element_arg(&serde_json::json!({
+                    "id": "panel",
+                    "type": "slot",
+                    "x": 0,
+                    "y": 0,
+                    "size": 18
+                }))
+                .unwrap(),
+            );
+            sessions.create_session(project)
+        };
+
+        let add_response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "state-add",
+                "method": "tools/call",
+                "params": {
+                    "name": "state_add",
+                    "arguments": {
+                        "project_id": project_id,
+                        "id": "expanded",
+                        "label": "Expanded",
+                        "initial": true,
+                        "export_role": "expanded"
+                    }
+                }
+            }),
+            &state,
+        );
+        assert!(add_response["error"].is_null(), "{add_response:#}");
+
+        let update_response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "state-override",
+                "method": "tools/call",
+                "params": {
+                    "name": "state_override_update",
+                    "arguments": {
+                        "project_id": project_id,
+                        "state_id": "expanded",
+                        "target_type": "element",
+                        "target_id": "panel",
+                        "fields": { "x": 64, "visible": true }
+                    }
+                }
+            }),
+            &state,
+        );
+        assert!(update_response["error"].is_null(), "{update_response:#}");
+
+        let sessions = state.sessions.lock().unwrap();
+        let session = sessions.resolve(Some(&project_id)).unwrap();
+        assert_eq!(session.project.find_element("panel").unwrap().x, 0);
+        assert_eq!(
+            session
+                .project
+                .effective_for_state(Some("expanded"))
+                .unwrap()
+                .find_element("panel")
+                .unwrap()
+                .x,
+            64
+        );
+    }
+
+    #[test]
+    fn element_update_with_state_id_writes_override_and_rejects_base_only_fields() {
+        let state = test_state();
+        let project_id = {
+            let mut sessions = state.sessions.lock().unwrap();
+            let mut project = Project::new("State Element Update", 96, 48, ModTarget::Forge);
+            project.elements.push(
+                parse_element_arg(&serde_json::json!({
+                    "id": "panel",
+                    "type": "slot",
+                    "x": 0,
+                    "y": 0,
+                    "size": 18
+                }))
+                .unwrap(),
+            );
+            sessions.create_session(project)
+        };
+        let add_response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "state-add-element-update",
+                "method": "tools/call",
+                "params": {
+                    "name": "state_add",
+                    "arguments": {
+                        "project_id": project_id,
+                        "id": "expanded",
+                        "label": "Expanded"
+                    }
+                }
+            }),
+            &state,
+        );
+        assert!(add_response["error"].is_null(), "{add_response:#}");
+
+        let update_response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "element-update-state",
+                "method": "tools/call",
+                "params": {
+                    "name": "element_update",
+                    "arguments": {
+                        "project_id": project_id,
+                        "id": "panel",
+                        "state_id": "expanded",
+                        "changes": { "x": 24, "visible": false }
+                    }
+                }
+            }),
+            &state,
+        );
+        assert!(update_response["error"].is_null(), "{update_response:#}");
+
+        let rejected_response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "element-update-state-reject",
+                "method": "tools/call",
+                "params": {
+                    "name": "element_update",
+                    "arguments": {
+                        "project_id": project_id,
+                        "id": "panel",
+                        "state_id": "expanded",
+                        "changes": { "content": "base-only" }
+                    }
+                }
+            }),
+            &state,
+        );
+        assert!(rejected_response["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("unsupported element state override field(s): content"));
+
+        let sessions = state.sessions.lock().unwrap();
+        let session = sessions.resolve(Some(&project_id)).unwrap();
+        assert_eq!(session.project.find_element("panel").unwrap().x, 0);
+        assert_eq!(
+            session.project.state_overrides["expanded"].elements["panel"].x,
+            Some(24)
+        );
+    }
+
+    #[test]
+    fn project_render_accepts_state_id() {
+        let state = test_state();
+        let project_id = {
+            let mut sessions = state.sessions.lock().unwrap();
+            let mut project = Project::new("Render State", 96, 48, ModTarget::Forge);
+            project.elements.push(
+                parse_element_arg(&serde_json::json!({
+                    "id": "panel",
+                    "type": "slot",
+                    "x": 0,
+                    "y": 0,
+                    "size": 18
+                }))
+                .unwrap(),
+            );
+            sessions.create_session(project)
+        };
+        let add_response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "state-add-render",
+                "method": "tools/call",
+                "params": {
+                    "name": "state_add",
+                    "arguments": {
+                        "project_id": project_id,
+                        "id": "expanded",
+                        "label": "Expanded"
+                    }
+                }
+            }),
+            &state,
+        );
+        assert!(add_response["error"].is_null(), "{add_response:#}");
+        let override_response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "state-override-render",
+                "method": "tools/call",
+                "params": {
+                    "name": "state_override_update",
+                    "arguments": {
+                        "project_id": project_id,
+                        "state_id": "expanded",
+                        "target_type": "element",
+                        "target_id": "panel",
+                        "fields": { "x": 32 }
+                    }
+                }
+            }),
+            &state,
+        );
+        assert!(
+            override_response["error"].is_null(),
+            "{override_response:#}"
+        );
+
+        let response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "render-state",
+                "method": "tools/call",
+                "params": {
+                    "name": "project_render",
+                    "arguments": {
+                        "project_id": project_id,
+                        "state_id": "expanded"
+                    }
+                }
+            }),
+            &state,
+        );
+
+        assert!(response["error"].is_null(), "{response:#}");
+        let value = tool_text_value(&response);
+        assert_eq!(value["project_id"], project_id);
+        assert_eq!(value["state_id"], "expanded");
+        assert!(value["path"].as_str().unwrap().ends_with(".png"));
+    }
+
+    #[test]
     fn project_screenshot_includes_data_url_only_when_requested() {
         let state = test_state();
         {
@@ -6660,7 +7906,12 @@ mod tests {
         let state = test_state();
         let project_id = {
             let mut sessions = state.sessions.lock().unwrap();
-            sessions.create_session(Project::new("Settings Defaults", 176, 166, ModTarget::Forge))
+            sessions.create_session(Project::new(
+                "Settings Defaults",
+                176,
+                166,
+                ModTarget::Forge,
+            ))
         };
 
         let response = response_for(

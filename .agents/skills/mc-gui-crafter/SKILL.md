@@ -18,6 +18,8 @@ Prefer these closed-alpha MCP tools:
 - `schema_discover` for accepted enums and editable fields.
 - `project_render` for visual verification.
 - `project_resize` for canvas size changes only.
+- `state_list`, `state_add`, `state_override_update`, and
+  `state_override_clear` for editable state variants.
 - `slot_grid_add`, `element_add_many`, and `element_update_many` for bulk edits.
 - `group_upsert` for creating or replacing group membership.
 - `project_semantic_groups_update` with `member_ids` for explicit semantics.
@@ -93,7 +95,7 @@ Prefer these closed-alpha MCP tools:
    - Call `animation_list` after creating and binding animations.
    - Call `project_render` after major layout changes when visual inspection
      is available; `project_screenshot` remains a backward-compatible deprecated
-     alias.
+     alias. Pass `state_id` to render an effective editable state.
    - Call `project_export_preview` before export.
    - Treat preview warnings as actionable. Fix semantic slot-count mismatches by
      aligning `slot_count`, slot roles, and `inventory_group`; fix scrollbar
@@ -112,6 +114,29 @@ Prefer these closed-alpha MCP tools:
   PNG before exporting.
 - For atlas-backed icon buttons, use `icon` plus `icon_uv`. Keep `content` as
   label, accessibility, and fallback metadata.
+
+## Editable State Variants
+
+- Use state variants for alternate authoring layouts such as collapsed and
+  expanded side panels. Runtime toggling/codegen behavior is deferred in this
+  alpha.
+- Call `schema_discover` before state editing. It returns `state_variants`,
+  override field allowlists, edit scopes, and tools accepting `state_id`.
+- `state_list` is read-only. `state_set_active` changes only session selection
+  and edit scope; it does not write project data or undo history.
+- Create state metadata with `state_add` and adjust it with `state_update`.
+  Remove a state with `state_remove`, which also clears that state's overrides.
+- Write state-specific layout changes with `state_override_update` or by
+  calling `element_update`/`element_update_many` with explicit `state_id` or
+  `edit_scope: "state"`.
+- Existing element tools default to base edits. In state scope, only `visible`,
+  `x`, `y`, `width`, `height`, `attached_region`, and `layer` are valid element
+  override fields; base-only fields such as `content`, `asset`, `slot_role`,
+  and semantic metadata must be edited on the base project.
+- Attached-region state overrides allow `visible`, `x`, `y`, `width`, and
+  `height`; group overrides currently allow `visible`.
+- Prefer `project_render` with `state_id` for state visual verification.
+  `project_screenshot` is a deprecated alias and accepts the same `state_id`.
 
 ## Design Rules
 
