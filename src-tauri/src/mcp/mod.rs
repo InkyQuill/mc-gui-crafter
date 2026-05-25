@@ -1546,9 +1546,7 @@ fn schema_discover() -> serde_json::Value {
             "element_update",
             "element_update_many",
             "project_render",
-            "project_screenshot",
-            "project_export_preview",
-            "project_export"
+            "project_screenshot"
         ],
         "asset_metadata_fields": ["width", "height", "nine_slice"],
         "serialization_defaults": schema_serialization_defaults()
@@ -2484,10 +2482,10 @@ fn state_set_active(
     let session_id = {
         let session = sessions.resolve_mut(project_id)?;
         session.active_state_id = state_id;
-        if let Some(edit_scope) = edit_scope {
-            session.edit_scope = edit_scope;
-        } else if session.active_state_id.is_none() {
+        if session.active_state_id.is_none() {
             session.edit_scope = EditScope::Base;
+        } else if let Some(edit_scope) = edit_scope {
+            session.edit_scope = edit_scope;
         }
         session.id.clone()
     };
@@ -4830,6 +4828,14 @@ mod tests {
             .as_array()
             .unwrap()
             .contains(&serde_json::json!("project_render")));
+        assert!(!value["tools_accepting_state_id"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!("project_export_preview")));
+        assert!(!value["tools_accepting_state_id"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!("project_export")));
     }
 
     #[test]
@@ -7200,6 +7206,244 @@ mod tests {
             session.project.state_overrides["expanded"].elements["panel"].x,
             Some(24)
         );
+    }
+
+    #[test]
+    fn state_set_active_clears_edit_scope_when_state_id_is_null() {
+        let state = test_state();
+        let project_id = {
+            let mut sessions = state.sessions.lock().unwrap();
+            let mut project = Project::new("State Scope", 96, 48, ModTarget::Forge);
+            project.states.push(ProjectState {
+                id: "expanded".into(),
+                label: "Expanded".into(),
+                description: None,
+                initial: true,
+                export_role: None,
+            });
+            sessions.create_session(project)
+        };
+
+        let set_response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "state-set-active",
+                "method": "tools/call",
+                "params": {
+                    "name": "state_set_active",
+                    "arguments": {
+                        "project_id": project_id,
+                        "state_id": "expanded",
+                        "edit_scope": "state"
+                    }
+                }
+            }),
+            &state,
+        );
+        assert!(set_response["error"].is_null(), "{set_response:#}");
+
+        let clear_response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "state-clear-active",
+                "method": "tools/call",
+                "params": {
+                    "name": "state_set_active",
+                    "arguments": {
+                        "project_id": project_id,
+                        "state_id": null,
+                        "edit_scope": "state"
+                    }
+                }
+            }),
+            &state,
+        );
+        assert!(clear_response["error"].is_null(), "{clear_response:#}");
+        let value = tool_text_value(&clear_response);
+        assert!(value["active_state_id"].is_null());
+        assert_eq!(value["edit_scope"], "base");
+    }
+
+    #[test]
+    fn element_update_many_with_state_id_writes_state_overrides() {
+        let state = test_state();
+        let project_id = {
+            let mut sessions = state.sessions.lock().unwrap();
+            let mut project = Project::new("Update Many State", 176, 166, ModTarget::Forge);
+            project.states.push(ProjectState {
+                id: "expanded".into(),
+                label: "Expanded".into(),
+                description: None,
+                initial: true,
+                export_role: None,
+            });
+            for (id, x) in [("a", 8), ("b", 26)] {
+                project.elements.push(
+                    parse_element_arg(&serde_json::json!({
+                        "id": id,
+                        "type": "slot",
+                        "x": x,
+                        "y": 18,
+                        "size": 18
+                    }))
+                    .unwrap(),
+                );
+            }
+            sessions.create_session(project)
+        };
+
+        let response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "update-many-state",
+                "method": "tools/call",
+                "params": {
+                    "name": "element_update_many",
+                    "arguments": {
+                        "project_id": project_id,
+                        "state_id": "expanded",
+                        "updates": [
+                            { "id": "a", "changes": { "x": 10, "visible": false } },
+                            { "id": "b", "changes": { "x": 30, "layer": "overlay" } }
+                        ]
+                    }
+                }
+            }),
+            &state,
+        );
+
+        assert!(response["error"].is_null(), "{response:#}");
+        let value = tool_text_value(&response);
+        assert_eq!(value["updated_count"], 2);
+        let sessions = state.sessions.lock().unwrap();
+        let session = sessions.resolve(Some(&project_id)).unwrap();
+        assert_eq!(session.project.find_element("a").unwrap().x, 8);
+        assert_eq!(session.project.find_element("b").unwrap().x, 26);
+        assert_eq!(
+            session.project.state_overrides["expanded"].elements["a"].x,
+            Some(10)
+        );
+        assert_eq!(
+            session.project.state_overrides["expanded"].elements["a"].visible,
+            Some(false)
+        );
+        assert_eq!(
+            session.project.state_overrides["expanded"].elements["b"].x,
+            Some(30)
+        );
+        assert_eq!(session.revision, 1);
+    }
+
+    #[test]
+    fn element_update_many_state_scope_rejects_unsupported_fields_without_mutation() {
+        let state = test_state();
+        let project_id = {
+            let mut sessions = state.sessions.lock().unwrap();
+            let mut project = Project::new("Update Many State Reject", 176, 166, ModTarget::Forge);
+            project.states.push(ProjectState {
+                id: "expanded".into(),
+                label: "Expanded".into(),
+                description: None,
+                initial: true,
+                export_role: None,
+            });
+            project.elements.push(
+                parse_element_arg(&serde_json::json!({
+                    "id": "a",
+                    "type": "slot",
+                    "x": 8,
+                    "y": 18,
+                    "size": 18
+                }))
+                .unwrap(),
+            );
+            sessions.create_session(project)
+        };
+
+        let response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "update-many-state-unsupported",
+                "method": "tools/call",
+                "params": {
+                    "name": "element_update_many",
+                    "arguments": {
+                        "project_id": project_id,
+                        "state_id": "expanded",
+                        "updates": [
+                            { "id": "a", "changes": { "content": "base-only" } }
+                        ]
+                    }
+                }
+            }),
+            &state,
+        );
+
+        assert!(response["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("unsupported element state override field(s): content"));
+        let sessions = state.sessions.lock().unwrap();
+        let session = sessions.resolve(Some(&project_id)).unwrap();
+        assert!(session.project.state_overrides.is_empty());
+        assert_eq!(session.revision, 0);
+    }
+
+    #[test]
+    fn element_update_many_state_scope_failure_is_atomic() {
+        let state = test_state();
+        let project_id = {
+            let mut sessions = state.sessions.lock().unwrap();
+            let mut project = Project::new("Update Many State Atomic", 176, 166, ModTarget::Forge);
+            project.states.push(ProjectState {
+                id: "expanded".into(),
+                label: "Expanded".into(),
+                description: None,
+                initial: true,
+                export_role: None,
+            });
+            project.elements.push(
+                parse_element_arg(&serde_json::json!({
+                    "id": "a",
+                    "type": "slot",
+                    "x": 8,
+                    "y": 18,
+                    "size": 18
+                }))
+                .unwrap(),
+            );
+            sessions.create_session(project)
+        };
+
+        let response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "update-many-state-atomic",
+                "method": "tools/call",
+                "params": {
+                    "name": "element_update_many",
+                    "arguments": {
+                        "project_id": project_id,
+                        "state_id": "expanded",
+                        "updates": [
+                            { "id": "a", "changes": { "x": 10 } },
+                            { "id": "missing", "changes": { "x": 30 } }
+                        ]
+                    }
+                }
+            }),
+            &state,
+        );
+
+        assert!(response["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("unknown element 'missing'"));
+        let sessions = state.sessions.lock().unwrap();
+        let session = sessions.resolve(Some(&project_id)).unwrap();
+        assert!(session.project.state_overrides.is_empty());
+        assert_eq!(session.project.find_element("a").unwrap().x, 8);
+        assert_eq!(session.revision, 0);
     }
 
     #[test]
