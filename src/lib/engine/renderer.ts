@@ -256,7 +256,7 @@ export class GuiRenderer {
       } else if (editor.isResizing) {
         cursor = "nwse-resize";
       } else if (editor.tool === "select" && editor.selectedElementId) {
-        const selEl = project.elementById(editor.selectedElementId);
+        const selEl = project.effectiveElementById(editor.selectedElementId);
         if (selEl && this.hitTestHandle(selEl, gui.x, gui.y)) {
           cursor = "nwse-resize";
         }
@@ -351,7 +351,7 @@ export class GuiRenderer {
     const onPointerUp = () => {
       this.isPanning = false;
       if (editor.isResizing && editor.resizeElementId) {
-        const el = project.elementById(editor.resizeElementId);
+        const el = project.effectiveElementById(editor.resizeElementId);
         if (el) {
           const w = el.width ?? el.size ?? 18;
           const h = el.height ?? el.size ?? 18;
@@ -360,7 +360,7 @@ export class GuiRenderer {
       }
       if (editor.isDragging && editor.dragElementId) {
         if (editor.selectedAttachedRegionId) {
-          const region = project.attachedRegionById(editor.selectedAttachedRegionId);
+          const region = project.effectiveAttachedRegionById(editor.selectedAttachedRegionId);
           if (region) {
             void project.moveAttachedRegionWithElements(editor.selectedAttachedRegionId, region.x, region.y);
           }
@@ -392,7 +392,7 @@ export class GuiRenderer {
 
       // Check resize handles on selected element first
       if (editor.tool === "select" && editor.selectedElementId && !shiftHeld) {
-        const selEl = project.elementById(editor.selectedElementId);
+        const selEl = project.effectiveElementById(editor.selectedElementId);
         if (selEl && (selEl.visible ?? true)) {
           const corner = this.hitTestHandle(selEl, gui.x, gui.y);
           if (corner) {
@@ -404,7 +404,7 @@ export class GuiRenderer {
       }
 
       // Find clicked element: higher layers first, then later elements within the same layer.
-      const sortedForHit = project.elements
+      const sortedForHit = project.effectiveElements
         .filter(el => el.visible ?? true)
         .map((el, index) => ({ el, index }))
         .sort((a, b) => {
@@ -425,13 +425,13 @@ export class GuiRenderer {
           : project.movementIdsForElement(clicked.id);
         this.dragStartPositions = new Map(
           dragElementIds.map(id => {
-            const el = project.elementById(id);
+            const el = project.effectiveElementById(id);
             return [id, { x: el?.x ?? 0, y: el?.y ?? 0 }];
           }),
         );
         editor.startDragElementAt(clicked.id, pointer.x, pointer.y, clicked.x, clicked.y);
       } else if (editor.tool === "select" && !clicked && !shiftHeld) {
-        const clickedRegion = [...project.attachedRegions]
+        const clickedRegion = [...project.effectiveAttachedRegions]
           .reverse()
           .find(region => (region.visible ?? true) && this.hitTestAttachedRegion(region, gui.x, gui.y));
         if (clickedRegion) {
@@ -682,7 +682,7 @@ export class GuiRenderer {
     this.clearRenderContainer(this.elementsContainer);
 
     // Sort by layer priority: Background first, then Overlay, then Animatable
-    const sorted = [...project.elements].sort((a, b) => {
+    const sorted = [...project.effectiveElements].sort((a, b) => {
       const aLayer = LAYER_ORDER[a.layer ?? "background"] ?? 0;
       const bLayer = LAYER_ORDER[b.layer ?? "background"] ?? 0;
       return aLayer - bLayer;
@@ -704,7 +704,7 @@ export class GuiRenderer {
     const g = this.attachedRegionGraphics;
     g.clear();
 
-    for (const region of project.attachedRegions) {
+    for (const region of project.effectiveAttachedRegions) {
       if (region.visible === false) continue;
       const selected = editor.selectedAttachedRegionId === region.id;
       g.rect(region.x, region.y, region.width, region.height);
@@ -1550,7 +1550,7 @@ export class GuiRenderer {
     this.selectionGraphics.clear();
 
     for (const selId of editor.selectedIds) {
-      const el = project.elementById(selId);
+      const el = project.effectiveElementById(selId);
       if (!el) continue;
 
       const bounds = this.elementBounds(el);

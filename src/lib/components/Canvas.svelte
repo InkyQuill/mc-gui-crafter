@@ -41,7 +41,10 @@
   $effect(() => {
     void project.renderVersion;
     void project.revision;
-    void project.elements.length;
+    void project.effectiveElements.length;
+    void project.effectiveAttachedRegions.length;
+    void project.activeStateId;
+    void project.editScope;
     void project.guiSize.width;
     void project.guiSize.height;
     void project.assets.length;
@@ -52,7 +55,7 @@
       void group.id;
       void group.elements.length;
     }
-    for (const element of project.elements) {
+    for (const element of project.effectiveElements) {
       void element.type;
       void element.x;
       void element.y;
