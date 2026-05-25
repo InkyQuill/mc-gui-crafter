@@ -1830,7 +1830,7 @@ fn project_export_preview(
     args: &serde_json::Value,
 ) -> Result<serde_json::Value, String> {
     let (project, config, target) = export_request(sessions, project_id, args)?;
-    let state_id = optional_string(args, "state_id");
+    let state_id = optional_state_id(args, "state_id")?;
     serde_json::to_value(crate::export::preview_export_for_state(
         project,
         &config,
@@ -1846,7 +1846,7 @@ fn project_export(
     args: &serde_json::Value,
 ) -> Result<serde_json::Value, String> {
     let (project, config, target) = export_request(sessions, project_id, args)?;
-    let state_id = optional_string(args, "state_id");
+    let state_id = optional_state_id(args, "state_id")?;
     Ok(serde_json::json!({
         "files": crate::export::export_project_for_state(project, &config, target, state_id.as_deref())?,
     }))
@@ -5806,6 +5806,50 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(output_dir);
+    }
+
+    #[test]
+    fn project_export_rejects_non_string_state_id() {
+        let state = test_state();
+        let project_id = {
+            let mut sessions = state.sessions.lock().unwrap();
+            sessions.create_session(Project::new(
+                "Invalid Export State",
+                176,
+                166,
+                ModTarget::Forge,
+            ))
+        };
+        let output_dir = std::env::temp_dir().join(format!(
+            "gui-crafter-mcp-invalid-state-export-{}",
+            uuid::Uuid::new_v4()
+        ));
+
+        let response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "invalid-state-export",
+                "method": "tools/call",
+                "params": {
+                    "name": "project_export",
+                    "arguments": {
+                        "project_id": project_id,
+                        "target": "forge",
+                        "mod_id": "mcp_test",
+                        "package": "net.inkyquill.mcptest",
+                        "class_name": "InvalidStateGui",
+                        "output_dir": output_dir,
+                        "state_id": 42
+                    }
+                }
+            }),
+            &state,
+        );
+
+        assert!(response["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("state_id must be a string or null"));
     }
 
     #[test]
