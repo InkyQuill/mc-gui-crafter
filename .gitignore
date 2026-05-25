@@ -4,6 +4,9 @@ node_modules/
 # Alternate Git metadata used when .git is unavailable in sandboxed runs
 .git-real/
 
+# Local implementation worktrees
+.worktrees/
+
 # Build output
 dist/
 src-tauri/target/
