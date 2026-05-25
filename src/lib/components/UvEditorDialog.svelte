@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { assetDataUrls } from "../stores/project.svelte";
+  import { project } from "../stores/project.svelte";
   import type { UvRect } from "../types";
 
   let {
@@ -34,7 +34,7 @@
   let imageNaturalHeight = $state(1);
   let zoom = $state(4);
 
-  let dataUrl = $derived(selectedAsset ? assetDataUrls.get(selectedAsset) : undefined);
+  let dataUrl = $derived(selectedAsset ? project.getAssetDataUrl(selectedAsset) : undefined);
 
   $effect(() => {
     if (initialized) return;

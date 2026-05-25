@@ -56,6 +56,8 @@ export class ProjectStore {
   projectPath = $state<string | null>(null);
   isDirty = $state(false);
   isOpen = $state(false);
+  private assetDataUrlRequests = new Map<string, Promise<string | undefined>>();
+  private assetDataUrlsProjectId: string | null = null;
 
   get elementCount(): number {
     return this.elements.length;
@@ -678,7 +680,13 @@ export class ProjectStore {
 
   private applyActivePayload(payload: ActiveProjectPayload) {
     const project = payload.project;
-    this.activeProjectId = payload.summary.id;
+    const nextProjectId = payload.summary.id;
+    if (this.assetDataUrlsProjectId !== nextProjectId) {
+      this.assetDataUrlRequests.clear();
+      assetDataUrls.clear();
+      this.assetDataUrlsProjectId = nextProjectId;
+    }
+    this.activeProjectId = nextProjectId;
     this.name = project.name;
     this.guiSize = project.gui_size;
     this.modTarget = project.mod_target;
@@ -702,6 +710,7 @@ export class ProjectStore {
   private async loadActiveAssets() {
     try {
       const assets = await api.assetList(this.activeProjectId ?? undefined);
+      const cachedDataUrls = new Map(assetDataUrls);
       this.assets = assets.map(a => a.name);
       assetDataUrls.clear();
       assetDimensions.clear();
@@ -709,6 +718,9 @@ export class ProjectStore {
       for (const a of assets) {
         if (a.data_url) {
           assetDataUrls.set(a.name, a.data_url);
+        } else {
+          const cached = cachedDataUrls.get(a.name);
+          if (cached) assetDataUrls.set(a.name, cached);
         }
         if (a.width > 0 && a.height > 0) {
           assetDimensions.set(a.name, { width: a.width, height: a.height });
@@ -721,18 +733,42 @@ export class ProjectStore {
         };
       }
       this.assetMetadata = nextMetadata;
+      this.assetDataUrlsProjectId = this.activeProjectId;
       this.bumpRenderVersion();
     } catch { /* assets may not be available */ }
   }
 
+  getAssetDataUrl(name: string): string | undefined {
+    const cached = assetDataUrls.get(name);
+    if (cached !== undefined) return cached;
+    void this.ensureAssetDataUrl(name);
+    return undefined;
+  }
+
   async ensureAssetDataUrl(name: string): Promise<string | undefined> {
     const cached = assetDataUrls.get(name);
-    if (cached) return cached;
-    if (!this.activeProjectId) return undefined;
-    const dataUrl = await api.assetGetDataUrl(name, this.activeProjectId);
-    assetDataUrls.set(name, dataUrl);
-    this.bumpRenderVersion();
-    return dataUrl;
+    if (cached !== undefined) return cached;
+    const projectId = this.activeProjectId;
+    if (!projectId) return undefined;
+    const requestKey = `${projectId}\0${name}`;
+    const existing = this.assetDataUrlRequests.get(requestKey);
+    if (existing) return existing;
+
+    const request = api.assetGetDataUrl(name, projectId)
+      .then(dataUrl => {
+        if (this.activeProjectId === projectId) {
+          assetDataUrls.set(name, dataUrl);
+          this.assetDataUrlsProjectId = projectId;
+          this.bumpRenderVersion();
+        }
+        return dataUrl;
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        this.assetDataUrlRequests.delete(requestKey);
+      });
+    this.assetDataUrlRequests.set(requestKey, request);
+    return request;
   }
 
   async updateAssetMetadata(name: string, metadata: AssetMetadata): Promise<AssetMetadata> {
@@ -814,6 +850,8 @@ export class ProjectStore {
     this.isDirty = false;
     this.revision = 0;
     this.isOpen = false;
+    this.assetDataUrlRequests.clear();
+    this.assetDataUrlsProjectId = null;
     assetDataUrls.clear();
     assetDimensions.clear();
     this.bumpRenderVersion();

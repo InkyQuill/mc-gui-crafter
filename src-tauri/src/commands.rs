@@ -1740,6 +1740,11 @@ fn update_asset_metadata_in_session(
         if !project.assets.iter().any(|asset| asset == name) {
             return Err(format!("Asset not found: {name}"));
         }
+        if let Some(current) = project.asset_metadata.get(name) {
+            if current == &metadata {
+                return Ok(current.clone());
+            }
+        }
     }
 
     sessions.record_history(project_id)?;
@@ -2398,6 +2403,51 @@ mod tests {
         .unwrap();
 
         let summary = session_summary(&sessions, &project_id).unwrap();
+        assert!(!summary.can_undo);
+        assert!(summary.can_redo);
+    }
+
+    #[test]
+    fn asset_metadata_update_noop_preserves_redo() {
+        let mut sessions = ProjectSessionManager::default();
+        let project_id =
+            sessions.create_session(Project::new("History", 176, 166, ModTarget::Forge));
+        let metadata = AssetMetadata {
+            width: Some(64),
+            height: Some(64),
+            nine_slice: None,
+        };
+        {
+            let project = &mut sessions.resolve_mut(Some(&project_id)).unwrap().project;
+            project.assets.push("textures/slot.png".to_string());
+        }
+        update_asset_metadata_in_session(
+            &mut sessions,
+            Some(&project_id),
+            "textures/slot.png",
+            metadata.clone(),
+        )
+        .unwrap();
+        sessions.undo(Some(&project_id)).unwrap();
+        {
+            let project = &mut sessions.resolve_mut(Some(&project_id)).unwrap().project;
+            project.assets.push("textures/slot.png".to_string());
+            project
+                .asset_metadata
+                .insert("textures/slot.png".to_string(), metadata.clone());
+        }
+
+        let updated = update_asset_metadata_in_session(
+            &mut sessions,
+            Some(&project_id),
+            "textures/slot.png",
+            metadata,
+        )
+        .unwrap();
+
+        let summary = session_summary(&sessions, &project_id).unwrap();
+        assert_eq!(updated.width, Some(64));
+        assert_eq!(updated.height, Some(64));
         assert!(!summary.can_undo);
         assert!(summary.can_redo);
     }

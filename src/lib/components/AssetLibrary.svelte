@@ -152,7 +152,7 @@
   </button>
 
   {#if editingAsset}
-    {@const dataUrl = assetDataUrls.get(editingAsset)}
+    {@const dataUrl = project.getAssetDataUrl(editingAsset)}
     {#if dataUrl}
       <PixelEditor
         assetName={editingAsset}
@@ -182,7 +182,7 @@
     {:else}
       <div class="asset-grid">
         {#each project.assets as name (name)}
-          {@const dataUrl = assetDataUrls.get(name)}
+          {@const dataUrl = project.getAssetDataUrl(name)}
           <div class="asset-item">
             <button class="asset-thumb" onclick={() => startEditing(name)} title="Click to edit">
               {#if dataUrl}

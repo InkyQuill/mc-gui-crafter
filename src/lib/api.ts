@@ -68,6 +68,7 @@ const mockSessions: MockSession[] = [];
 const mockAssetDataUrls = new Map<string, Map<string, string>>();
 const mockAssetMetadata = new Map<string, Map<string, AssetMetadata>>();
 const mockExistingExportFiles = new Set<string>();
+const EMPTY_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
 let mockActiveProjectId: string | null = null;
 let mockNextProjectId = 1;
 let mockAppConfig: AppConfig = {
@@ -242,7 +243,8 @@ function dataUrlPayloadBytes(dataUrl: string): number {
 
 async function mockSha256(dataUrl: string): Promise<string> {
   const payload = dataUrl.startsWith("data:image/png;base64,") ? dataUrl.slice("data:image/png;base64,".length) : "";
-  if (!payload || typeof crypto === "undefined" || !crypto.subtle || typeof Uint8Array === "undefined" || typeof atob === "undefined") {
+  if (!payload) return EMPTY_SHA256;
+  if (typeof crypto === "undefined" || !crypto.subtle || typeof Uint8Array === "undefined" || typeof atob === "undefined") {
     return "0".repeat(64);
   }
   const binary = atob(payload);
@@ -941,7 +943,7 @@ async function mockInvoke(cmd: string, args?: Record<string, unknown>): Promise<
         markMockChanged(session, previous);
       }
       if (dataUrl) mockAssetsForSession(session).set(name, dataUrl);
-      return mockAssetResult(name, dataUrl, metadata);
+      return mockAssetResult(name, dataUrl, metadata, true);
     }
     case "asset_update": {
       const session = mockSession(args?.project_id);
@@ -955,7 +957,7 @@ async function mockInvoke(cmd: string, args?: Record<string, unknown>): Promise<
         assets.set(name, dataUrl);
         markMockChanged(session, previous);
       }
-      return mockAssetResult(name, dataUrl, mockAssetMetadataForSession(session).get(name));
+      return mockAssetResult(name, dataUrl, mockAssetMetadataForSession(session).get(name), true);
     }
     case "asset_list": {
       const session = mockSession(args?.project_id);
@@ -971,8 +973,12 @@ async function mockInvoke(cmd: string, args?: Record<string, unknown>): Promise<
       const name = String(args?.name ?? "");
       if (!session.project.assets.includes(name)) throw `Asset not found: ${name}`;
       const metadata = clone(args?.metadata as AssetMetadata);
-      const previous = clone(session.project);
       const metadataMap = mockAssetMetadataForSession(session);
+      const current = metadataMap.get(name);
+      if (current !== undefined && JSON.stringify(current) === JSON.stringify(metadata)) {
+        return clone(current);
+      }
+      const previous = clone(session.project);
       metadataMap.set(name, metadata);
       session.project.asset_metadata = Object.fromEntries(metadataMap.entries());
       markMockChanged(session, previous);

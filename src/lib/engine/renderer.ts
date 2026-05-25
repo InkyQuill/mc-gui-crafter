@@ -1,6 +1,6 @@
 import { Application, Assets, Container, Graphics, Rectangle, Text, TextStyle, Sprite, Texture } from "pixi.js";
 import type { AttachedRegion, Element, FontRenderData, GlyphInfo, MinecraftFontProviderRenderData, Layer } from "../types";
-import { project, assetDataUrls } from "../stores/project.svelte";
+import { project } from "../stores/project.svelte";
 import { editor } from "../stores/editor.svelte";
 import { preferences } from "../stores/preferences.svelte";
 
@@ -704,7 +704,7 @@ export class GuiRenderer {
 
     // Try to render as actual texture
     if (el.asset) {
-      const dataUrl = assetDataUrls.get(el.asset);
+      const dataUrl = project.getAssetDataUrl(el.asset);
       if (dataUrl) {
         const container = new Container();
         const baseTexture = Texture.from(dataUrl);
@@ -836,7 +836,7 @@ export class GuiRenderer {
 
   private drawButtonIcon(el: Element): Container | null {
     if (!el.icon) return null;
-    const dataUrl = assetDataUrls.get(el.icon);
+    const dataUrl = project.getAssetDataUrl(el.icon);
     if (!dataUrl) return null;
     const source = Texture.from(dataUrl);
     source.source.scaleMode = "nearest";
