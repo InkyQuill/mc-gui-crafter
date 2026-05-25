@@ -276,16 +276,19 @@ function validateMockOverrideField(targetType: StateOverrideUpdateRequest["targe
   if (targetType === "element") {
     switch (field) {
       case "visible":
+        if (value === null) return;
         if (value !== undefined && typeof value !== "boolean") throw "element state override field 'visible' must be a boolean";
         return;
       case "x":
       case "y":
+        if (value === null) return;
         if (value !== undefined && (!Number.isInteger(value) || typeof value !== "number")) {
           throw `element state override field '${field}' must be an integer`;
         }
         return;
       case "width":
       case "height":
+        if (value === null) return;
         if (value !== undefined && (!Number.isInteger(value) || typeof value !== "number" || value < 0)) {
           throw `element state override field '${field}' must be a non-negative integer`;
         }
@@ -296,6 +299,7 @@ function validateMockOverrideField(targetType: StateOverrideUpdateRequest["targe
         }
         return;
       case "layer":
+        if (value === null) return;
         if (value !== undefined && !MOCK_LAYERS.includes(value as Layer)) {
           throw "element state override field 'layer' must be background, overlay, or animatable";
         }
@@ -308,16 +312,19 @@ function validateMockOverrideField(targetType: StateOverrideUpdateRequest["targe
   if (targetType === "attached_region") {
     switch (field) {
       case "visible":
+        if (value === null) return;
         if (value !== undefined && typeof value !== "boolean") throw "attached-region state override field 'visible' must be a boolean";
         return;
       case "x":
       case "y":
+        if (value === null) return;
         if (value !== undefined && (!Number.isInteger(value) || typeof value !== "number")) {
           throw `attached-region state override field '${field}' must be an integer`;
         }
         return;
       case "width":
       case "height":
+        if (value === null) return;
         if (value !== undefined && (!Number.isInteger(value) || typeof value !== "number" || value < 0)) {
           throw `attached-region state override field '${field}' must be a non-negative integer`;
         }
@@ -328,6 +335,7 @@ function validateMockOverrideField(targetType: StateOverrideUpdateRequest["targe
   }
 
   if (field !== "visible") throw `unknown group state override field '${field}'`;
+  if (value === null) return;
   if (value !== undefined && typeof value !== "boolean") throw "group state override field 'visible' must be a boolean";
 }
 
@@ -357,29 +365,54 @@ function applyMockStateOverrideUpdate(session: MockSession, request: StateOverri
     stateOverrides.elements = stateOverrides.elements ?? {};
     const next = {
       ...(stateOverrides.elements[request.target_id] ?? {}),
-      ...request.fields,
     };
-    changed = !valuesEqual(next, stateOverrides.elements[request.target_id]);
+    for (const [field, value] of Object.entries(request.fields)) {
+      if (value === null) delete next[field as keyof typeof next];
+      else next[field as keyof typeof next] = value as never;
+    }
+    changed = !valuesEqual(next, stateOverrides.elements[request.target_id] ?? {});
     if (!changed) return;
-    stateOverrides.elements[request.target_id] = next;
+    if (Object.keys(next).length === 0) delete stateOverrides.elements[request.target_id];
+    else stateOverrides.elements[request.target_id] = next;
   } else if (request.target_type === "attached_region") {
     stateOverrides.attached_regions = stateOverrides.attached_regions ?? {};
     const next = {
       ...(stateOverrides.attached_regions[request.target_id] ?? {}),
-      ...request.fields,
     };
-    changed = !valuesEqual(next, stateOverrides.attached_regions[request.target_id]);
+    for (const [field, value] of Object.entries(request.fields)) {
+      if (value === null) delete next[field as keyof typeof next];
+      else next[field as keyof typeof next] = value as never;
+    }
+    changed = !valuesEqual(next, stateOverrides.attached_regions[request.target_id] ?? {});
     if (!changed) return;
-    stateOverrides.attached_regions[request.target_id] = next;
+    if (Object.keys(next).length === 0) delete stateOverrides.attached_regions[request.target_id];
+    else stateOverrides.attached_regions[request.target_id] = next;
   } else {
     stateOverrides.groups = stateOverrides.groups ?? {};
     const next = {
       ...(stateOverrides.groups[request.target_id] ?? {}),
-      ...request.fields,
     };
-    changed = !valuesEqual(next, stateOverrides.groups[request.target_id]);
+    for (const [field, value] of Object.entries(request.fields)) {
+      if (value === null) delete next[field as keyof typeof next];
+      else next[field as keyof typeof next] = value as never;
+    }
+    changed = !valuesEqual(next, stateOverrides.groups[request.target_id] ?? {});
     if (!changed) return;
-    stateOverrides.groups[request.target_id] = next;
+    if (Object.keys(next).length === 0) delete stateOverrides.groups[request.target_id];
+    else stateOverrides.groups[request.target_id] = next;
+  }
+  if (stateOverrides.elements && Object.keys(stateOverrides.elements).length === 0) delete stateOverrides.elements;
+  if (stateOverrides.attached_regions && Object.keys(stateOverrides.attached_regions).length === 0) delete stateOverrides.attached_regions;
+  if (stateOverrides.groups && Object.keys(stateOverrides.groups).length === 0) delete stateOverrides.groups;
+  if (
+    Object.keys(stateOverrides.elements ?? {}).length === 0 &&
+    Object.keys(stateOverrides.attached_regions ?? {}).length === 0 &&
+    Object.keys(stateOverrides.groups ?? {}).length === 0
+  ) {
+    delete overrides[request.state_id];
+    if (Object.keys(overrides).length === 0) delete session.project.state_overrides;
+    markMockChanged(session, previous);
+    return;
   }
   overrides[request.state_id] = stateOverrides;
   session.project.state_overrides = overrides;
@@ -970,8 +1003,8 @@ async function mockInvoke(cmd: string, args?: Record<string, unknown>): Promise<
         throw `unknown state '${stateId}'`;
       }
       session.active_state_id = stateId ?? null;
-      if (args?.edit_scope) session.edit_scope = args.edit_scope as EditScope;
-      if (!stateId && !args?.edit_scope) session.edit_scope = "base";
+      if (!stateId) session.edit_scope = "base";
+      else if (args?.edit_scope) session.edit_scope = args.edit_scope as EditScope;
       return mockSummary(session);
     }
     case "state_override_update": {

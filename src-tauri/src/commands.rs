@@ -1520,10 +1520,10 @@ fn set_active_state_in_session(
     let session_id = {
         let session = sessions.resolve_mut(project_id)?;
         session.active_state_id = state_id.map(str::to_owned);
-        if let Some(edit_scope) = edit_scope {
-            session.edit_scope = edit_scope;
-        } else if state_id.is_none() {
+        if state_id.is_none() {
             session.edit_scope = EditScope::Base;
+        } else if let Some(edit_scope) = edit_scope {
+            session.edit_scope = edit_scope;
         }
         session.id.clone()
     };
@@ -2756,6 +2756,18 @@ mod tests {
 
         assert_eq!(summary.active_state_id.as_deref(), Some("expanded"));
         assert_eq!(summary.edit_scope, EditScope::State);
+        assert_eq!(summary.revision, before);
+
+        let summary = set_active_state_in_session(
+            &mut sessions,
+            Some(&project_id),
+            None,
+            Some(EditScope::State),
+        )
+        .unwrap();
+
+        assert_eq!(summary.active_state_id, None);
+        assert_eq!(summary.edit_scope, EditScope::Base);
         assert_eq!(summary.revision, before);
         assert_eq!(
             sessions
