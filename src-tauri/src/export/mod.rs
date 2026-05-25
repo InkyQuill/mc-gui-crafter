@@ -2803,7 +2803,7 @@ mod tests {
     }
 
     #[test]
-    fn effective_export_settings_normalizes_simple_semantic_registry_flag() {
+    fn effective_export_settings_preserves_explicit_semantic_registry_flag() {
         let mut project = Project::new("Simple", 176, 166, ModTarget::Forge);
         project.export_settings.codegen_mode = CodegenMode::Simple;
         project.export_settings.generate_semantic_registry = true;
@@ -2821,10 +2821,10 @@ mod tests {
         let layout = layout_json_value(&layout_project, textures_json_for_test());
 
         assert_eq!(settings.codegen_mode, CodegenMode::Simple);
-        assert!(!settings.generate_semantic_registry);
+        assert!(settings.generate_semantic_registry);
         assert_eq!(
             layout["export_settings"]["generate_semantic_registry"],
-            false
+            true
         );
     }
 

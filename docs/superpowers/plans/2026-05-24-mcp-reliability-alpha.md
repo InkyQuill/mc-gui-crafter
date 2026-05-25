@@ -167,7 +167,7 @@ td(
 ),
 ```
 
-Update `is_mutating_tool()`:
+Add both render tools to the non-mutating branch of `is_mutating_tool()`:
 
 ```rust
             | "project_render"
@@ -1568,7 +1568,7 @@ td(
 ),
 ```
 
-In `is_mutating_tool()` add:
+Add schema discovery to the non-mutating branch of `is_mutating_tool()`:
 
 ```rust
             | "schema_discover"

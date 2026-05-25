@@ -493,8 +493,9 @@ function mockExportSettings(project: ProjectData, args?: Record<string, unknown>
   if (typeof args?.generate_semantic_registry === "boolean") {
     settings.generate_semantic_registry = args.generate_semantic_registry;
   }
-  if (settings.codegen_mode === "simple") settings.generate_semantic_registry = false;
-  if (settings.codegen_mode === "modular") settings.generate_semantic_registry = true;
+  if (args?.generate_semantic_registry === undefined) {
+    settings.generate_semantic_registry = settings.codegen_mode === "modular";
+  }
   return settings;
 }
 
@@ -631,8 +632,6 @@ async function mockInvoke(cmd: string, args?: Record<string, unknown>): Promise<
     case "project_export_settings_update": {
       const session = mockSession(args?.projectId);
       const settings = clone(args?.settings as ProjectExportSettings);
-      if (settings.codegen_mode === "simple") settings.generate_semantic_registry = false;
-      if (settings.codegen_mode === "modular") settings.generate_semantic_registry = true;
       if (JSON.stringify(session.project.export_settings) !== JSON.stringify(settings)) {
         const previous = clone(session.project);
         session.project.export_settings = settings;

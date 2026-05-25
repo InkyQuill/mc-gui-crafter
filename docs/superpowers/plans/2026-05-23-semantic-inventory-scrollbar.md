@@ -389,11 +389,8 @@ async updateExportSettings(changes: Partial<ProjectExportSettings>) {
     ...this.exportSettings,
     ...changes,
   };
-  if (next.codegen_mode === "simple") {
-    next.generate_semantic_registry = false;
-  }
-  if (next.codegen_mode === "modular") {
-    next.generate_semantic_registry = true;
+  if (changes.generate_semantic_registry === undefined) {
+    next.generate_semantic_registry = next.codegen_mode === "modular";
   }
   const updated = await api.projectExportSettingsUpdate(next, this.activeProjectId ?? undefined);
   this.exportSettings = updated;
@@ -1049,14 +1046,12 @@ fn project_export_settings_update(
     if let Some(value) = args.get("generate_runtime_helpers").and_then(|value| value.as_bool()) {
         next.generate_runtime_helpers = value;
     }
+    let has_explicit_semantic_registry = args.get("generate_semantic_registry").is_some();
     if let Some(value) = args.get("generate_semantic_registry").and_then(|value| value.as_bool()) {
         next.generate_semantic_registry = value;
     }
-    if next.codegen_mode == CodegenMode::Simple {
-        next.generate_semantic_registry = false;
-    }
-    if next.codegen_mode == CodegenMode::Modular {
-        next.generate_semantic_registry = true;
+    if !has_explicit_semantic_registry {
+        next.generate_semantic_registry = next.codegen_mode == CodegenMode::Modular;
     }
     sessions.record_history(project_id)?;
     let session = sessions.resolve_mut(project_id)?;

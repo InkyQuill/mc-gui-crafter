@@ -141,7 +141,7 @@ The `NewProjectDialog.svelte` gains config options for Custom Grid: grid width, 
 
 ### New crate: `src-tauri/src/font/`
 
-```
+```text
 src-tauri/src/font/
 ├── mod.rs           # FontAsset, parser entry point
 ├── parser.rs        # Minecraft font JSON parsing, provider resolution
@@ -167,7 +167,7 @@ Embedded via `include_bytes!` or bundled as Tauri resources.
 
 ### Parser flow
 
-```
+```text
 default.json → providers[]
   ├── "reference" → resolve include/<id>.json → recurse
   ├── "bitmap"   → load PNG, parse chars[] → build glyph map entries
@@ -228,7 +228,7 @@ Current behavior: all texture elements composited into one atlas PNG.
 
 New behavior:
 
-```
+```text
 elements.group_by(|e| e.layer)
   ├── Background → composite all Background elements → {resource_name}_gui.png
   ├── Overlay    → composite all Overlay elements    → {resource_name}_overlay.png
@@ -325,8 +325,8 @@ The generated `GuiLayout.java` class:
 
 ## Edge Cases
 
-- **No fonts loaded**: Text elements render as empty (graceful degradation). Export shows a preflight warning: "No font assets loaded — text elements will not render."
-- **Deleted font still referenced**: Text elements fall back to bundled default. Property panel shows a warning icon on the font dropdown.
+- **Empty `Project.fonts` on load**: The bundled Minecraft default is auto-added before text rendering or export.
+- **Text element references a missing font ID**: The renderer and export overlay fall back to the first available font, which is the bundled default for projects without custom fonts. Property panel shows a warning icon on the font dropdown.
 - **Custom Grid with 0×0**: Dialog enforces minimum 1×1 grid.
 - **Minecraft asset sources not found**: Import dialog shows "No Minecraft installations detected" with a manual path browse option.
 - **TTF with missing glyphs**: Characters not in the font render as the replacement character (U+FFFD) or a blank box.

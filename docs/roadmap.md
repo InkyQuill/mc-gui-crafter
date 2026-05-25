@@ -127,7 +127,7 @@
 - [ ] Resource pack export (Bedrock JSON UI) — research, not implemented
 - [x] Font import for project font selection and canvas preview
 - [ ] Custom runtime font support for exported Minecraft screens; exported runtime currently uses the platform text renderer
-- [ ] CI/CD pipeline and installer builds (MSI, DMG, AppImage, deb)
+- [ ] CI/CD pipeline groundwork — prepare for Phase 7 installer builds
 
 ---
 

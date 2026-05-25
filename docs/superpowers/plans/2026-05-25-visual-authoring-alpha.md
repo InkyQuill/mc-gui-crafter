@@ -259,13 +259,14 @@ pub fn asset_metadata_update(
     project_id: Option<String>,
 ) -> Result<AssetMetadata, String> {
     let mut sessions = state.sessions.lock().unwrap();
-    sessions.record_history(project_id.as_deref())?;
-    let session = sessions.resolve_mut(project_id.as_deref())?;
-    if !session.project.assets.iter().any(|asset| asset == &name) {
+    let project_id = project_id.as_deref();
+    if !sessions.resolve(project_id)?.project.assets.iter().any(|asset| asset == &name) {
         return Err(format!("Asset not found: {name}"));
     }
+    sessions.record_history(project_id)?;
+    let session = sessions.resolve_mut(project_id)?;
     session.project.asset_metadata.insert(name, metadata.clone());
-    sessions.mark_changed(project_id.as_deref())?;
+    sessions.mark_changed(project_id)?;
     Ok(metadata)
 }
 ```
@@ -757,11 +758,11 @@ fn asset_metadata_update(
     let name = required_str(args, "name")?;
     let metadata: AssetMetadata = serde_json::from_value(required_value(args, "metadata")?.clone())
         .map_err(|error| format!("Invalid asset metadata: {error}"))?;
-    sessions.record_history(project_id)?;
-    let session = sessions.resolve_mut(project_id)?;
-    if !session.project.assets.iter().any(|asset| asset == name) {
+    if !sessions.resolve(project_id)?.project.assets.iter().any(|asset| asset == name) {
         return Err(format!("Asset not found: {name}"));
     }
+    sessions.record_history(project_id)?;
+    let session = sessions.resolve_mut(project_id)?;
     session.project.asset_metadata.insert(name.to_string(), metadata.clone());
     let session_id = session.id.clone();
     sessions.mark_changed(project_id)?;

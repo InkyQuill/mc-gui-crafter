@@ -182,11 +182,7 @@ impl Default for ProjectExportSettings {
 }
 
 impl ProjectExportSettings {
-    pub fn normalized(mut self) -> Self {
-        match self.codegen_mode {
-            CodegenMode::Simple => self.generate_semantic_registry = false,
-            CodegenMode::Modular => self.generate_semantic_registry = true,
-        }
+    pub fn normalized(self) -> Self {
         self
     }
 }

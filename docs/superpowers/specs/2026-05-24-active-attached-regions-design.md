@@ -104,7 +104,7 @@ Elements may reference a region:
   "type": "slot",
   "x": 108,
   "y": 26,
-  "slot_role": "storage",
+  "slot_role": "virtual_storage",
   "inventory_group": "food_returns",
   "attached_region": "returns_pocket"
 }

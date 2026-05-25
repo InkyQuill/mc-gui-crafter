@@ -717,7 +717,7 @@ td(
 ),
 ```
 
-Add `"project_screenshot"` to `is_mutating_tool` as read-only:
+Keep `"project_screenshot"` in the non-mutating branch of `is_mutating_tool`:
 
 ```rust
             | "project_screenshot"

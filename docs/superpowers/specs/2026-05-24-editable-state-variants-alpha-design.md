@@ -177,7 +177,7 @@ Batch override update may be added if useful for drawer workflows.
 Existing element tools should default to base edits unless the caller provides
 `state_id` or `edit_scope: "state"`. This avoids surprising existing agents.
 
-`project_render` should accept `state_id` so agents can visually inspect
+`project_screenshot` should accept `state_id` so agents can visually inspect
 collapsed and expanded layouts.
 
 Schema discovery should list state override fields and explain which existing

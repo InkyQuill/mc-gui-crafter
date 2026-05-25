@@ -395,11 +395,8 @@ export class ProjectStore {
       ...this.exportSettings,
       ...changes,
     };
-    if (next.codegen_mode === "simple") {
-      next.generate_semantic_registry = false;
-    }
-    if (next.codegen_mode === "modular") {
-      next.generate_semantic_registry = true;
+    if (changes.generate_semantic_registry === undefined) {
+      next.generate_semantic_registry = next.codegen_mode === "modular";
     }
     const updated = await api.projectExportSettingsUpdate(next, this.activeProjectId ?? undefined);
     this.exportSettings = updated;

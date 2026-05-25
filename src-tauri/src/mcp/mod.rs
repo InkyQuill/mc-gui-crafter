@@ -1677,6 +1677,7 @@ fn export_settings_override(
 
     let mut settings = project.export_settings.clone();
     apply_export_settings_args(&mut settings, args)?;
+    default_semantic_registry_from_mode_when_unspecified(&mut settings, args);
     Ok(Some(settings.normalized()))
 }
 
@@ -1748,6 +1749,7 @@ fn project_export_settings_update(
         .clone();
     let mut next = current.clone();
     apply_export_settings_args(&mut next, args)?;
+    default_semantic_registry_from_mode_when_unspecified(&mut next, args);
     next = next.normalized();
     if next == current {
         return serde_json::to_value(next).map_err(|error| error.to_string());
@@ -1787,6 +1789,15 @@ fn apply_export_settings_args(
         settings.generate_semantic_registry = value;
     }
     Ok(())
+}
+
+fn default_semantic_registry_from_mode_when_unspecified(
+    settings: &mut crate::project::ProjectExportSettings,
+    args: &serde_json::Value,
+) {
+    if args.get("codegen_mode").is_some() && args.get("generate_semantic_registry").is_none() {
+        settings.generate_semantic_registry = settings.codegen_mode == CodegenMode::Modular;
+    }
 }
 
 fn project_semantic_groups_update(
@@ -6621,7 +6632,7 @@ mod tests {
         let value: serde_json::Value = serde_json::from_str(content).unwrap();
         assert_eq!(value["codegen_mode"], "modular");
         assert_eq!(value["generate_runtime_helpers"], false);
-        assert_eq!(value["generate_semantic_registry"], true);
+        assert_eq!(value["generate_semantic_registry"], false);
 
         let sessions = state.sessions.lock().unwrap();
         let active = sessions.active_session().unwrap();
@@ -6631,6 +6642,37 @@ mod tests {
         );
         assert_eq!(active.revision, 1);
         assert!(active.project.is_dirty);
+    }
+
+    #[test]
+    fn project_export_settings_update_defaults_semantic_registry_from_codegen_when_unspecified() {
+        let state = test_state();
+        let project_id = {
+            let mut sessions = state.sessions.lock().unwrap();
+            sessions.create_session(Project::new("Settings Defaults", 176, 166, ModTarget::Forge))
+        };
+
+        let response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "settings-default",
+                "method": "tools/call",
+                "params": {
+                    "name": "project_export_settings_update",
+                    "arguments": {
+                        "project_id": project_id,
+                        "codegen_mode": "modular"
+                    }
+                }
+            }),
+            &state,
+        );
+
+        assert!(response["error"].is_null());
+        let content = response["result"]["content"][0]["text"].as_str().unwrap();
+        let value: serde_json::Value = serde_json::from_str(content).unwrap();
+        assert_eq!(value["codegen_mode"], "modular");
+        assert_eq!(value["generate_semantic_registry"], true);
     }
 
     #[test]
@@ -6734,7 +6776,7 @@ mod tests {
         let settings = config.settings_override.unwrap();
         assert_eq!(settings.codegen_mode, CodegenMode::Modular);
         assert!(!settings.generate_runtime_helpers);
-        assert!(settings.generate_semantic_registry);
+        assert!(!settings.generate_semantic_registry);
     }
 
     #[test]

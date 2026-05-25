@@ -230,7 +230,7 @@ fn font_asset_serialization() {
 
     let value = serde_json::to_value(&font).unwrap();
     assert_eq!(value["id"], "minecraft:default");
-    assert_eq!(value["source"]["type"], "tlf"); // Note: depends on serde tag
+    assert_eq!(value["source"]["type"], "ttf");
     assert_eq!(value["source"]["font_size"], 16);
 
     // Verify Ttf font_data is skipped but glyph_map serializes
@@ -1084,9 +1084,9 @@ Update `load_bundled_font()` to actually parse the bundled JSON and load the PNG
 
 ```rust
 pub fn load_bundled_font() -> FontAsset {
-    let default_json = include_str!("../bundled/minecraft/font/default.json");
-    let include_default_json = include_str!("../bundled/minecraft/font/include/default.json");
-    let space_json = include_str!("../bundled/minecraft/font/include/space.json");
+    let default_json = include_str!("../../bundled/minecraft/font/default.json");
+    let include_default_json = include_str!("../../bundled/minecraft/font/include/default.json");
+    let space_json = include_str!("../../bundled/minecraft/font/include/space.json");
 
     let mut all_providers = Vec::new();
     let mut all_glyph_map = GlyphMap::new();
@@ -1102,11 +1102,11 @@ pub fn load_bundled_font() -> FontAsset {
     // Load bundled PNG data for bitmap providers
     for provider in &mut all_providers {
         let png_data = match provider.file.as_str() {
-            "minecraft:font/ascii.png" => include_bytes!("../bundled/minecraft/textures/font/ascii.png").to_vec(),
-            "minecraft:font/accented.png" => include_bytes!("../bundled/minecraft/textures/font/accented.png").to_vec(),
-            "minecraft:font/nonlatin_european.png" => include_bytes!("../bundled/minecraft/textures/font/nonlatin_european.png").to_vec(),
-            "minecraft:font/ascii_sga.png" => include_bytes!("../bundled/minecraft/textures/font/ascii_sga.png").to_vec(),
-            "minecraft:font/asciillager.png" => include_bytes!("../bundled/minecraft/textures/font/asciillager.png").to_vec(),
+            "minecraft:font/ascii.png" => include_bytes!("../../bundled/minecraft/textures/font/ascii.png").to_vec(),
+            "minecraft:font/accented.png" => include_bytes!("../../bundled/minecraft/textures/font/accented.png").to_vec(),
+            "minecraft:font/nonlatin_european.png" => include_bytes!("../../bundled/minecraft/textures/font/nonlatin_european.png").to_vec(),
+            "minecraft:font/ascii_sga.png" => include_bytes!("../../bundled/minecraft/textures/font/ascii_sga.png").to_vec(),
+            "minecraft:font/asciillager.png" => include_bytes!("../../bundled/minecraft/textures/font/asciillager.png").to_vec(),
             _ => continue,
         };
 

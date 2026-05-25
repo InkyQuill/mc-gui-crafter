@@ -127,7 +127,8 @@ Run:
 
 ```bash
 cd src-tauri
-cargo test export::tests::fabric_layered_export_defines_overlay_method_and_loads_overlay_texture export::tests::animatable_layer_export_uses_generated_sprite_textures_in_runtime
+cargo test export::tests::fabric_layered_export_defines_overlay_method_and_loads_overlay_texture
+cargo test export::tests::animatable_layer_export_uses_generated_sprite_textures_in_runtime
 ```
 
 Expected: both tests fail. The Fabric test should fail because `renderOverlay` is missing in generated Fabric `GuiLayout`. The animatable test should fail because the generated runtime still contains fill-based progress rendering.

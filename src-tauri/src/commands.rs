@@ -941,6 +941,7 @@ fn export_settings_override(
     }
 
     let mut settings = project.export_settings.clone();
+    let codegen_mode_supplied = codegen_mode.is_some();
     if let Some(mode) = codegen_mode {
         settings.codegen_mode = match mode.as_str() {
             "simple" => CodegenMode::Simple,
@@ -953,6 +954,8 @@ fn export_settings_override(
     }
     if let Some(value) = generate_semantic_registry {
         settings.generate_semantic_registry = value;
+    } else if codegen_mode_supplied {
+        settings.generate_semantic_registry = settings.codegen_mode == CodegenMode::Modular;
     }
 
     Ok(Some(settings.normalized()))
@@ -2005,7 +2008,7 @@ mod tests {
     }
 
     #[test]
-    fn export_settings_update_normalizes_mode_and_records_history() {
+    fn export_settings_update_preserves_explicit_semantic_registry_and_records_history() {
         let mut sessions = ProjectSessionManager::default();
         let project_id =
             sessions.create_session(Project::new("Export Settings", 176, 166, ModTarget::Forge));
@@ -2022,7 +2025,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(updated.codegen_mode, CodegenMode::Modular);
-        assert!(updated.generate_semantic_registry);
+        assert!(!updated.generate_semantic_registry);
         assert_eq!(session_summary(&sessions, &project_id).unwrap().revision, 1);
         assert!(session_summary(&sessions, &project_id).unwrap().can_undo);
 
@@ -2038,7 +2041,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(updated.codegen_mode, CodegenMode::Simple);
-        assert!(!updated.generate_semantic_registry);
+        assert!(updated.generate_semantic_registry);
         assert!(!updated.generate_runtime_helpers);
         assert_eq!(session_summary(&sessions, &project_id).unwrap().revision, 2);
     }
@@ -2074,7 +2077,7 @@ mod tests {
     }
 
     #[test]
-    fn export_settings_override_applies_supplied_fields_and_normalizes() {
+    fn export_settings_override_preserves_explicit_semantic_registry() {
         let mut project = Project::new("Export Override", 176, 166, ModTarget::Forge);
         project.export_settings = ProjectExportSettings {
             codegen_mode: CodegenMode::Simple,
@@ -2093,7 +2096,7 @@ mod tests {
 
         assert_eq!(override_settings.codegen_mode, CodegenMode::Modular);
         assert!(!override_settings.generate_runtime_helpers);
-        assert!(override_settings.generate_semantic_registry);
+        assert!(!override_settings.generate_semantic_registry);
         assert_eq!(project.export_settings.codegen_mode, CodegenMode::Simple);
     }
 
