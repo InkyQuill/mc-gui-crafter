@@ -774,8 +774,8 @@ export class ProjectStore {
   async updateAssetMetadata(name: string, metadata: AssetMetadata): Promise<AssetMetadata> {
     const updated = await api.assetMetadataUpdate(name, metadata, this.activeProjectId ?? undefined);
     this.assetMetadata = { ...this.assetMetadata, [name]: updated };
-    this.isDirty = true;
     await this.refreshSessions();
+    await this.hydrateActiveProject();
     this.bumpRenderVersion();
     return updated;
   }

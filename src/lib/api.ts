@@ -978,6 +978,9 @@ async function mockInvoke(cmd: string, args?: Record<string, unknown>): Promise<
       if (current !== undefined && JSON.stringify(current) === JSON.stringify(metadata)) {
         return clone(current);
       }
+      if (current === undefined && JSON.stringify(metadata) === JSON.stringify({})) {
+        return clone(metadata);
+      }
       const previous = clone(session.project);
       metadataMap.set(name, metadata);
       session.project.asset_metadata = Object.fromEntries(metadataMap.entries());

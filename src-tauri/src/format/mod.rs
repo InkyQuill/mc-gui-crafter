@@ -1,10 +1,10 @@
-use crate::project::Project;
-use serde::Deserialize;
+use crate::project::{AssetMetadata, Project};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use zip::ZipArchive;
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 struct LayoutData {
     #[serde(default)]
     elements: Vec<crate::project::Element>,
@@ -12,6 +12,8 @@ struct LayoutData {
     groups: Vec<crate::project::Group>,
     #[serde(default)]
     semantic_groups: Vec<crate::project::SemanticGroup>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    asset_metadata: HashMap<String, AssetMetadata>,
     #[serde(default)]
     export_settings: crate::project::ProjectExportSettings,
 }
@@ -51,6 +53,7 @@ pub fn load_from_mcgui(path: &str) -> Result<Project, String> {
     project.elements = layout.elements;
     project.groups = layout.groups;
     project.semantic_groups = layout.semantic_groups;
+    project.asset_metadata = layout.asset_metadata;
     project.export_settings = layout.export_settings;
 
     // Read animations
@@ -120,12 +123,13 @@ pub fn save_to_mcgui(project: &Project) -> Result<(), String> {
         .map_err(|e| format!("Write error: {e}"))?;
 
     // Write layout (elements + groups, minus non-serializable fields)
-    let layout = serde_json::json!({
-        "elements": project.elements,
-        "groups": project.groups,
-        "semantic_groups": project.semantic_groups,
-        "export_settings": project.export_settings,
-    });
+    let layout = LayoutData {
+        elements: project.elements.clone(),
+        groups: project.groups.clone(),
+        semantic_groups: project.semantic_groups.clone(),
+        asset_metadata: project.asset_metadata.clone(),
+        export_settings: project.export_settings.clone(),
+    };
     zip_writer
         .start_file("layout.json", options)
         .map_err(|e| format!("Zip error: {e}"))?;
@@ -195,9 +199,9 @@ mod tests {
     use super::*;
     use crate::animation::{Animation, AnimationType};
     use crate::project::{
-        CodegenMode, Element, ElementType, FillDirection, FontAsset, FontSource, GlyphInfo,
-        GlyphMap, Group, Layer, ModTarget, Project, ProjectExportSettings, SemanticGroup,
-        SemanticGroupKind, UvRect,
+        AssetMetadata, CodegenMode, Element, ElementType, FillDirection, FontAsset, FontSource,
+        GlyphInfo, GlyphMap, Group, Layer, ModTarget, NineSlice, NineSliceMode, Project,
+        ProjectExportSettings, SemanticGroup, SemanticGroupKind, UvRect,
     };
 
     fn temp_project_path() -> String {
@@ -377,5 +381,44 @@ mod tests {
 
         assert_eq!(loaded.semantic_groups, project.semantic_groups);
         assert_eq!(loaded.export_settings, project.export_settings);
+    }
+
+    #[test]
+    fn mcgui_round_trip_preserves_asset_metadata() {
+        let path = temp_project_path();
+        let mut project = Project::new("Asset Metadata", 176, 166, ModTarget::Forge);
+        project.project_path = Some(path.clone());
+        project.assets.push("textures/gui/panel.png".to_string());
+        project
+            .texture_data
+            .insert("textures/gui/panel.png".to_string(), vec![137, 80, 78, 71]);
+        project.asset_metadata.insert(
+            "textures/gui/panel.png".to_string(),
+            AssetMetadata {
+                width: Some(64),
+                height: Some(64),
+                nine_slice: Some(NineSlice {
+                    left: 4,
+                    right: 5,
+                    top: 6,
+                    bottom: 7,
+                    edge_mode: NineSliceMode::Tile,
+                    center_mode: NineSliceMode::Stretch,
+                }),
+            },
+        );
+
+        save_to_mcgui(&project).unwrap();
+        let loaded = load_from_mcgui(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+
+        assert!(loaded
+            .assets
+            .iter()
+            .any(|asset| asset == "textures/gui/panel.png"));
+        assert_eq!(
+            loaded.asset_metadata.get("textures/gui/panel.png"),
+            project.asset_metadata.get("textures/gui/panel.png")
+        );
     }
 }

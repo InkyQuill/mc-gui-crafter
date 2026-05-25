@@ -1744,6 +1744,8 @@ fn update_asset_metadata_in_session(
             if current == &metadata {
                 return Ok(current.clone());
             }
+        } else if metadata == AssetMetadata::default() {
+            return Ok(metadata);
         }
     }
 
@@ -2448,6 +2450,43 @@ mod tests {
         let summary = session_summary(&sessions, &project_id).unwrap();
         assert_eq!(updated.width, Some(64));
         assert_eq!(updated.height, Some(64));
+        assert!(!summary.can_undo);
+        assert!(summary.can_redo);
+    }
+
+    #[test]
+    fn asset_metadata_update_default_without_existing_metadata_preserves_redo() {
+        let mut sessions = ProjectSessionManager::default();
+        let project_id =
+            sessions.create_session(Project::new("History", 176, 166, ModTarget::Forge));
+        {
+            let project = &mut sessions.resolve_mut(Some(&project_id)).unwrap().project;
+            project.assets.push("textures/slot.png".to_string());
+        }
+        sessions.record_history(Some(&project_id)).unwrap();
+        sessions.mark_changed(Some(&project_id)).unwrap();
+        sessions.undo(Some(&project_id)).unwrap();
+        {
+            let project = &mut sessions.resolve_mut(Some(&project_id)).unwrap().project;
+            project.assets.push("textures/slot.png".to_string());
+        }
+
+        let updated = update_asset_metadata_in_session(
+            &mut sessions,
+            Some(&project_id),
+            "textures/slot.png",
+            AssetMetadata::default(),
+        )
+        .unwrap();
+
+        let summary = session_summary(&sessions, &project_id).unwrap();
+        assert_eq!(updated, AssetMetadata::default());
+        assert!(sessions
+            .resolve(Some(&project_id))
+            .unwrap()
+            .project
+            .asset_metadata
+            .is_empty());
         assert!(!summary.can_undo);
         assert!(summary.can_redo);
     }
