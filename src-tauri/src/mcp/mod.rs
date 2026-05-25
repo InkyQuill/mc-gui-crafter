@@ -5853,6 +5853,50 @@ mod tests {
     }
 
     #[test]
+    fn project_export_preview_rejects_non_string_state_id() {
+        let state = test_state();
+        let project_id = {
+            let mut sessions = state.sessions.lock().unwrap();
+            sessions.create_session(Project::new(
+                "Invalid Preview State",
+                176,
+                166,
+                ModTarget::Forge,
+            ))
+        };
+        let output_dir = std::env::temp_dir().join(format!(
+            "gui-crafter-mcp-invalid-state-preview-{}",
+            uuid::Uuid::new_v4()
+        ));
+
+        let response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "invalid-state-preview",
+                "method": "tools/call",
+                "params": {
+                    "name": "project_export_preview",
+                    "arguments": {
+                        "project_id": project_id,
+                        "target": "forge",
+                        "mod_id": "mcp_test",
+                        "package": "net.inkyquill.mcptest",
+                        "class_name": "InvalidPreviewStateGui",
+                        "output_dir": output_dir,
+                        "state_id": 42
+                    }
+                }
+            }),
+            &state,
+        );
+
+        assert!(response["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("state_id must be a string or null"));
+    }
+
+    #[test]
     fn asset_import_accepts_explicit_name_and_returns_compact_metadata() {
         let state = test_state();
         let project_id = {
