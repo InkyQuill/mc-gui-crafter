@@ -222,7 +222,7 @@
     {:else}
       <div class="asset-grid">
         {#each project.assets as name (name)}
-          {@const dataUrl = project.getAssetDataUrl(name)}
+          {@const dataUrl = project.peekAssetDataUrl(name)}
           <div class="asset-item">
             <button class="asset-thumb" onclick={() => startEditing(name)} title="Click to edit">
               {#if dataUrl}

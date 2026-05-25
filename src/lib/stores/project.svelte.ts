@@ -745,6 +745,10 @@ export class ProjectStore {
     return undefined;
   }
 
+  peekAssetDataUrl(name: string): string | undefined {
+    return assetDataUrls.get(name);
+  }
+
   async ensureAssetDataUrl(name: string): Promise<string | undefined> {
     const cached = assetDataUrls.get(name);
     if (cached !== undefined) return cached;

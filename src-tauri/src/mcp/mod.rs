@@ -3046,7 +3046,9 @@ fn asset_remove(
     let name = required_str(args, "name")?;
     let exists = {
         let project = &sessions.resolve(project_id)?.project;
-        project.assets.iter().any(|asset| asset == name) || project.texture_data.contains_key(name)
+        project.assets.iter().any(|asset| asset == name)
+            || project.texture_data.contains_key(name)
+            || project.asset_metadata.contains_key(name)
     };
     if !exists {
         return Ok(serde_json::json!({ "removed": false }));
@@ -3054,13 +3056,14 @@ fn asset_remove(
     sessions.record_history(project_id)?;
     let session = sessions.resolve_mut(project_id)?;
     let removed_texture = session.project.texture_data.remove(name).is_some();
+    let removed_metadata = session.project.asset_metadata.remove(name).is_some();
     let old_len = session.project.assets.len();
     session.project.assets.retain(|asset| asset != name);
     let removed_asset = session.project.assets.len() != old_len;
-    if removed_texture || removed_asset {
+    if removed_texture || removed_asset || removed_metadata {
         sessions.mark_changed(project_id)?;
     }
-    Ok(serde_json::json!({ "removed": removed_texture || removed_asset }))
+    Ok(serde_json::json!({ "removed": removed_texture || removed_asset || removed_metadata }))
 }
 
 fn project_render(
@@ -4889,6 +4892,54 @@ mod tests {
         assert_eq!(session.revision, before_revision);
         assert!(!summary.can_undo);
         assert!(summary.can_redo);
+    }
+
+    #[test]
+    fn asset_remove_removes_metadata_only_entries() {
+        let state = test_state();
+        let asset_name = "textures/gui/stale_panel.png";
+        let project_id = {
+            let mut sessions = state.sessions.lock().unwrap();
+            let mut project = Project::new("Asset Metadata Remove", 176, 166, ModTarget::Forge);
+            project.asset_metadata.insert(
+                asset_name.to_string(),
+                AssetMetadata {
+                    width: Some(16),
+                    height: Some(16),
+                    nine_slice: None,
+                },
+            );
+            sessions.create_session(project)
+        };
+        let before_revision = {
+            let sessions = state.sessions.lock().unwrap();
+            sessions.resolve(Some(&project_id)).unwrap().revision
+        };
+
+        let response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "asset-remove-metadata",
+                "method": "tools/call",
+                "params": {
+                    "name": "asset_remove",
+                    "arguments": {
+                        "project_id": project_id,
+                        "name": asset_name,
+                    }
+                }
+            }),
+            &state,
+        );
+
+        assert!(response["error"].is_null(), "{response:#}");
+        let value = tool_text_value(&response);
+        assert_eq!(value["removed"], true);
+
+        let sessions = state.sessions.lock().unwrap();
+        let session = sessions.resolve(Some(&project_id)).unwrap();
+        assert!(session.project.asset_metadata.get(asset_name).is_none());
+        assert!(session.revision > before_revision);
     }
 
     #[test]
