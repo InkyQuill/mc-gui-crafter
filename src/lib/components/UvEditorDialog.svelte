@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onDestroy } from "svelte";
   import { project } from "../stores/project.svelte";
   import type { NineSlice, NineSliceMode, Size, UvRect } from "../types";
 
@@ -111,7 +112,8 @@
   }
 
   function updateGuideNumber(key: GuideHandle, value: string) {
-    updateGuide({ [key]: Number(value) } as Partial<NineSlice>);
+    const parsedValue = Number(value);
+    updateGuide({ [key]: Number.isFinite(parsedValue) ? parsedValue : guide[key] } as Partial<NineSlice>);
   }
 
   function updateGuideMode(key: "edge_mode" | "center_mode", value: string) {
@@ -129,10 +131,12 @@
 
   function startDrag(event: PointerEvent) {
     event.preventDefault();
+    stopDrag();
     dragStart = imagePoint(event);
     updateRect({ x: dragStart.x, y: dragStart.y, width: 1, height: 1 });
     window.addEventListener("pointermove", drag);
     window.addEventListener("pointerup", stopDrag, { once: true });
+    window.addEventListener("pointercancel", stopDrag, { once: true });
   }
 
   function drag(event: PointerEvent) {
@@ -149,15 +153,19 @@
   function stopDrag() {
     dragStart = null;
     window.removeEventListener("pointermove", drag);
+    window.removeEventListener("pointerup", stopDrag);
+    window.removeEventListener("pointercancel", stopDrag);
   }
 
   function startGuideDrag(handle: GuideHandle, event: PointerEvent) {
     event.preventDefault();
     event.stopPropagation();
+    stopGuideDrag();
     guideDrag = handle;
     dragGuide(event);
     window.addEventListener("pointermove", dragGuide);
     window.addEventListener("pointerup", stopGuideDrag, { once: true });
+    window.addEventListener("pointercancel", stopGuideDrag, { once: true });
   }
 
   function dragGuide(event: PointerEvent) {
@@ -172,7 +180,14 @@
   function stopGuideDrag() {
     guideDrag = null;
     window.removeEventListener("pointermove", dragGuide);
+    window.removeEventListener("pointerup", stopGuideDrag);
+    window.removeEventListener("pointercancel", stopGuideDrag);
   }
+
+  onDestroy(() => {
+    stopDrag();
+    stopGuideDrag();
+  });
 
   function apply() {
     if (!selectedAsset) return;
