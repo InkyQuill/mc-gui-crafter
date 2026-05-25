@@ -1,5 +1,5 @@
 import { Application, Assets, Container, Graphics, Rectangle, Text, TextStyle, Sprite, Texture } from "pixi.js";
-import type { AttachedRegion, Element, FontRenderData, GlyphInfo, MinecraftFontProviderRenderData, Layer } from "../types";
+import type { AttachedRegion, Element, FontRenderData, GlyphInfo, MinecraftFontProviderRenderData, Layer, NineSlice } from "../types";
 import { project } from "../stores/project.svelte";
 import { editor } from "../stores/editor.svelte";
 import { preferences } from "../stores/preferences.svelte";
@@ -114,6 +114,15 @@ export class GuiRenderer {
       text: "",
       style: new TextStyle({ fontSize: 10, fill: 0xe94560, fontFamily: "monospace" }),
     });
+  }
+
+  private enforceTextureCacheLimit(cache: Map<string, Texture>, limit = 256) {
+    while (cache.size > limit) {
+      const first = cache.keys().next().value;
+      if (!first) return;
+      cache.get(first)?.destroy(true);
+      cache.delete(first);
+    }
   }
 
   async init() {
@@ -699,7 +708,11 @@ export class GuiRenderer {
 
   private drawTexture(el: Element): Container | null {
     if (isGeneratedTexturePath(el.asset)) {
-      return this.drawGeneratedTextureFallback(el);
+      const container = this.drawGeneratedTextureFallback(el);
+      if (el.render_mode === "nine_slice") {
+        this.addNineSliceWarningOutline(container, el);
+      }
+      return container;
     }
 
     // Try to render as actual texture
@@ -711,12 +724,18 @@ export class GuiRenderer {
         baseTexture.source.scaleMode = "nearest";
         const texture = this.textureWithUv(baseTexture, el);
         if (!texture) return null;
-        const sprite = new Sprite(texture);
-        sprite.x = el.x;
-        sprite.y = el.y;
-        if (el.width) sprite.width = el.width;
-        if (el.height) sprite.height = el.height;
-        container.addChild(sprite);
+
+        if (el.render_mode === "nine_slice") {
+          const guides = this.resolvedNineSlice(el);
+          const nineSlice = guides ? this.renderNineSliceElement(el, texture, guides) : null;
+          if (nineSlice) return nineSlice;
+
+          this.addPlainTextureSprite(container, el, texture);
+          this.addNineSliceWarningOutline(container, el, texture);
+          return container;
+        }
+
+        this.addPlainTextureSprite(container, el, texture);
         return container;
       }
     }
@@ -737,7 +756,187 @@ export class GuiRenderer {
     g.rect(el.x, el.y, w, h);
     g.stroke({ width: 1, color: 0x8888cc, alpha: 0.6 });
     container.addChild(g);
+    if (el.render_mode === "nine_slice") {
+      this.addNineSliceWarningOutline(container, el);
+    }
     return container;
+  }
+
+  private addPlainTextureSprite(container: Container, el: Element, texture: Texture) {
+    const sprite = new Sprite(texture);
+    sprite.x = el.x;
+    sprite.y = el.y;
+    if (el.width) sprite.width = el.width;
+    if (el.height) sprite.height = el.height;
+    container.addChild(sprite);
+  }
+
+  private resolvedNineSlice(el: Element): NineSlice | null {
+    if (!el.asset) return null;
+    return el.nine_slice ?? project.assetMetadata[el.asset]?.nine_slice ?? null;
+  }
+
+  private renderNineSliceElement(el: Element, texture: Texture, guides: NineSlice): Container | null {
+    const sourceWidth = texture.frame.width;
+    const sourceHeight = texture.frame.height;
+    const targetWidth = el.width ?? el.size ?? sourceWidth;
+    const targetHeight = el.height ?? el.size ?? sourceHeight;
+
+    if (!this.canRenderNineSlice(guides, sourceWidth, sourceHeight, targetWidth, targetHeight)) {
+      return null;
+    }
+
+    const sourceX = [0, guides.left, sourceWidth - guides.right];
+    const sourceY = [0, guides.top, sourceHeight - guides.bottom];
+    const sourceW = [guides.left, sourceWidth - guides.left - guides.right, guides.right];
+    const sourceH = [guides.top, sourceHeight - guides.top - guides.bottom, guides.bottom];
+    const targetX = [0, guides.left, targetWidth - guides.right];
+    const targetY = [0, guides.top, targetHeight - guides.bottom];
+    const targetW = [guides.left, targetWidth - guides.left - guides.right, guides.right];
+    const targetH = [guides.top, targetHeight - guides.top - guides.bottom, guides.bottom];
+
+    const container = new Container();
+    for (let row = 0; row < 3; row += 1) {
+      for (let column = 0; column < 3; column += 1) {
+        const sourceRect = {
+          x: sourceX[column],
+          y: sourceY[row],
+          width: sourceW[column],
+          height: sourceH[row],
+        };
+        const targetRect = {
+          x: el.x + targetX[column],
+          y: el.y + targetY[row],
+          width: targetW[column],
+          height: targetH[row],
+        };
+
+        if (sourceRect.width <= 0 || sourceRect.height <= 0 || targetRect.width <= 0 || targetRect.height <= 0) {
+          continue;
+        }
+
+        if ((row === 0 || row === 2) && (column === 0 || column === 2)) {
+          this.addNineSliceCorner(container, texture, sourceRect, targetRect);
+        } else if (row === 1 && column === 1) {
+          this.addNineSlicePatch(container, texture, sourceRect, targetRect, guides.center_mode);
+        } else {
+          this.addNineSlicePatch(container, texture, sourceRect, targetRect, guides.edge_mode);
+        }
+      }
+    }
+
+    return container;
+  }
+
+  private canRenderNineSlice(
+    guides: NineSlice,
+    sourceWidth: number,
+    sourceHeight: number,
+    targetWidth: number,
+    targetHeight: number,
+  ): boolean {
+    const values = [guides.left, guides.right, guides.top, guides.bottom, sourceWidth, sourceHeight, targetWidth, targetHeight];
+    if (!values.every(value => Number.isFinite(value) && value >= 0)) return false;
+    if (guides.edge_mode !== "tile" && guides.edge_mode !== "stretch") return false;
+    if (guides.center_mode !== "tile" && guides.center_mode !== "stretch") return false;
+    return (
+      guides.left + guides.right < sourceWidth &&
+      guides.top + guides.bottom < sourceHeight &&
+      guides.left + guides.right < targetWidth &&
+      guides.top + guides.bottom < targetHeight
+    );
+  }
+
+  private addNineSliceCorner(
+    container: Container,
+    texture: Texture,
+    sourceRect: { x: number; y: number; width: number; height: number },
+    targetRect: { x: number; y: number; width: number; height: number },
+  ) {
+    const width = Math.min(sourceRect.width, targetRect.width);
+    const height = Math.min(sourceRect.height, targetRect.height);
+    if (width <= 0 || height <= 0) return;
+    this.addNineSliceSprite(container, texture, sourceRect.x, sourceRect.y, width, height, targetRect.x, targetRect.y, width, height);
+  }
+
+  private addNineSlicePatch(
+    container: Container,
+    texture: Texture,
+    sourceRect: { x: number; y: number; width: number; height: number },
+    targetRect: { x: number; y: number; width: number; height: number },
+    mode: NineSlice["edge_mode"],
+  ) {
+    if (mode === "stretch") {
+      this.addNineSliceSprite(
+        container,
+        texture,
+        sourceRect.x,
+        sourceRect.y,
+        sourceRect.width,
+        sourceRect.height,
+        targetRect.x,
+        targetRect.y,
+        targetRect.width,
+        targetRect.height,
+      );
+      return;
+    }
+
+    for (let y = 0; y < targetRect.height; y += sourceRect.height) {
+      const height = Math.min(sourceRect.height, targetRect.height - y);
+      for (let x = 0; x < targetRect.width; x += sourceRect.width) {
+        const width = Math.min(sourceRect.width, targetRect.width - x);
+        this.addNineSliceSprite(
+          container,
+          texture,
+          sourceRect.x,
+          sourceRect.y,
+          width,
+          height,
+          targetRect.x + x,
+          targetRect.y + y,
+          width,
+          height,
+        );
+      }
+    }
+  }
+
+  private addNineSliceSprite(
+    container: Container,
+    texture: Texture,
+    sourceX: number,
+    sourceY: number,
+    sourceWidth: number,
+    sourceHeight: number,
+    targetX: number,
+    targetY: number,
+    targetWidth: number,
+    targetHeight: number,
+  ) {
+    const sprite = new Sprite(this.nineSliceTexture(texture, sourceX, sourceY, sourceWidth, sourceHeight));
+    sprite.x = targetX;
+    sprite.y = targetY;
+    sprite.width = targetWidth;
+    sprite.height = targetHeight;
+    sprite.roundPixels = true;
+    container.addChild(sprite);
+  }
+
+  private nineSliceTexture(texture: Texture, x: number, y: number, width: number, height: number): Texture {
+    return new Texture({
+      source: texture.source,
+      frame: new Rectangle(texture.frame.x + x, texture.frame.y + y, width, height),
+    });
+  }
+
+  private addNineSliceWarningOutline(container: Container, el: Element, texture?: Texture) {
+    const width = el.width ?? el.size ?? texture?.frame.width ?? 16;
+    const height = el.height ?? el.size ?? texture?.frame.height ?? 16;
+    const g = new Graphics();
+    g.rect(el.x, el.y, width, height);
+    g.stroke({ width: 1, color: 0xff3366, alpha: 0.95 });
+    container.addChild(g);
   }
 
   private drawGeneratedTextureFallback(el: Element): Container {
@@ -1077,6 +1276,7 @@ export class GuiRenderer {
 
     const texture = Texture.from(canvas);
     this.textTextureCache.set(cacheKey, texture);
+    this.enforceTextureCacheLimit(this.textTextureCache);
     return texture;
   }
 
@@ -1182,6 +1382,7 @@ export class GuiRenderer {
       frame: new Rectangle(x, y, width, height),
     });
     this.glyphTextureCache.set(cacheKey, texture);
+    this.enforceTextureCacheLimit(this.glyphTextureCache);
     return texture;
   }
 
@@ -1193,6 +1394,7 @@ export class GuiRenderer {
       const texture = Assets.get<Texture>(dataUrl);
       if (texture.source.width > 0 && texture.source.height > 0) {
         this.fontSourceTextureCache.set(identity, texture);
+        this.enforceTextureCacheLimit(this.fontSourceTextureCache);
         return texture;
       }
     }
@@ -1205,6 +1407,7 @@ export class GuiRenderer {
           if (loaded.source.width <= 0 || loaded.source.height <= 0) return;
 
           this.fontSourceTextureCache.set(identity, loaded);
+          this.enforceTextureCacheLimit(this.fontSourceTextureCache);
           this.glyphTextureCache.clear();
           this.render();
         })
