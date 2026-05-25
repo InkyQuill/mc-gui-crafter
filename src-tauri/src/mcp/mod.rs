@@ -724,7 +724,10 @@ fn get_tool_definitions() -> Vec<serde_json::Value> {
                 ("label", string_schema("Human-readable state label"), false),
                 (
                     "description",
-                    string_schema("Optional state description; null clears it"),
+                    serde_json::json!({
+                        "type": ["string", "null"],
+                        "description": "Optional state description; null clears it"
+                    }),
                     false,
                 ),
                 (
@@ -734,7 +737,10 @@ fn get_tool_definitions() -> Vec<serde_json::Value> {
                 ),
                 (
                     "export_role",
-                    string_schema("Optional export role; null clears it"),
+                    serde_json::json!({
+                        "type": ["string", "null"],
+                        "description": "Optional export role; null clears it"
+                    }),
                     false,
                 ),
             ]),
@@ -2477,11 +2483,7 @@ fn state_set_active(
     project_id: Option<&str>,
     args: &serde_json::Value,
 ) -> Result<serde_json::Value, String> {
-    let state_id = if args.get("state_id").is_some_and(serde_json::Value::is_null) {
-        None
-    } else {
-        optional_string(args, "state_id")
-    };
+    let state_id = optional_state_id(args, "state_id")?;
     if let Some(state_id) = state_id.as_deref() {
         if sessions
             .resolve(project_id)?
@@ -2645,6 +2647,7 @@ fn parse_element_patches(args: &serde_json::Value) -> Result<Vec<ElementPatch>, 
 
     let mut ids = HashSet::new();
     let mut patches = Vec::with_capacity(updates.len());
+    let top_level_state_id = optional_state_id(args, "state_id")?;
     for update in updates {
         let object = update.as_object().ok_or("Each update must be an object")?;
         let id = object
@@ -2660,11 +2663,11 @@ fn parse_element_patches(args: &serde_json::Value) -> Result<Vec<ElementPatch>, 
             .and_then(|value| value.as_object())
             .ok_or("Each update requires object changes")?
             .clone();
-        let state_id = object
-            .get("state_id")
-            .and_then(|value| value.as_str())
-            .map(String::from)
-            .or_else(|| optional_string(args, "state_id"));
+        let state_id = if object.contains_key("state_id") {
+            optional_state_id(update, "state_id")?
+        } else {
+            top_level_state_id.clone()
+        };
         let edit_scope = object
             .get("edit_scope")
             .or_else(|| args.get("edit_scope"))
@@ -3038,7 +3041,7 @@ fn element_update(
         .as_object()
         .ok_or("Element changes must be an object")?;
     let edit_scope = parse_edit_scope(args)?;
-    let explicit_state_id = optional_string(args, "state_id");
+    let explicit_state_id = optional_state_id(args, "state_id")?;
     let active_state_id = sessions
         .resolve(project_id)?
         .active_state_id
@@ -3076,10 +3079,16 @@ fn element_update_many(
     args: &serde_json::Value,
 ) -> Result<serde_json::Value, String> {
     let patches = parse_element_patches(args)?;
-    if patches
+    let state_scoped_count = patches
         .iter()
-        .any(|patch| patch.state_id.is_some() || patch.edit_scope == Some(EditScope::State))
-    {
+        .filter(|patch| patch_requests_state_scope(patch))
+        .count();
+    if state_scoped_count > 0 && state_scoped_count < patches.len() {
+        return Err(
+            "element_update_many cannot mix base updates and state-scoped updates".to_string(),
+        );
+    }
+    if state_scoped_count > 0 {
         return element_update_many_state_overrides(sessions, project_id, &patches);
     }
 
@@ -3128,6 +3137,10 @@ fn element_update_many(
         "updated_count": changed_count,
         "results": updated.iter().map(element_for_mcp).collect::<Vec<_>>()
     }))
+}
+
+fn patch_requests_state_scope(patch: &ElementPatch) -> bool {
+    patch.state_id.is_some() || patch.edit_scope == Some(EditScope::State)
 }
 
 fn element_update_many_state_overrides(
@@ -4001,7 +4014,7 @@ fn project_render(
     args: &serde_json::Value,
 ) -> Result<serde_json::Value, String> {
     let session = sessions.resolve(project_id)?;
-    let state_id = optional_string(args, "state_id");
+    let state_id = optional_state_id(args, "state_id")?;
     let render_project = session.project.effective_for_state(state_id.as_deref())?;
     let png = crate::texture::composite_project_preview(&render_project)?;
     let path = optional_string(args, "output_path")
@@ -4189,6 +4202,19 @@ fn optional_string(value: &serde_json::Value, key: &str) -> Option<String> {
         .get(key)
         .and_then(|value| value.as_str())
         .map(String::from)
+}
+
+fn optional_state_id(value: &serde_json::Value, key: &str) -> Result<Option<String>, String> {
+    let Some(value) = value.get(key) else {
+        return Ok(None);
+    };
+    if value.is_null() {
+        return Ok(None);
+    }
+    value
+        .as_str()
+        .map(|value| Some(value.to_string()))
+        .ok_or_else(|| format!("{key} must be a string or null"))
 }
 
 fn optional_bool(value: &serde_json::Value, key: &str) -> Result<Option<bool>, String> {
@@ -7546,6 +7572,65 @@ mod tests {
     }
 
     #[test]
+    fn element_update_many_rejects_mixed_base_and_state_scopes_without_mutation() {
+        let state = test_state();
+        let project_id = {
+            let mut sessions = state.sessions.lock().unwrap();
+            let mut project = Project::new("Update Many Mixed Scope", 176, 166, ModTarget::Forge);
+            project.states.push(ProjectState {
+                id: "expanded".into(),
+                label: "Expanded".into(),
+                description: None,
+                initial: true,
+                export_role: None,
+            });
+            for (id, x) in [("a", 8), ("b", 26)] {
+                project.elements.push(
+                    parse_element_arg(&serde_json::json!({
+                        "id": id,
+                        "type": "slot",
+                        "x": x,
+                        "y": 18,
+                        "size": 18
+                    }))
+                    .unwrap(),
+                );
+            }
+            sessions.create_session(project)
+        };
+
+        let response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "update-many-mixed-scope",
+                "method": "tools/call",
+                "params": {
+                    "name": "element_update_many",
+                    "arguments": {
+                        "project_id": project_id,
+                        "updates": [
+                            { "id": "a", "state_id": "expanded", "changes": { "x": 10 } },
+                            { "id": "b", "changes": { "x": 30 } }
+                        ]
+                    }
+                }
+            }),
+            &state,
+        );
+
+        assert!(response["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("cannot mix base updates and state-scoped updates"));
+        let sessions = state.sessions.lock().unwrap();
+        let session = sessions.resolve(Some(&project_id)).unwrap();
+        assert!(session.project.state_overrides.is_empty());
+        assert_eq!(session.project.find_element("a").unwrap().x, 8);
+        assert_eq!(session.project.find_element("b").unwrap().x, 26);
+        assert_eq!(session.revision, 0);
+    }
+
+    #[test]
     fn project_render_accepts_state_id() {
         let state = test_state();
         let project_id = {
@@ -7624,6 +7709,40 @@ mod tests {
         assert_eq!(value["project_id"], project_id);
         assert_eq!(value["state_id"], "expanded");
         assert!(value["path"].as_str().unwrap().ends_with(".png"));
+    }
+
+    #[test]
+    fn project_render_rejects_non_string_state_id() {
+        let state = test_state();
+        {
+            let mut sessions = state.sessions.lock().unwrap();
+            sessions.create_session(Project::new(
+                "Render Invalid State",
+                96,
+                48,
+                ModTarget::Forge,
+            ));
+        }
+
+        let response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "render-invalid-state-id",
+                "method": "tools/call",
+                "params": {
+                    "name": "project_render",
+                    "arguments": {
+                        "state_id": 42
+                    }
+                }
+            }),
+            &state,
+        );
+
+        assert!(response["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("state_id must be a string or null"));
     }
 
     #[test]
