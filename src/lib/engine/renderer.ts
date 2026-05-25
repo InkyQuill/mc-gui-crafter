@@ -163,6 +163,7 @@ export class GuiRenderer {
     this.setupEvents();
     this.setupResizeObserver();
     this.ready = true;
+    editor.centerView(project.guiSize);
     this.updateTransform();
     this.render();
   }
@@ -394,11 +395,9 @@ export class GuiRenderer {
             break;
           case "button":
             void project.addElement("button", gui.x, gui.y).then(element => editor.selectElement(element.id));
-            editor.tool = "select";
             break;
           case "toggle_button":
             void project.addElement("toggle_button", gui.x, gui.y).then(element => editor.selectElement(element.id));
-            editor.tool = "select";
             break;
         }
       }

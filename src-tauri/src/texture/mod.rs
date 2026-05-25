@@ -1,3 +1,4 @@
+pub mod generator;
 use crate::project::{Element, ElementType, Layer, Project};
 use image::{GenericImageView, Rgba, RgbaImage};
 
@@ -371,124 +372,53 @@ fn encode_png(img: RgbaImage) -> Result<Vec<u8>, String> {
     Ok(bytes)
 }
 
-fn noise(x: u32, y: u32) -> u8 {
-    let n = x
-        .wrapping_mul(37)
-        .wrapping_add(y.wrapping_mul(17))
-        .wrapping_add(13);
-    (n % 9) as u8
-}
 
 pub fn generated_gui_panel(width: u32, height: u32) -> Result<Vec<u8>, String> {
-    let mut img = RgbaImage::new(width.max(1), height.max(1));
-    let w = img.width();
-    let h = img.height();
-
-    for y in 0..h {
-        for x in 0..w {
-            let shade = 0xb8u8.saturating_add(noise(x, y));
-            img.put_pixel(x, y, Rgba([shade, shade, shade, 0xff]));
-        }
-    }
-
-    for x in 0..w {
-        img.put_pixel(x, 0, Rgba([0xff, 0xff, 0xff, 0xff]));
-        img.put_pixel(x, h - 1, Rgba([0x55, 0x55, 0x55, 0xff]));
-    }
-    for y in 0..h {
-        img.put_pixel(0, y, Rgba([0xff, 0xff, 0xff, 0xff]));
-        img.put_pixel(w - 1, y, Rgba([0x55, 0x55, 0x55, 0xff]));
-    }
-
-    encode_png(img)
+    encode_png(generator::generate_background(width, height))
 }
 
 pub fn generated_slot() -> Result<Vec<u8>, String> {
-    let mut img = RgbaImage::from_pixel(18, 18, Rgba([0x8b, 0x8b, 0x8b, 0xff]));
-    for i in 0..18 {
-        img.put_pixel(i, 0, Rgba([0x37, 0x37, 0x37, 0xff]));
-        img.put_pixel(0, i, Rgba([0x37, 0x37, 0x37, 0xff]));
-        img.put_pixel(i, 17, Rgba([0xff, 0xff, 0xff, 0xff]));
-        img.put_pixel(17, i, Rgba([0xff, 0xff, 0xff, 0xff]));
-    }
-    for y in 2..16 {
-        for x in 2..16 {
-            img.put_pixel(x, y, Rgba([0x70, 0x70, 0x70, 0xff]));
-        }
-    }
-    encode_png(img)
+    encode_png(generator::generate_slot_frame())
 }
 
 pub fn generated_button() -> Result<Vec<u8>, String> {
-    let width = 200;
-    let height = 20;
-    let mut img = RgbaImage::from_pixel(width, height, Rgba([0x9a, 0x9a, 0x9a, 0xff]));
-
-    for x in 0..width {
-        img.put_pixel(x, 0, Rgba([0x37, 0x37, 0x37, 0xff]));
-        img.put_pixel(x, height - 1, Rgba([0x55, 0x55, 0x55, 0xff]));
+    // The new generator doesn't have a 200x20 button yet, so we'll use a fixed size for now or adapt it
+    // Actually generator.rs has generate_all_defaults which uses textures/button.png? No, it's textures/slot_frame.png etc.
+    // Wait, let's look at generator.rs again.
+    let mut img = image::RgbaImage::from_pixel(200, 20, image::Rgba([0x9a, 0x9a, 0x9a, 0xff]));
+    // ... we can implement it here or in generator.rs
+    // For now, let's just keep the existing button generator or improve it slightly to match the style
+    for x in 0..200 {
+        img.put_pixel(x, 0, image::Rgba([0x37, 0x37, 0x37, 0xff]));
+        img.put_pixel(x, 19, image::Rgba([0x55, 0x55, 0x55, 0xff]));
     }
-    for y in 0..height {
-        img.put_pixel(0, y, Rgba([0x37, 0x37, 0x37, 0xff]));
-        img.put_pixel(width - 1, y, Rgba([0x55, 0x55, 0x55, 0xff]));
+    for y in 0..20 {
+        img.put_pixel(0, y, image::Rgba([0x37, 0x37, 0x37, 0xff]));
+        img.put_pixel(199, y, image::Rgba([0x55, 0x55, 0x55, 0xff]));
     }
-
-    for x in 1..width - 1 {
-        img.put_pixel(x, 1, Rgba([0xff, 0xff, 0xff, 0xff]));
+    for x in 1..199 {
+        img.put_pixel(x, 1, image::Rgba([0xff, 0xff, 0xff, 0xff]));
+        img.put_pixel(x, 18, image::Rgba([0x6b, 0x6b, 0x6b, 0xff]));
     }
-    for y in 1..height - 1 {
-        img.put_pixel(1, y, Rgba([0xff, 0xff, 0xff, 0xff]));
+    for y in 1..19 {
+        img.put_pixel(1, y, image::Rgba([0xff, 0xff, 0xff, 0xff]));
+        img.put_pixel(198, y, image::Rgba([0x6b, 0x6b, 0x6b, 0xff]));
     }
-    for x in 1..width - 1 {
-        img.put_pixel(x, height - 2, Rgba([0x6b, 0x6b, 0x6b, 0xff]));
-    }
-    for y in 1..height - 1 {
-        img.put_pixel(width - 2, y, Rgba([0x6b, 0x6b, 0x6b, 0xff]));
-    }
-
     encode_png(img)
 }
 
 pub fn generated_progress_arrow() -> Result<Vec<u8>, String> {
-    let mut img = RgbaImage::from_pixel(22, 15, Rgba([0x00, 0x00, 0x00, 0x00]));
-    for y in 4..11 {
-        for x in 0..14 {
-            img.put_pixel(x, y, Rgba([0x8a, 0x8a, 0x8a, 0xff]));
-        }
-    }
-    for offset in 0..7 {
-        for y in (4 + offset)..=(10 - offset) {
-            img.put_pixel(14 + offset, y, Rgba([0x8a, 0x8a, 0x8a, 0xff]));
-        }
-    }
-    encode_png(img)
+    encode_png(generator::generate_progress_arrow())
 }
 
 pub fn generated_fluid_tank() -> Result<Vec<u8>, String> {
-    let mut img = RgbaImage::from_pixel(18, 54, Rgba([0x22, 0x2a, 0x33, 0xff]));
-    for x in 0..18 {
-        img.put_pixel(x, 0, Rgba([0xd8, 0xe8, 0xff, 0xff]));
-        img.put_pixel(x, 53, Rgba([0x28, 0x32, 0x3c, 0xff]));
-    }
-    for y in 0..54 {
-        img.put_pixel(0, y, Rgba([0xd8, 0xe8, 0xff, 0xff]));
-        img.put_pixel(17, y, Rgba([0x28, 0x32, 0x3c, 0xff]));
-    }
-    encode_png(img)
+    encode_png(generator::generate_fluid_frame())
 }
 
 pub fn generated_energy_bar() -> Result<Vec<u8>, String> {
-    let mut img = RgbaImage::from_pixel(12, 54, Rgba([0x28, 0x18, 0x18, 0xff]));
-    for x in 0..12 {
-        img.put_pixel(x, 0, Rgba([0xa8, 0x54, 0x54, 0xff]));
-        img.put_pixel(x, 53, Rgba([0x38, 0x10, 0x10, 0xff]));
-    }
-    for y in 0..54 {
-        img.put_pixel(0, y, Rgba([0xa8, 0x54, 0x54, 0xff]));
-        img.put_pixel(11, y, Rgba([0x38, 0x10, 0x10, 0xff]));
-    }
-    encode_png(img)
+    encode_png(generator::generate_energy_frame())
 }
+
 
 pub fn generated_scrollbar(width: u32, height: u32) -> Result<Vec<u8>, String> {
     let w = width.max(5);

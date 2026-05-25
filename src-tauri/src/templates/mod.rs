@@ -527,9 +527,9 @@ fn furnace() -> Template {
                 id: "progress_arrow".into(),
                 element_type: ElementType::Progress,
                 x: 79,
-                y: 35,
+                y: 34,
                 width: Some(22),
-                height: Some(15),
+                height: Some(16),
                 size: None,
                 asset: None,
                 icon: None,
@@ -1759,7 +1759,7 @@ fn brewing_stand() -> Template {
             id: "blaze_slot".into(),
             element_type: ElementType::Slot,
             x: 79,
-            y: 65,
+            y: 62,
             size: Some(18),
             width: None,
             height: None,
@@ -1795,12 +1795,12 @@ fn brewing_stand() -> Template {
     ];
 
     for i in 0..3 {
-        let bottle_x = 56 + i * 24;
+        let bottle_x = 56 + i * 18;
         elements.push(Element {
             id: format!("bottle_{i}"),
             element_type: ElementType::Slot,
             x: bottle_x,
-            y: 40,
+            y: 51,
             size: Some(18),
             width: None,
             height: None,
@@ -1837,9 +1837,9 @@ fn brewing_stand() -> Template {
             id: format!("bubble_{i}"),
             element_type: ElementType::Progress,
             x: bottle_x + 14,
-            y: 29,
+            y: 38,
             width: Some(8),
-            height: Some(26),
+            height: Some(22),
             size: None,
             asset: None,
             icon: None,
@@ -1925,7 +1925,7 @@ fn brewing_stand() -> Template {
 fn anvil() -> Template {
     Template {
         name: "anvil",
-        description: "Anvil: 2 input slots, output, level cost text, repair progress",
+        description: "Anvil: 2 input slots (side-by-side), output, rename field, level cost",
         default_width: 176,
         default_height: 166,
         elements: vec![
@@ -1969,8 +1969,8 @@ fn anvil() -> Template {
             Element {
                 id: "title".into(),
                 element_type: ElementType::Text,
-                x: 8,
-                y: 6,
+                x: 60,
+                y: 10,
                 width: None,
                 height: None,
                 size: None,
@@ -2007,7 +2007,7 @@ fn anvil() -> Template {
                 id: "input_slot_1".into(),
                 element_type: ElementType::Slot,
                 x: 27,
-                y: 23,
+                y: 47,
                 size: Some(18),
                 width: None,
                 height: None,
@@ -2043,7 +2043,7 @@ fn anvil() -> Template {
             Element {
                 id: "input_slot_2".into(),
                 element_type: ElementType::Slot,
-                x: 27,
+                x: 76,
                 y: 47,
                 size: Some(18),
                 width: None,
@@ -2080,8 +2080,8 @@ fn anvil() -> Template {
             Element {
                 id: "output_slot".into(),
                 element_type: ElementType::Slot,
-                x: 107,
-                y: 35,
+                x: 134,
+                y: 47,
                 size: Some(18),
                 width: None,
                 height: None,
@@ -2118,7 +2118,7 @@ fn anvil() -> Template {
                 id: "cost_text".into(),
                 element_type: ElementType::Text,
                 x: 130,
-                y: 50,
+                y: 58,
                 width: None,
                 height: None,
                 size: None,
