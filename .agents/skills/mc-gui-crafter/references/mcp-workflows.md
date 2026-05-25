@@ -289,6 +289,60 @@ projects need `project_save_as` because they do not have a path yet.
 }
 ```
 
+## Visual Authoring Alpha
+
+Use asset metadata for reusable nine-slice panel atlases, then switch texture
+elements to `render_mode: "nine_slice"` only after element or asset guides
+exist. Render the project after guide changes and inspect the PNG before export.
+
+```json
+{
+  "name": "asset_metadata_update",
+  "arguments": {
+    "name": "textures/gui/panel_atlas.png",
+    "metadata": {
+      "nine_slice": {
+        "left": 4,
+        "right": 4,
+        "top": 4,
+        "bottom": 4,
+        "edge_mode": "tile",
+        "center_mode": "tile"
+      }
+    }
+  }
+}
+```
+
+```json
+{
+  "name": "element_update_many",
+  "arguments": {
+    "updates": [
+      {
+        "id": "background",
+        "changes": {
+          "asset": "textures/gui/panel_atlas.png",
+          "render_mode": "nine_slice",
+          "width": 176,
+          "height": 166
+        }
+      }
+    ]
+  }
+}
+```
+
+```json
+{
+  "name": "project_render",
+  "arguments": {
+    "output_path": "/tmp/panel-atlas-nine-slice-check.png",
+    "include_data_url": false
+  }
+}
+```
+
 ## Player Inventory And Hotbar Grids
 
 If you start from `empty`, add vanilla player grids explicitly:

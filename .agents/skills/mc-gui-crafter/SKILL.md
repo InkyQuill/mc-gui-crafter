@@ -100,6 +100,19 @@ Prefer these closed-alpha MCP tools:
      warnings by matching `scroll_binding` and scrollbar `target_group`.
    - After export, inspect generated layout JSON and texture files when possible.
 
+## Visual Authoring
+
+- Use asset-level `nine_slice` metadata for reusable panel atlases shared by
+  multiple texture elements.
+- Set texture elements to `render_mode: "nine_slice"` only when nine-slice
+  guides are defined on the element or on its referenced asset.
+- Element-level nine-slice guides override asset metadata; asset metadata is
+  the reusable fallback for texture elements that reference the same atlas.
+- Prefer `project_render` after guide or render-mode changes, then inspect the
+  PNG before exporting.
+- For atlas-backed icon buttons, use `icon` plus `icon_uv`. Keep `content` as
+  label, accessibility, and fallback metadata.
+
 ## Design Rules
 
 - Start from a generated GUI panel or template so the texture is visible by

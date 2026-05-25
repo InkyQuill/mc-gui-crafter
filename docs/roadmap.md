@@ -105,7 +105,9 @@
 - [x] MCP render tool exposed as `project_render`.
 - [x] MCP project resize, group upsert, and batch element update workflows.
 - [x] MCP schema discovery and explicit semantic member validation.
-- [ ] Visual Authoring Alpha.
+- [x] Visual Authoring Alpha design/spec written.
+- [x] Visual Authoring Alpha implementation plan written.
+- [ ] Visual Authoring Alpha implementation complete pending final branch review.
 - [ ] Editable State Variants Alpha.
 - [ ] GUI Polish Alpha.
 - [x] More starter templates: advanced machine, fluid tank, brewing stand, anvil, and Custom Grid as a default 3×3 starter layout

@@ -327,9 +327,9 @@ For standalone icon PNGs, set `icon` to that PNG and omit `icon_uv`.
 
 ### Visual Authoring Alpha
 
-Use asset-level `nine_slice` guides when multiple texture elements share the
-same atlas. `asset_metadata_update` only updates metadata for assets that
-already exist in the project:
+Use `asset_metadata_update` to attach reusable authoring metadata to assets that
+already exist in the project. Asset-level `nine_slice` guides are the preferred
+way to reuse a panel atlas across multiple texture elements:
 
 ```json
 {
@@ -337,13 +337,11 @@ already exist in the project:
   "arguments": {
     "name": "textures/gui/panel_atlas.png",
     "metadata": {
-      "width": 8,
-      "height": 8,
       "nine_slice": {
-        "left": 2,
-        "right": 2,
-        "top": 2,
-        "bottom": 2,
+        "left": 4,
+        "right": 4,
+        "top": 4,
+        "bottom": 4,
         "edge_mode": "tile",
         "center_mode": "tile"
       }
@@ -352,7 +350,12 @@ already exist in the project:
 }
 ```
 
-Set texture elements to use those guides with `element_update_many`:
+Texture elements support `render_mode`. Leave the default mode for ordinary
+textures. Set `render_mode: "nine_slice"` only when nine-slice guides are
+defined either on the element or on its referenced asset. Element-level guides
+take precedence; asset-level guides are the fallback for elements that share the
+same atlas. Update existing elements in one atomic call with
+`element_update_many`:
 
 ```json
 {
@@ -373,7 +376,12 @@ Set texture elements to use those guides with `element_update_many`:
 }
 ```
 
-After changing guides or render modes, verify the result with `project_render`:
+Button and toggle-button elements can render atlas-backed icons with `icon` plus
+`icon_uv`. Keep `content` as label, accessibility, and fallback metadata; for
+standalone icon PNGs, set `icon` and omit `icon_uv`.
+
+After changing guides or render modes, verify the result with `project_render`
+and inspect the PNG before export:
 
 ```json
 {
