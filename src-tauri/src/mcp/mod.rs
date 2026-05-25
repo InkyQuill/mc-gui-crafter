@@ -9,9 +9,9 @@ use tauri::{AppHandle, Emitter, Manager};
 
 use crate::animation::Animation;
 use crate::project::{
-    AttachedRegion, AttachedRegionAnchor, AttachedRegionState, CodegenMode, Element, ElementType,
-    FillDirection, Layer, ModTarget, Project, ProjectExportSettings, ProjectSessionManager,
-    SemanticGroup, SemanticGroupKind, SlotRole,
+    AssetMetadata, AttachedRegion, AttachedRegionAnchor, AttachedRegionState, CodegenMode, Element,
+    ElementType, FillDirection, Layer, ModTarget, NineSliceMode, Project, ProjectExportSettings,
+    ProjectSessionManager, SemanticGroup, SemanticGroupKind, SlotRole, TextureRenderMode,
 };
 use crate::{templates, AppState};
 
@@ -874,6 +874,21 @@ fn get_tool_definitions() -> Vec<serde_json::Value> {
             ]),
         ),
         td(
+            "asset_metadata_update",
+            "Update metadata for an existing asset",
+            project_schema(vec![
+                ("name", string_schema("Asset name"), true),
+                (
+                    "metadata",
+                    serde_json::json!({
+                        "type": "object",
+                        "description": "Asset metadata fields such as width, height, and nine_slice guides"
+                    }),
+                    true,
+                ),
+            ]),
+        ),
+        td(
             "asset_remove",
             "Remove an asset",
             project_props(&[("name", "string", "Asset name", true)]),
@@ -1293,6 +1308,8 @@ fn schema_discover() -> serde_json::Value {
         "attached_region_states": serde_values(AttachedRegionState::variants()),
         "fill_directions": serde_values(FillDirection::variants()),
         "layers": serde_values(Layer::variants()),
+        "texture_render_modes": serde_values(TextureRenderMode::variants()),
+        "nine_slice_modes": serde_values(NineSliceMode::variants()),
         "export_settings": {
             "codegen_modes": serde_values(CodegenMode::variants()),
             "codegen_mode_default": serde_json::to_value(&export_defaults.codegen_mode).unwrap(),
@@ -1317,6 +1334,8 @@ fn schema_discover() -> serde_json::Value {
             "animation",
             "visible",
             "uv",
+            "render_mode",
+            "nine_slice",
             "layer",
             "slot_role",
             "slot_index",
@@ -1334,6 +1353,7 @@ fn schema_discover() -> serde_json::Value {
             "open_height",
             "attached_region"
         ],
+        "asset_metadata_fields": ["width", "height", "nine_slice"],
         "serialization_defaults": schema_serialization_defaults()
     })
 }
@@ -1497,6 +1517,7 @@ fn execute_tool(
         }
         "asset_import" => asset_import(&mut sessions, project_id, args),
         "asset_update" => asset_update(&mut sessions, project_id, args),
+        "asset_metadata_update" => asset_metadata_update(&mut sessions, project_id, args),
         "asset_remove" => asset_remove(&mut sessions, project_id, args),
         "asset_get_data_url" => asset_get_data_url(&sessions, project_id, args),
         "asset_list" => asset_list(&sessions, project_id),
@@ -2953,6 +2974,53 @@ fn asset_update(
     }))
 }
 
+fn asset_metadata_update(
+    sessions: &mut ProjectSessionManager,
+    project_id: Option<&str>,
+    args: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let name = required_str(args, "name")?;
+    let metadata_value = args.get("metadata").ok_or("Missing metadata")?.clone();
+    let metadata: AssetMetadata = serde_json::from_value(metadata_value)
+        .map_err(|error| format!("Invalid asset metadata: {error}"))?;
+
+    let session_id = {
+        let project = &sessions.resolve(project_id)?.project;
+        if !project.assets.iter().any(|asset| asset == name) {
+            return Err(format!("Asset not found: {name}"));
+        }
+        if let Some(current) = project.asset_metadata.get(name) {
+            if current == &metadata {
+                return Ok(serde_json::json!({
+                    "project_id": sessions.resolve(project_id)?.id,
+                    "name": name,
+                    "metadata": current,
+                }));
+            }
+        } else if metadata == AssetMetadata::default() {
+            return Ok(serde_json::json!({
+                "project_id": sessions.resolve(project_id)?.id,
+                "name": name,
+                "metadata": metadata,
+            }));
+        }
+        sessions.resolve(project_id)?.id.clone()
+    };
+
+    sessions.record_history(project_id)?;
+    let session = sessions.resolve_mut(project_id)?;
+    session
+        .project
+        .asset_metadata
+        .insert(name.to_string(), metadata.clone());
+    sessions.mark_changed(project_id)?;
+    Ok(serde_json::json!({
+        "project_id": session_id,
+        "name": name,
+        "metadata": metadata,
+    }))
+}
+
 fn asset_remove(
     sessions: &mut ProjectSessionManager,
     project_id: Option<&str>,
@@ -3688,6 +3756,42 @@ mod tests {
     }
 
     #[test]
+    fn schema_discover_lists_visual_authoring_fields() {
+        let state = test_state();
+        let response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "schema-visual-authoring",
+                "method": "tools/call",
+                "params": {
+                    "name": "schema_discover",
+                    "arguments": {}
+                }
+            }),
+            &state,
+        );
+
+        assert!(response["error"].is_null(), "{response:#}");
+        let value = tool_text_value(&response);
+        assert!(value["texture_render_modes"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!("nine_slice")));
+        assert!(value["nine_slice_modes"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!("tile")));
+        assert!(value["editable_element_fields"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!("render_mode")));
+        assert!(value["editable_element_fields"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!("nine_slice")));
+    }
+
+    #[test]
     fn schema_discover_returns_agent_authoring_enums_and_defaults() {
         let state = test_state();
         let response = response_for(
@@ -3729,6 +3833,14 @@ mod tests {
         );
         assert_eq!(value["layers"], serde_values(Layer::variants()));
         assert_eq!(
+            value["texture_render_modes"],
+            serde_values(TextureRenderMode::variants())
+        );
+        assert_eq!(
+            value["nine_slice_modes"],
+            serde_values(NineSliceMode::variants())
+        );
+        assert_eq!(
             value["export_settings"]["codegen_modes"],
             serde_values(CodegenMode::variants())
         );
@@ -3765,6 +3877,8 @@ mod tests {
                 "animation",
                 "visible",
                 "uv",
+                "render_mode",
+                "nine_slice",
                 "layer",
                 "slot_role",
                 "slot_index",
@@ -3782,6 +3896,10 @@ mod tests {
                 "open_height",
                 "attached_region"
             ])
+        );
+        assert_eq!(
+            value["asset_metadata_fields"],
+            serde_json::json!(["width", "height", "nine_slice"])
         );
         assert_eq!(
             value["serialization_defaults"],
@@ -4566,6 +4684,51 @@ mod tests {
                 .get("textures/generated/custom_panel.png"),
             Some(&png)
         );
+    }
+
+    #[test]
+    fn asset_metadata_update_sets_nine_slice_metadata() {
+        let state = test_state();
+        let project_id = {
+            let mut sessions = state.sessions.lock().unwrap();
+            let mut project = Project::new("Asset Metadata", 176, 166, ModTarget::Forge);
+            project
+                .assets
+                .push("textures/gui/panel_atlas.png".to_string());
+            sessions.create_session(project)
+        };
+
+        let response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "asset-metadata",
+                "method": "tools/call",
+                "params": {
+                    "name": "asset_metadata_update",
+                    "arguments": {
+                        "project_id": project_id,
+                        "name": "textures/gui/panel_atlas.png",
+                        "metadata": {
+                            "nine_slice": {
+                                "left": 4,
+                                "right": 4,
+                                "top": 4,
+                                "bottom": 4,
+                                "edge_mode": "tile",
+                                "center_mode": "tile"
+                            }
+                        }
+                    }
+                }
+            }),
+            &state,
+        );
+
+        assert!(response["error"].is_null(), "{response:#}");
+        let value = tool_text_value(&response);
+        assert_eq!(value["project_id"], project_id);
+        assert_eq!(value["name"], "textures/gui/panel_atlas.png");
+        assert_eq!(value["metadata"]["nine_slice"]["left"], 4);
     }
 
     #[test]

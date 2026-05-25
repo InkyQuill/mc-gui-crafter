@@ -1,7 +1,7 @@
 use crate::animation::Animation;
 use crate::project::{
-    CodegenMode, ElementType, Layer, Project, ProjectExportSettings, SemanticGroup,
-    SemanticGroupKind, SlotRole,
+    CodegenMode, ElementType, Layer, NineSlice, Project, ProjectExportSettings, SemanticGroup,
+    SemanticGroupKind, SlotRole, TextureRenderMode, UvRect,
 };
 use std::borrow::Cow;
 use std::collections::HashSet;
@@ -151,7 +151,19 @@ pub fn preview_export(
     target: &str,
 ) -> Result<ExportPreview, String> {
     let settings = effective_export_settings(project, config);
-    let plan = plan_export(project, config, target)?;
+    let validation = visual_authoring_validation(project);
+    let preview_project = if validation.invalid_nine_slice_elements.is_empty() {
+        Cow::Borrowed(project)
+    } else {
+        let mut preview_project = project.clone();
+        for element in &mut preview_project.elements {
+            if validation.invalid_nine_slice_elements.contains(&element.id) {
+                element.render_mode = TextureRenderMode::Plain;
+            }
+        }
+        Cow::Owned(preview_project)
+    };
+    let plan = plan_export(preview_project.as_ref(), config, target)?;
     let mut warnings = if config.overwrite {
         Vec::new()
     } else {
@@ -159,6 +171,7 @@ pub fn preview_export(
     };
     warnings.extend(semantic_warnings(project, &settings));
     warnings.extend(progress_texture_warnings(project));
+    warnings.extend(validation.warnings);
     Ok(ExportPreview {
         target: plan.target.loader_id().to_string(),
         mod_id: plan.export.mod_id,
@@ -433,6 +446,130 @@ fn existing_file_warnings(files: &[PlannedFile]) -> Vec<String> {
             )
         })
         .collect()
+}
+
+struct VisualAuthoringValidation {
+    warnings: Vec<String>,
+    invalid_nine_slice_elements: HashSet<String>,
+}
+
+fn visual_authoring_validation(project: &Project) -> VisualAuthoringValidation {
+    let mut warnings = Vec::new();
+    let mut invalid_nine_slice_elements = HashSet::new();
+
+    for element in project.elements.iter().filter(|element| element.visible) {
+        if let Some(asset) = element.asset.as_deref() {
+            if let Some(uv) = element.uv.as_ref() {
+                if let Some((width, height)) = resolved_asset_dimensions(project, asset) {
+                    if !rect_fits_asset(uv, width, height) {
+                        warnings.push(format!(
+                            "Element '{}' uv rectangle exceeds asset '{}' bounds {}x{}",
+                            element.id, asset, width, height
+                        ));
+                    }
+                }
+            }
+        }
+
+        if let Some(icon) = element.icon.as_deref() {
+            if let Some(icon_uv) = element.icon_uv.as_ref() {
+                if let Some((width, height)) = resolved_asset_dimensions(project, icon) {
+                    if !rect_fits_asset(icon_uv, width, height) {
+                        warnings.push(format!(
+                            "Element '{}' icon_uv rectangle exceeds asset '{}' bounds {}x{}",
+                            element.id, icon, width, height
+                        ));
+                    }
+                }
+            }
+        }
+
+        if element.element_type != ElementType::Texture
+            || element.render_mode != TextureRenderMode::NineSlice
+        {
+            continue;
+        }
+
+        let Some(guides) = resolved_nine_slice(project, element) else {
+            warnings.push(format!(
+                "Texture element '{}' uses nine_slice but no element or asset nine_slice guides are defined",
+                element.id
+            ));
+            invalid_nine_slice_elements.insert(element.id.clone());
+            continue;
+        };
+
+        let Some(asset) = element.asset.as_deref() else {
+            continue;
+        };
+        if let Some((source_width, source_height)) =
+            resolved_source_dimensions(project, asset, element.uv.as_ref())
+        {
+            if !guides_leave_center(guides, source_width, source_height) {
+                warnings.push(format!(
+                    "Texture element '{}' nine_slice guides leave no positive source center region",
+                    element.id
+                ));
+                invalid_nine_slice_elements.insert(element.id.clone());
+            }
+        }
+
+        let target = element.render_size();
+        if !guides_leave_center(guides, target.width, target.height) {
+            warnings.push(format!(
+                "Texture element '{}' nine_slice target size {}x{} does not exceed fixed corner sizes",
+                element.id, target.width, target.height
+            ));
+            invalid_nine_slice_elements.insert(element.id.clone());
+        }
+    }
+
+    VisualAuthoringValidation {
+        warnings,
+        invalid_nine_slice_elements,
+    }
+}
+
+fn resolved_nine_slice<'a>(
+    project: &'a Project,
+    element: &'a crate::project::Element,
+) -> Option<&'a NineSlice> {
+    element.nine_slice.as_ref().or_else(|| {
+        let asset = element.asset.as_ref()?;
+        project.asset_metadata.get(asset)?.nine_slice.as_ref()
+    })
+}
+
+fn resolved_source_dimensions(
+    project: &Project,
+    asset: &str,
+    uv: Option<&UvRect>,
+) -> Option<(u32, u32)> {
+    match uv {
+        Some(uv) => Some((uv.width, uv.height)),
+        None => resolved_asset_dimensions(project, asset),
+    }
+}
+
+fn resolved_asset_dimensions(project: &Project, asset: &str) -> Option<(u32, u32)> {
+    if let Some(data) = project.texture_data.get(asset) {
+        if let Ok(image) = image::load_from_memory(data) {
+            return Some((image.width(), image.height()));
+        }
+    }
+
+    let metadata = project.asset_metadata.get(asset)?;
+    Some((metadata.width?, metadata.height?))
+}
+
+fn rect_fits_asset(rect: &UvRect, width: u32, height: u32) -> bool {
+    u64::from(rect.x) + u64::from(rect.width) <= u64::from(width)
+        && u64::from(rect.y) + u64::from(rect.height) <= u64::from(height)
+}
+
+fn guides_leave_center(guides: &NineSlice, width: u32, height: u32) -> bool {
+    u64::from(guides.left) + u64::from(guides.right) < u64::from(width)
+        && u64::from(guides.top) + u64::from(guides.bottom) < u64::from(height)
 }
 
 fn progress_texture_warnings(project: &Project) -> Vec<String> {
@@ -2087,8 +2224,9 @@ mod tests {
     use super::*;
     use crate::animation::{Animation, AnimationType};
     use crate::project::{
-        AttachedRegion, AttachedRegionAnchor, AttachedRegionState, Element, ElementType,
-        FillDirection, Layer, ModTarget, SemanticGroup, SemanticGroupKind, Size, SlotRole, UvRect,
+        AssetMetadata, AttachedRegion, AttachedRegionAnchor, AttachedRegionState, Element,
+        ElementType, FillDirection, Layer, ModTarget, NineSlice, NineSliceMode, SemanticGroup,
+        SemanticGroupKind, Size, SlotRole, TextureRenderMode, UvRect,
     };
     use image::{Rgba, RgbaImage};
     use std::collections::HashMap;
@@ -2315,6 +2453,35 @@ mod tests {
         )
         .unwrap();
         bytes
+    }
+
+    fn fixture_panel_atlas() -> Vec<u8> {
+        let mut img = RgbaImage::from_pixel(8, 8, Rgba([0, 255, 0, 255]));
+        for x in 0..8 {
+            for y in 0..8 {
+                if x < 2 || x >= 6 || y < 2 || y >= 6 {
+                    img.put_pixel(x, y, Rgba([255, 0, 0, 255]));
+                }
+            }
+        }
+        let mut bytes = Vec::new();
+        img.write_to(
+            &mut std::io::Cursor::new(&mut bytes),
+            image::ImageFormat::Png,
+        )
+        .unwrap();
+        bytes
+    }
+
+    fn export_config(output_dir: &Path, class_name: &str) -> ExportConfig {
+        ExportConfig {
+            mod_id: "testmod".to_string(),
+            package: "com.example".to_string(),
+            class_name: class_name.to_string(),
+            output_dir: output_dir.to_string_lossy().to_string(),
+            settings_override: None,
+            overwrite: false,
+        }
     }
 
     fn temp_export_dir(name: &str) -> PathBuf {
@@ -3997,6 +4164,137 @@ mod tests {
             path.ends_with("src/main/resources/assets/testmod/textures/icons/start.png")
         }));
         let _ = fs::remove_dir_all(output_dir);
+    }
+
+    #[test]
+    fn preview_warns_for_nine_slice_texture_without_guides() {
+        let output_dir = TempExportDir::new("missing-nine-slice-guides");
+        let mut project = Project::new("Missing Guides", 32, 32, ModTarget::Forge);
+        project.assets.push("textures/gui/panel.png".into());
+        project.texture_data.insert(
+            "textures/gui/panel.png".into(),
+            png_bytes([120, 120, 120, 255]),
+        );
+        project.elements.push(Element {
+            id: "background".into(),
+            element_type: ElementType::Texture,
+            x: 0,
+            y: 0,
+            width: Some(32),
+            height: Some(32),
+            asset: Some("textures/gui/panel.png".into()),
+            render_mode: TextureRenderMode::NineSlice,
+            ..button_element("defaults", ElementType::Texture, 0, 0, None)
+        });
+
+        let preview = preview_export(
+            &project,
+            &export_config(output_dir.path(), "MissingGuides"),
+            "forge",
+        )
+        .unwrap();
+
+        assert!(
+            preview.warnings.iter().any(|warning| {
+                warning.contains("background") && warning.contains("nine_slice")
+            }),
+            "missing guide warning should name the element: {:?}",
+            preview.warnings
+        );
+    }
+
+    #[test]
+    fn preview_warns_for_icon_uv_outside_asset_bounds() {
+        let output_dir = TempExportDir::new("icon-uv-bounds");
+        let mut project = Project::new("Icon UV", 32, 32, ModTarget::Forge);
+        project.assets.push("textures/icons/buttons.png".into());
+        project.texture_data.insert(
+            "textures/icons/buttons.png".into(),
+            png_bytes([10, 200, 10, 255]),
+        );
+        project.elements.push(Element {
+            icon: Some("textures/icons/buttons.png".into()),
+            icon_uv: Some(UvRect {
+                x: 16,
+                y: 16,
+                width: 16,
+                height: 16,
+            }),
+            ..button_element(
+                "settings_button",
+                ElementType::Button,
+                4,
+                4,
+                Some("Settings"),
+            )
+        });
+
+        let preview = preview_export(
+            &project,
+            &export_config(output_dir.path(), "IconUv"),
+            "forge",
+        )
+        .unwrap();
+
+        assert!(
+            preview.warnings.iter().any(|warning| {
+                warning.contains("settings_button") && warning.contains("icon_uv")
+            }),
+            "invalid icon_uv warning should name the button: {:?}",
+            preview.warnings
+        );
+    }
+
+    #[test]
+    fn export_composes_nine_slice_background_into_gui_texture() {
+        let output_dir = TempExportDir::new("nine-slice-export");
+        let mut project = Project::new("Nine Slice Export", 24, 24, ModTarget::Forge);
+        let asset = "textures/gui/panel_atlas.png";
+        project.assets.push(asset.into());
+        project
+            .texture_data
+            .insert(asset.into(), fixture_panel_atlas());
+        project.asset_metadata.insert(
+            asset.into(),
+            AssetMetadata {
+                width: Some(8),
+                height: Some(8),
+                nine_slice: Some(NineSlice {
+                    left: 2,
+                    right: 2,
+                    top: 2,
+                    bottom: 2,
+                    edge_mode: NineSliceMode::Tile,
+                    center_mode: NineSliceMode::Tile,
+                }),
+            },
+        );
+        project.elements.push(Element {
+            id: "background".into(),
+            element_type: ElementType::Texture,
+            x: 0,
+            y: 0,
+            width: Some(24),
+            height: Some(24),
+            asset: Some(asset.into()),
+            render_mode: TextureRenderMode::NineSlice,
+            ..button_element("defaults", ElementType::Texture, 0, 0, None)
+        });
+
+        export_project(
+            &project,
+            &export_config(output_dir.path(), "NineSliceExport"),
+            "forge",
+        )
+        .unwrap();
+
+        let gui_png = output_dir
+            .path()
+            .join("src/main/resources/assets/testmod/textures/gui/ninesliceexport_gui.png");
+        let image = image::open(gui_png).unwrap().to_rgba8();
+        assert_eq!(image.dimensions(), (24, 24));
+        assert_eq!(image.get_pixel(0, 0).0, [255, 0, 0, 255]);
+        assert_eq!(image.get_pixel(12, 12).0, [0, 255, 0, 255]);
     }
 
     #[test]

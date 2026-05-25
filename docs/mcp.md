@@ -325,6 +325,70 @@ control is icon-only:
 
 For standalone icon PNGs, set `icon` to that PNG and omit `icon_uv`.
 
+### Visual Authoring Alpha
+
+Use asset-level `nine_slice` guides when multiple texture elements share the
+same atlas. `asset_metadata_update` only updates metadata for assets that
+already exist in the project:
+
+```json
+{
+  "name": "asset_metadata_update",
+  "arguments": {
+    "name": "textures/gui/panel_atlas.png",
+    "metadata": {
+      "width": 8,
+      "height": 8,
+      "nine_slice": {
+        "left": 2,
+        "right": 2,
+        "top": 2,
+        "bottom": 2,
+        "edge_mode": "tile",
+        "center_mode": "tile"
+      }
+    }
+  }
+}
+```
+
+Set texture elements to use those guides with `element_update_many`:
+
+```json
+{
+  "name": "element_update_many",
+  "arguments": {
+    "updates": [
+      {
+        "id": "background_panel",
+        "changes": {
+          "asset": "textures/gui/panel_atlas.png",
+          "render_mode": "nine_slice",
+          "width": 176,
+          "height": 166
+        }
+      }
+    ]
+  }
+}
+```
+
+After changing guides or render modes, verify the result with `project_render`:
+
+```json
+{
+  "name": "project_render",
+  "arguments": {
+    "output_path": "/tmp/mcgui-nine-slice-check.png",
+    "include_data_url": false
+  }
+}
+```
+
+MCP responses stay compact by default. Binary image payloads are opt-in: use
+`include_data_url: true` on `project_render` or call `asset_get_data_url` only
+when the caller explicitly needs inline PNG data.
+
 ### Attached Regions
 
 Use attached regions when a GUI has visible or interactive elements outside the
@@ -699,6 +763,7 @@ avoiding the `group_ungroup` plus `group_create` workaround.
 |------|-------------|
 | `asset_import` | Import a PNG from disk |
 | `asset_update` | Replace an existing asset from a PNG data URL |
+| `asset_metadata_update` | Update metadata such as dimensions and nine-slice guides |
 | `asset_remove` | Remove an asset |
 | `asset_get_data_url` | Read an asset as a data URL |
 | `asset_list` | List imported assets |
