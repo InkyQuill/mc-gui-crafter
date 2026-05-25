@@ -1,4 +1,4 @@
-import { Application, Assets, Container, Graphics, Rectangle, Text, TextStyle, Sprite, Texture } from "pixi.js";
+import { Application, Assets, Container, Graphics, Rectangle, Text, TextStyle, Sprite, Texture, TilingSprite } from "pixi.js";
 import type { AttachedRegion, Element, FontRenderData, GlyphInfo, MinecraftFontProviderRenderData, Layer, NineSlice } from "../types";
 import { project } from "../stores/project.svelte";
 import { editor } from "../stores/editor.svelte";
@@ -70,6 +70,8 @@ type CanvasPointerEvent = PointerEvent & {
   global?: { x: number; y: number };
 };
 
+type TextureCacheOwnership = "owned-source" | "shared-source" | "external-source";
+
 export class GuiRenderer {
   app: Application;
   private gridContainer: Container;
@@ -86,6 +88,7 @@ export class GuiRenderer {
   private glyphTextureCache = new Map<string, Texture>();
   private fontSourceTextureCache = new Map<string, Texture>();
   private textTextureCache = new Map<string, Texture>();
+  private renderOwnedTextures = new WeakSet<Texture>();
   private loadingFontSources = new Set<string>();
   private glyphTextureCacheVersion = -1;
   private spacePanning = false;
@@ -116,12 +119,54 @@ export class GuiRenderer {
     });
   }
 
-  private enforceTextureCacheLimit(cache: Map<string, Texture>, limit = 256) {
+  private enforceTextureCacheLimit(cache: Map<string, Texture>, ownership: TextureCacheOwnership, limit = 256) {
     while (cache.size > limit) {
       const first = cache.keys().next().value;
       if (!first) return;
-      cache.get(first)?.destroy(true);
+      this.destroyCachedTexture(cache.get(first), ownership);
       cache.delete(first);
+    }
+  }
+
+  private clearTextureCache(cache: Map<string, Texture>, ownership: TextureCacheOwnership) {
+    cache.forEach(texture => this.destroyCachedTexture(texture, ownership));
+    cache.clear();
+  }
+
+  private destroyCachedTexture(texture: Texture | undefined, ownership: TextureCacheOwnership) {
+    if (!texture || texture.destroyed || ownership === "external-source") return;
+    texture.destroy(ownership === "owned-source");
+  }
+
+  private ownedSubtexture(texture: Texture, x: number, y: number, width: number, height: number): Texture {
+    const subtexture = new Texture({
+      source: texture.source,
+      frame: new Rectangle(texture.frame.x + x, texture.frame.y + y, width, height),
+    });
+    this.renderOwnedTextures.add(subtexture);
+    return subtexture;
+  }
+
+  private destroyRenderOwnedTexture(texture: Texture | undefined) {
+    if (!texture || !this.renderOwnedTextures.has(texture)) return;
+    this.renderOwnedTextures.delete(texture);
+    if (!texture.destroyed) texture.destroy(false);
+  }
+
+  private destroyRenderOwnedTexturesInTree(container: Container) {
+    const textured = container as Container & { texture?: Texture };
+    this.destroyRenderOwnedTexture(textured.texture);
+
+    for (const child of container.children) {
+      this.destroyRenderOwnedTexturesInTree(child);
+    }
+  }
+
+  private clearRenderContainer(container: Container) {
+    const children = container.removeChildren();
+    for (const child of children) {
+      this.destroyRenderOwnedTexturesInTree(child);
+      child.destroy({ children: true, context: true });
     }
   }
 
@@ -581,7 +626,7 @@ export class GuiRenderer {
   }
 
   private drawGrid() {
-    this.gridContainer.removeChildren();
+    this.clearRenderContainer(this.gridContainer);
     if (!editor.showGrid) return;
 
     const g = new Graphics();
@@ -634,7 +679,7 @@ export class GuiRenderer {
   }
 
   private drawElements() {
-    this.elementsContainer.removeChildren();
+    this.clearRenderContainer(this.elementsContainer);
 
     // Sort by layer priority: Background first, then Overlay, then Animatable
     const sorted = [...project.elements].sort((a, b) => {
@@ -728,7 +773,10 @@ export class GuiRenderer {
         if (el.render_mode === "nine_slice") {
           const guides = this.resolvedNineSlice(el);
           const nineSlice = guides ? this.renderNineSliceElement(el, texture, guides) : null;
-          if (nineSlice) return nineSlice;
+          if (nineSlice) {
+            this.destroyRenderOwnedTexture(texture);
+            return nineSlice;
+          }
 
           this.addPlainTextureSprite(container, el, texture);
           this.addNineSliceWarningOutline(container, el, texture);
@@ -882,24 +930,15 @@ export class GuiRenderer {
       return;
     }
 
-    for (let y = 0; y < targetRect.height; y += sourceRect.height) {
-      const height = Math.min(sourceRect.height, targetRect.height - y);
-      for (let x = 0; x < targetRect.width; x += sourceRect.width) {
-        const width = Math.min(sourceRect.width, targetRect.width - x);
-        this.addNineSliceSprite(
-          container,
-          texture,
-          sourceRect.x,
-          sourceRect.y,
-          width,
-          height,
-          targetRect.x + x,
-          targetRect.y + y,
-          width,
-          height,
-        );
-      }
-    }
+    const sprite = new TilingSprite({
+      texture: this.ownedSubtexture(texture, sourceRect.x, sourceRect.y, sourceRect.width, sourceRect.height),
+      width: targetRect.width,
+      height: targetRect.height,
+      roundPixels: true,
+    });
+    sprite.x = targetRect.x;
+    sprite.y = targetRect.y;
+    container.addChild(sprite);
   }
 
   private addNineSliceSprite(
@@ -914,20 +953,13 @@ export class GuiRenderer {
     targetWidth: number,
     targetHeight: number,
   ) {
-    const sprite = new Sprite(this.nineSliceTexture(texture, sourceX, sourceY, sourceWidth, sourceHeight));
+    const sprite = new Sprite(this.ownedSubtexture(texture, sourceX, sourceY, sourceWidth, sourceHeight));
     sprite.x = targetX;
     sprite.y = targetY;
     sprite.width = targetWidth;
     sprite.height = targetHeight;
     sprite.roundPixels = true;
     container.addChild(sprite);
-  }
-
-  private nineSliceTexture(texture: Texture, x: number, y: number, width: number, height: number): Texture {
-    return new Texture({
-      source: texture.source,
-      frame: new Rectangle(texture.frame.x + x, texture.frame.y + y, width, height),
-    });
   }
 
   private addNineSliceWarningOutline(container: Container, el: Element, texture?: Texture) {
@@ -1002,10 +1034,7 @@ export class GuiRenderer {
       return null;
     }
 
-    return new Texture({
-      source: baseTexture.source,
-      frame: new Rectangle(x, y, width, height),
-    });
+    return this.ownedSubtexture(baseTexture, x, y, width, height);
   }
 
   private drawButton(el: Element): Container {
@@ -1066,7 +1095,7 @@ export class GuiRenderer {
     const width = Math.min(uv.width, sourceWidth - x);
     const height = Math.min(uv.height, sourceHeight - y);
     if (width <= 0 || height <= 0) return null;
-    return new Texture({ source: baseTexture.source, frame: new Rectangle(x, y, width, height) });
+    return this.ownedSubtexture(baseTexture, x, y, width, height);
   }
 
   private drawButtonGraphics(g: Graphics, x: number, y: number, w: number, h: number) {
@@ -1276,7 +1305,7 @@ export class GuiRenderer {
 
     const texture = Texture.from(canvas);
     this.textTextureCache.set(cacheKey, texture);
-    this.enforceTextureCacheLimit(this.textTextureCache);
+    this.enforceTextureCacheLimit(this.textTextureCache, "owned-source");
     return texture;
   }
 
@@ -1382,7 +1411,7 @@ export class GuiRenderer {
       frame: new Rectangle(x, y, width, height),
     });
     this.glyphTextureCache.set(cacheKey, texture);
-    this.enforceTextureCacheLimit(this.glyphTextureCache);
+    this.enforceTextureCacheLimit(this.glyphTextureCache, "shared-source");
     return texture;
   }
 
@@ -1394,7 +1423,7 @@ export class GuiRenderer {
       const texture = Assets.get<Texture>(dataUrl);
       if (texture.source.width > 0 && texture.source.height > 0) {
         this.fontSourceTextureCache.set(identity, texture);
-        this.enforceTextureCacheLimit(this.fontSourceTextureCache);
+        this.enforceTextureCacheLimit(this.fontSourceTextureCache, "external-source");
         return texture;
       }
     }
@@ -1407,8 +1436,8 @@ export class GuiRenderer {
           if (loaded.source.width <= 0 || loaded.source.height <= 0) return;
 
           this.fontSourceTextureCache.set(identity, loaded);
-          this.enforceTextureCacheLimit(this.fontSourceTextureCache);
-          this.glyphTextureCache.clear();
+          this.enforceTextureCacheLimit(this.fontSourceTextureCache, "external-source");
+          this.clearTextureCache(this.glyphTextureCache, "shared-source");
           this.render();
         })
         .catch(() => {
@@ -1441,8 +1470,8 @@ export class GuiRenderer {
 
   private syncGlyphTextureCache() {
     if (this.glyphTextureCacheVersion === project.fontRenderDataVersion) return;
-    this.glyphTextureCache.clear();
-    this.fontSourceTextureCache.clear();
+    this.clearTextureCache(this.glyphTextureCache, "shared-source");
+    this.clearTextureCache(this.fontSourceTextureCache, "external-source");
     this.loadingFontSources.clear();
     this.glyphTextureCacheVersion = project.fontRenderDataVersion;
   }
@@ -1595,8 +1624,11 @@ export class GuiRenderer {
       this.renderFrame = null;
     }
     this.loadingFontSources.clear();
-    this.textTextureCache.forEach(texture => texture.destroy(true));
-    this.textTextureCache.clear();
+    this.clearRenderContainer(this.gridContainer);
+    this.clearRenderContainer(this.elementsContainer);
+    this.clearTextureCache(this.glyphTextureCache, "shared-source");
+    this.clearTextureCache(this.fontSourceTextureCache, "external-source");
+    this.clearTextureCache(this.textTextureCache, "owned-source");
     this.cleanupFns.forEach(fn => fn());
     this.cleanupFns = [];
     this.resizeObserver?.disconnect();
