@@ -1113,6 +1113,11 @@ fn export_props() -> serde_json::Value {
             ),
             false,
         ),
+        (
+            "state_id",
+            string_schema("Optional editable state ID to export as an effective layout"),
+            false,
+        ),
     ])
 }
 
@@ -1546,7 +1551,9 @@ fn schema_discover() -> serde_json::Value {
             "element_update",
             "element_update_many",
             "project_render",
-            "project_screenshot"
+            "project_screenshot",
+            "project_export_preview",
+            "project_export"
         ],
         "asset_metadata_fields": ["width", "height", "nine_slice"],
         "serialization_defaults": schema_serialization_defaults()
@@ -1817,8 +1824,14 @@ fn project_export_preview(
     args: &serde_json::Value,
 ) -> Result<serde_json::Value, String> {
     let (project, config, target) = export_request(sessions, project_id, args)?;
-    serde_json::to_value(crate::export::preview_export(project, &config, target)?)
-        .map_err(|error| error.to_string())
+    let state_id = optional_string(args, "state_id");
+    serde_json::to_value(crate::export::preview_export_for_state(
+        project,
+        &config,
+        target,
+        state_id.as_deref(),
+    )?)
+    .map_err(|error| error.to_string())
 }
 
 fn project_export(
@@ -1827,8 +1840,9 @@ fn project_export(
     args: &serde_json::Value,
 ) -> Result<serde_json::Value, String> {
     let (project, config, target) = export_request(sessions, project_id, args)?;
+    let state_id = optional_string(args, "state_id");
     Ok(serde_json::json!({
-        "files": crate::export::export_project(project, &config, target)?,
+        "files": crate::export::export_project_for_state(project, &config, target, state_id.as_deref())?,
     }))
 }
 
@@ -4828,11 +4842,11 @@ mod tests {
             .as_array()
             .unwrap()
             .contains(&serde_json::json!("project_render")));
-        assert!(!value["tools_accepting_state_id"]
+        assert!(value["tools_accepting_state_id"]
             .as_array()
             .unwrap()
             .contains(&serde_json::json!("project_export_preview")));
-        assert!(!value["tools_accepting_state_id"]
+        assert!(value["tools_accepting_state_id"]
             .as_array()
             .unwrap()
             .contains(&serde_json::json!("project_export")));
@@ -5681,6 +5695,91 @@ mod tests {
                 .unwrap()
                 .ends_with("FourInputProcessorScreen.java")
         }));
+    }
+
+    #[test]
+    fn project_export_tool_accepts_state_id_and_writes_effective_layout() {
+        let state = test_state();
+        let project_id = {
+            let mut sessions = state.sessions.lock().unwrap();
+            let mut project = Project::new("State Export MCP", 176, 166, ModTarget::Forge);
+            let mut panel = schema_default_element();
+            panel.id = "panel".into();
+            panel.element_type = ElementType::Panel;
+            panel.x = 0;
+            panel.y = 0;
+            panel.width = Some(40);
+            panel.height = Some(20);
+            project.elements.push(panel);
+            project.states.push(ProjectState {
+                id: "expanded".into(),
+                label: "Expanded".into(),
+                description: None,
+                initial: true,
+                export_role: Some("expanded".into()),
+            });
+            project
+                .update_element_state_override(
+                    "expanded",
+                    "panel",
+                    ElementStateOverridePatch {
+                        x: Some(Some(96)),
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+            sessions.create_session(project)
+        };
+        let output_dir = std::env::temp_dir().join(format!(
+            "gui-crafter-mcp-state-export-{}",
+            uuid::Uuid::new_v4()
+        ));
+
+        let response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "state-export",
+                "method": "tools/call",
+                "params": {
+                    "name": "project_export",
+                    "arguments": {
+                        "project_id": project_id,
+                        "target": "forge",
+                        "mod_id": "mcp_test",
+                        "package": "net.inkyquill.mcptest",
+                        "class_name": "StateExportGui",
+                        "output_dir": output_dir,
+                        "state_id": "expanded"
+                    }
+                }
+            }),
+            &state,
+        );
+
+        assert!(response["error"].is_null(), "{response:#}");
+        let value = tool_text_value(&response);
+        let layout_path = value["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find_map(|path| {
+                let path = path.as_str().unwrap();
+                path.ends_with("stateexportgui_layout.json")
+                    .then(|| PathBuf::from(path))
+            })
+            .unwrap();
+        let layout: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&layout_path).unwrap()).unwrap();
+
+        assert_eq!(layout["effective_state"], "expanded");
+        assert_eq!(layout["elements"][0]["x"], 96);
+        assert_eq!(layout["states"][0]["id"], "expanded");
+        assert_eq!(
+            layout["state_overrides"]["expanded"]["elements"]["panel"]["x"],
+            96
+        );
+
+        let _ = std::fs::remove_dir_all(output_dir);
     }
 
     #[test]
