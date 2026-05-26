@@ -278,6 +278,18 @@
           <button class="override-clear-btn" title="Clear state override" onclick={() => project.clearElementOverride(selectedEl.id, "attached_region")}>×</button>
         {/if}
       </div>
+      <div class="prop-row">
+        <label for="prop-visible">Visible{elementOverrideMarker("visible")}</label>
+        <input
+          id="prop-visible"
+          type="checkbox"
+          checked={selectedEl.visible ?? true}
+          onchange={(e) => updateSelectedElement({ visible: e.currentTarget.checked })}
+        />
+        {#if project.hasElementOverride(selectedEl.id, "visible")}
+          <button class="override-clear-btn" title="Clear state override" onclick={() => project.clearElementOverride(selectedEl.id, "visible")}>×</button>
+        {/if}
+      </div>
 
       {#if selectedEl.type === "slot"}
         <div class="prop-row">
@@ -709,6 +721,18 @@
         />
         {#if project.hasAttachedRegionOverride(selectedRegion.id, "height")}
           <button class="override-clear-btn" title="Clear state override" onclick={() => project.clearAttachedRegionOverride(selectedRegion.id, "height")}>×</button>
+        {/if}
+      </div>
+      <div class="prop-row">
+        <label for="prop-region-visible">Visible{regionOverrideMarker("visible")}</label>
+        <input
+          id="prop-region-visible"
+          type="checkbox"
+          checked={selectedRegion.visible ?? true}
+          onchange={(e) => updateRegion(selectedRegion.id, { visible: e.currentTarget.checked })}
+        />
+        {#if project.hasAttachedRegionOverride(selectedRegion.id, "visible")}
+          <button class="override-clear-btn" title="Clear state override" onclick={() => project.clearAttachedRegionOverride(selectedRegion.id, "visible")}>×</button>
         {/if}
       </div>
       <div class="prop-row">

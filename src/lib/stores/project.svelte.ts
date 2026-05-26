@@ -76,6 +76,8 @@ export class ProjectStore {
   isOpen = $state(false);
   private assetDataUrlRequests = new Map<string, Promise<string | undefined>>();
   private assetDataUrlsProjectId: string | null = null;
+  private elementMovePreviewBaselines = new Map<string, { x: number; y: number }>();
+  private attachedRegionMovePreviewBaselines = new Map<string, { x: number; y: number }>();
 
   get elementCount(): number {
     return this.elements.length;
@@ -144,22 +146,20 @@ export class ProjectStore {
 
   get effectiveElements(): Element[] {
     const overrides = this.activeStateOverrides?.elements;
-    if (!this.activeStateId || !overrides) return this.elements;
 
     return this.elements.map(element => {
-      const override = overrides[element.id];
-      if (!override) return element;
+      const override = this.activeStateId ? overrides?.[element.id] : undefined;
+      if (!override) return { ...element };
       return this.applyElementOverride(element, override);
     });
   }
 
   get effectiveAttachedRegions(): AttachedRegion[] {
     const overrides = this.activeStateOverrides?.attached_regions;
-    if (!this.activeStateId || !overrides) return this.attachedRegions;
 
     return this.attachedRegions.map(region => {
-      const override = overrides[region.id];
-      if (!override) return region;
+      const override = this.activeStateId ? overrides?.[region.id] : undefined;
+      if (!override) return { ...region };
       return this.applyAttachedRegionOverride(region, override);
     });
   }
@@ -325,7 +325,7 @@ export class ProjectStore {
     if (!recordUndo && old.x === x && old.y === y) return;
 
     if (this.isEditingStateOverrides) {
-      this.applyLocalElementStateOverride(id, { x, y });
+      this.applyLocalElementStateOverride(id, { x, y }, true);
     } else {
       this._moveLocal(id, x, y);
       this.isDirty = true;
@@ -335,6 +335,7 @@ export class ProjectStore {
     if (recordUndo) {
       if (this.isEditingStateOverrides) {
         await this.commitElementStateOverride(id, { x, y });
+        this.clearStateMovePreviewBaselines();
       } else {
         await api.elementMove(id, x, y, this.activeProjectId ?? undefined);
       }
@@ -375,7 +376,7 @@ export class ProjectStore {
 
     for (const move of changed) {
       if (this.isEditingStateOverrides) {
-        this.applyLocalElementStateOverride(move.id, { x: move.x, y: move.y });
+        this.applyLocalElementStateOverride(move.id, { x: move.x, y: move.y }, true);
       } else {
         this._moveLocal(move.id, move.x, move.y);
       }
@@ -403,9 +404,17 @@ export class ProjectStore {
     if (moves.length === 0) return;
 
     if (this.isEditingStateOverrides) {
-      for (const move of moves) {
+      const changed = moves.filter(move => this.stateMoveChangesPosition(move));
+      if (changed.length === 0) {
+        this.clearStateMovePreviewBaselines();
+        await this.refreshSessions();
+        await this.hydrateActiveProject();
+        return;
+      }
+      for (const move of changed) {
         await this.commitElementStateOverride(move.id, { x: move.x, y: move.y }, false);
       }
+      this.clearStateMovePreviewBaselines();
       await this.refreshSessions();
       await this.hydrateActiveProject();
       return;
@@ -555,7 +564,23 @@ export class ProjectStore {
     if (!old) return;
 
     if (this.isEditingStateOverrides) {
+      const baseline = this.attachedRegionMovePreviewBaselines.get(id) ?? { x: old.x, y: old.y };
+      const dx = x - baseline.x;
+      const dy = y - baseline.y;
+      if (dx === 0 && dy === 0) {
+        this.clearStateMovePreviewBaselines();
+        await this.refreshSessions();
+        await this.hydrateActiveProject();
+        this.bumpRenderVersion();
+        return;
+      }
       await this.commitAttachedRegionStateOverride(id, { x, y }, false);
+      const elements = this.elementsAttachedToEffectiveRegion(id);
+      for (const element of elements) {
+        const baselineElement = this.elementMovePreviewBaselines.get(element.id) ?? { x: element.x, y: element.y };
+        await this.commitElementStateOverride(element.id, { x: baselineElement.x + dx, y: baselineElement.y + dy }, false);
+      }
+      this.clearStateMovePreviewBaselines();
       await this.refreshSessions();
       await this.hydrateActiveProject();
       this.bumpRenderVersion();
@@ -580,7 +605,14 @@ export class ProjectStore {
     if (!old) return;
 
     if (this.isEditingStateOverrides) {
+      const baseline = this.attachedRegionMovePreviewBaselines.get(id) ?? { x: old.x, y: old.y };
+      this.attachedRegionMovePreviewBaselines.set(id, baseline);
+      const dx = x - old.x;
+      const dy = y - old.y;
       this.applyLocalAttachedRegionStateOverride(id, { x, y });
+      for (const element of this.elementsAttachedToEffectiveRegion(id)) {
+        this.applyLocalElementStateOverride(element.id, { x: element.x + dx, y: element.y + dy }, true);
+      }
       this.bumpRenderVersion();
       return;
     }
@@ -870,14 +902,43 @@ export class ProjectStore {
     return omitted;
   }
 
-  private applyLocalElementStateOverride(id: string, fields: StateOverrideFields) {
+  private applyLocalElementStateOverride(id: string, fields: StateOverrideFields, trackMoveBaseline = false) {
     if (!this.activeStateId) return;
+    if (trackMoveBaseline && (this.hasOwnField(fields, "x") || this.hasOwnField(fields, "y")) && !this.elementMovePreviewBaselines.has(id)) {
+      const current = this.effectiveElementById(id);
+      if (current) this.elementMovePreviewBaselines.set(id, { x: current.x, y: current.y });
+    }
     const stateOverrides = this.cloneStateOverrides();
     const overrides = stateOverrides[this.activeStateId] ?? {};
     const elements = { ...(overrides.elements ?? {}) };
     elements[id] = { ...(elements[id] ?? {}), ...fields };
     stateOverrides[this.activeStateId] = { ...overrides, elements };
     this.stateOverrides = stateOverrides;
+  }
+
+  private stateMoveChangesPosition(move: api.ElementMoveRequest): boolean {
+    const baseline = this.elementMovePreviewBaselines.get(move.id);
+    if (baseline) return baseline.x !== move.x || baseline.y !== move.y;
+
+    const base = this.elementById(move.id);
+    if (!base) return false;
+    const override = this.activeStateOverrides?.elements?.[move.id];
+    const currentX = override?.x ?? base.x;
+    const currentY = override?.y ?? base.y;
+    return currentX !== move.x || currentY !== move.y;
+  }
+
+  private hasOwnField(fields: StateOverrideFields, field: string): boolean {
+    return Object.prototype.hasOwnProperty.call(fields, field);
+  }
+
+  private elementsAttachedToEffectiveRegion(regionId: string): Element[] {
+    return this.effectiveElements.filter(element => element.attached_region === regionId);
+  }
+
+  private clearStateMovePreviewBaselines() {
+    this.elementMovePreviewBaselines.clear();
+    this.attachedRegionMovePreviewBaselines.clear();
   }
 
   private applyLocalAttachedRegionStateOverride(id: string, fields: StateOverrideFields) {
@@ -991,6 +1052,7 @@ export class ProjectStore {
     this.isDirty = payload.summary.is_dirty;
     this.revision = payload.summary.revision;
     this.isOpen = true;
+    this.clearStateMovePreviewBaselines();
     this.bumpRenderVersion();
   }
 
@@ -1169,6 +1231,7 @@ export class ProjectStore {
     this.isOpen = false;
     this.assetDataUrlRequests.clear();
     this.assetDataUrlsProjectId = null;
+    this.clearStateMovePreviewBaselines();
     assetDataUrls.clear();
     assetDimensions.clear();
     this.bumpRenderVersion();
