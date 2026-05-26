@@ -89,6 +89,8 @@ Prefer these closed-alpha MCP tools:
      one-off overrides to `project_export_preview` and `project_export`.
    - `class_name` is sanitized; exported screen classes append `Screen` only
      when the sanitized class name does not already end with `Screen`.
+   - Pass `state_id` to `project_export_preview` or `project_export` when you
+     need generated assets/layout JSON for an effective editable state.
 
 7. Verify after each major step:
    - Call `element_list` after adding/moving elements.

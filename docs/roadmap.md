@@ -108,7 +108,7 @@
 - [x] Visual Authoring Alpha design/spec written.
 - [x] Visual Authoring Alpha implementation plan written.
 - [x] Visual Authoring Alpha implementation complete.
-- [ ] Editable State Variants Alpha.
+- [x] Editable State Variants Alpha.
 - [ ] GUI Polish Alpha.
 - [x] More starter templates: advanced machine, fluid tank, brewing stand, anvil, and Custom Grid as a default 3×3 starter layout
 - [x] Minecraft visual fidelity pass: light/dark Minecraft-like themes, generated default GUI textures, and vanilla-aligned template slot metrics

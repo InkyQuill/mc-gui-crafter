@@ -13,6 +13,7 @@ and current implementation.
 - `2026-05-23-semantic-inventory-scrollbar-design.md`
 - `2026-05-24-active-attached-regions-design.md`
 - `2026-05-24-editor-ux-polish-design.md`
+- `2026-05-24-editable-state-variants-alpha-design.md`
 - `2026-05-24-mcp-reliability-alpha-design.md`
 - `2026-05-24-visual-authoring-alpha-design.md`
 
@@ -27,5 +28,4 @@ codebase.
 These specs remain in `docs/superpowers/specs/` because the roadmap still tracks
 them as open:
 
-- `2026-05-24-editable-state-variants-alpha-design.md`
 - `2026-05-24-gui-polish-alpha-design.md`

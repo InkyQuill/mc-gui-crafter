@@ -741,6 +741,10 @@ one-off override fields to preview/export. `class_name` is sanitized for Java;
 the generated screen class appends `Screen` only when the sanitized name does not
 already end with `Screen`.
 
+Pass `state_id` to `project_export_preview` or `project_export` to preview or
+write generated assets from an effective editable state layout. State metadata is
+preserved in the layout JSON; runtime state toggling remains deferred.
+
 During repeated exports to the same generated directory, pass `overwrite: true`
 to `project_export_preview` and `project_export` to suppress existing-file
 warnings. This does not suppress semantic, progress, or control validation
