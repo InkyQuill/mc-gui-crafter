@@ -3,8 +3,9 @@ use crate::config::{AppConfig, EditorLayoutConfig, WindowConfig};
 use crate::format;
 use crate::project::{
     AssetMetadata, AttachedRegion, AttachedRegionStateOverridePatch, CodegenMode, EditScope,
-    Element, ElementStateOverridePatch, Group, ModTarget, Project, ProjectExportSettings,
-    ProjectSessionSummary, ProjectState, SemanticGroup, StateOverrideTarget,
+    Element, ElementAttachedRegionStateOverride, ElementStateOverridePatch, Group, ModTarget,
+    Project, ProjectExportSettings, ProjectSessionSummary, ProjectState, SemanticGroup,
+    StateOverrideTarget,
 };
 use crate::templates::TemplateInfo;
 use crate::AppState;
@@ -1797,7 +1798,9 @@ fn parse_element_state_patch(
             "y" => patch.y = Some(optional_i32(value, key)?),
             "width" => patch.width = Some(optional_u32(value, key)?),
             "height" => patch.height = Some(optional_u32(value, key)?),
-            "attached_region" => patch.attached_region = Some(optional_string(value, key)?),
+            "attached_region" => {
+                patch.attached_region = Some(attached_region_override(value, key)?)
+            }
             "layer" => {
                 patch.layer = Some(if value.is_null() {
                     None
@@ -1907,16 +1910,16 @@ fn optional_u32(value: &serde_json::Value, field: &str) -> Result<Option<u32>, S
         .map_err(|_| format!("state override field '{field}' is out of range"))
 }
 
-fn optional_string(
+fn attached_region_override(
     value: &serde_json::Value,
     field: &str,
-) -> Result<Option<Option<String>>, String> {
+) -> Result<ElementAttachedRegionStateOverride, String> {
     if value.is_null() {
-        return Ok(None);
+        return Ok(ElementAttachedRegionStateOverride::Detached);
     }
     value
         .as_str()
-        .map(|value| Some(Some(value.to_string())))
+        .map(|value| ElementAttachedRegionStateOverride::Region(value.to_string()))
         .ok_or_else(|| format!("state override field '{field}' must be a string or null"))
 }
 
@@ -1947,7 +1950,7 @@ fn prune_element_state_override(project: &mut Project, state_id: &str, element_i
                 && override_value.y.is_none()
                 && override_value.width.is_none()
                 && override_value.height.is_none()
-                && override_value.attached_region.is_none()
+                && override_value.attached_region.is_inherited()
                 && override_value.layer.is_none()
         })
     {
@@ -2833,6 +2836,63 @@ mod tests {
             None
         );
         assert_eq!(session_summary(&sessions, &project_id).unwrap().revision, 3);
+    }
+
+    #[test]
+    fn state_override_update_can_detach_element_from_attached_region() {
+        let mut sessions = ProjectSessionManager::default();
+        let project_id =
+            sessions.create_session(Project::new("Detach Override", 176, 166, ModTarget::Forge));
+        {
+            let project = &mut sessions.resolve_mut(Some(&project_id)).unwrap().project;
+            let mut element = sample_element("panel", 4, 4);
+            element.attached_region = Some("drawer".into());
+            project.elements.push(element);
+            project
+                .attached_regions
+                .push(sample_attached_region("drawer", 176, 0));
+        }
+        add_state_in_session(
+            &mut sessions,
+            Some(&project_id),
+            state_add_request("collapsed"),
+        )
+        .unwrap();
+
+        update_state_override_in_session(
+            &mut sessions,
+            Some(&project_id),
+            StateOverrideUpdateRequest {
+                state_id: "collapsed".into(),
+                target_type: StateOverrideTargetKind::Element,
+                target_id: "panel".into(),
+                fields: serde_json::json!({ "attached_region": null }),
+            },
+        )
+        .unwrap();
+
+        let session = sessions.resolve(Some(&project_id)).unwrap();
+        assert_eq!(
+            session.project.state_overrides["collapsed"].elements["panel"].attached_region,
+            ElementAttachedRegionStateOverride::Detached
+        );
+        let effective = session
+            .project
+            .effective_for_state(Some("collapsed"))
+            .unwrap();
+        assert_eq!(
+            effective.find_element("panel").unwrap().attached_region,
+            None
+        );
+        assert_eq!(
+            session
+                .project
+                .find_element("panel")
+                .unwrap()
+                .attached_region
+                .as_deref(),
+            Some("drawer")
+        );
     }
 
     #[test]

@@ -367,7 +367,7 @@ function applyMockStateOverrideUpdate(session: MockSession, request: StateOverri
       ...(stateOverrides.elements[request.target_id] ?? {}),
     };
     for (const [field, value] of Object.entries(request.fields)) {
-      if (value === null) delete next[field as keyof typeof next];
+      if (value === null && field !== "attached_region") delete next[field as keyof typeof next];
       else next[field as keyof typeof next] = value as never;
     }
     changed = !valuesEqual(next, stateOverrides.elements[request.target_id] ?? {});

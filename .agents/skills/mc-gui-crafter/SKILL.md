@@ -135,6 +135,9 @@ Prefer these closed-alpha MCP tools:
   `x`, `y`, `width`, `height`, `attached_region`, and `layer` are valid element
   override fields; base-only fields such as `content`, `asset`, `slot_role`,
   and semantic metadata must be edited on the base project.
+- In state scope, set `attached_region: null` to detach an element for that
+  state. Use `state_override_clear` when the element should inherit the base
+  attached-region membership again.
 - Attached-region state overrides allow `visible`, `x`, `y`, `width`, and
   `height`; group overrides currently allow `visible`.
 - Prefer `project_render` with `state_id` for state visual verification.

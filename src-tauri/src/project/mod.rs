@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::HashMap;
 
 fn default_true() -> bool {
@@ -349,6 +349,89 @@ impl ProjectStateOverrides {
     }
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum ElementAttachedRegionStateOverride {
+    #[default]
+    Inherited,
+    Detached,
+    Region(String),
+}
+
+impl ElementAttachedRegionStateOverride {
+    pub fn is_inherited(&self) -> bool {
+        matches!(self, Self::Inherited)
+    }
+
+    fn to_effective_value(&self) -> Option<Option<String>> {
+        match self {
+            Self::Inherited => None,
+            Self::Detached => Some(None),
+            Self::Region(id) => Some(Some(id.clone())),
+        }
+    }
+}
+
+impl Serialize for ElementAttachedRegionStateOverride {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match self {
+            Self::Inherited | Self::Detached => serializer.serialize_none(),
+            Self::Region(id) => serializer.serialize_str(id),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for ElementAttachedRegionStateOverride {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct Visitor;
+
+        impl<'de> serde::de::Visitor<'de> for Visitor {
+            type Value = ElementAttachedRegionStateOverride;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("a string attached-region id or null")
+            }
+
+            fn visit_unit<E>(self) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(ElementAttachedRegionStateOverride::Detached)
+            }
+
+            fn visit_none<E>(self) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(ElementAttachedRegionStateOverride::Detached)
+            }
+
+            fn visit_some<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+            where
+                D: Deserializer<'de>,
+            {
+                String::deserialize(deserializer).map(ElementAttachedRegionStateOverride::Region)
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(ElementAttachedRegionStateOverride::Region(
+                    value.to_string(),
+                ))
+            }
+        }
+
+        deserializer.deserialize_option(Visitor)
+    }
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct ElementStateOverride {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -361,8 +444,11 @@ pub struct ElementStateOverride {
     pub width: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub height: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub attached_region: Option<Option<String>>,
+    #[serde(
+        default,
+        skip_serializing_if = "ElementAttachedRegionStateOverride::is_inherited"
+    )]
+    pub attached_region: ElementAttachedRegionStateOverride,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub layer: Option<Layer>,
 }
@@ -374,7 +460,7 @@ impl ElementStateOverride {
             && self.y.is_none()
             && self.width.is_none()
             && self.height.is_none()
-            && self.attached_region.is_none()
+            && self.attached_region.is_inherited()
             && self.layer.is_none()
     }
 
@@ -412,7 +498,9 @@ impl ElementStateOverride {
             "y" => self.y = None,
             "width" => self.width = None,
             "height" => self.height = None,
-            "attached_region" => self.attached_region = None,
+            "attached_region" => {
+                self.attached_region = ElementAttachedRegionStateOverride::Inherited
+            }
             "layer" => self.layer = None,
             _ => return Err(format!("unknown state override field '{field}'")),
         }
@@ -505,7 +593,7 @@ pub struct ElementStateOverridePatch {
     pub y: Option<Option<i32>>,
     pub width: Option<Option<u32>>,
     pub height: Option<Option<u32>>,
-    pub attached_region: Option<Option<Option<String>>>,
+    pub attached_region: Option<ElementAttachedRegionStateOverride>,
     pub layer: Option<Option<Layer>>,
 }
 
@@ -1023,7 +1111,7 @@ impl Project {
             if let Some(value) = override_value.height {
                 element.height = Some(value);
             }
-            if let Some(value) = &override_value.attached_region {
+            if let Some(value) = override_value.attached_region.to_effective_value() {
                 element.attached_region = value.clone();
             }
             if let Some(value) = override_value.layer.clone() {
@@ -1518,7 +1606,9 @@ mod tests {
                 y: Some(0),
                 width: Some(88),
                 height: Some(166),
-                attached_region: Some(Some("settings_drawer".into())),
+                attached_region: ElementAttachedRegionStateOverride::Region(
+                    "settings_drawer".into(),
+                ),
                 layer: Some(Layer::Overlay),
             },
         );
@@ -1578,7 +1668,9 @@ mod tests {
                 y: Some(8),
                 width: None,
                 height: None,
-                attached_region: Some(Some("settings_drawer".into())),
+                attached_region: ElementAttachedRegionStateOverride::Region(
+                    "settings_drawer".into(),
+                ),
                 layer: Some(Layer::Overlay),
             },
         );
@@ -1611,6 +1703,55 @@ mod tests {
         assert_eq!(base_element.x, 0);
         assert_eq!(base_element.y, 0);
         assert_eq!(base_element.attached_region, None);
+    }
+
+    #[test]
+    fn state_override_can_detach_element_from_base_attached_region_after_round_trip() {
+        let mut project = Project::new("State Detach", 176, 166, ModTarget::Forge);
+        let mut element = base_element_for_test("panel", ElementType::Texture, 0, 0);
+        element.attached_region = Some("drawer".into());
+        project.elements.push(element);
+        project
+            .attached_regions
+            .push(test_attached_region("drawer", 176, 0, 88, 166));
+        project.states.push(ProjectState {
+            id: "collapsed".into(),
+            label: "Collapsed".into(),
+            description: None,
+            initial: true,
+            export_role: Some("collapsed".into()),
+        });
+
+        project
+            .update_element_state_override(
+                "collapsed",
+                "panel",
+                ElementStateOverridePatch {
+                    attached_region: Some(ElementAttachedRegionStateOverride::Detached),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+
+        let value = serde_json::to_value(&project).unwrap();
+        assert!(
+            value["state_overrides"]["collapsed"]["elements"]["panel"]["attached_region"].is_null()
+        );
+
+        let loaded: Project = serde_json::from_value(value).unwrap();
+        let effective = loaded.effective_for_state(Some("collapsed")).unwrap();
+        assert_eq!(
+            effective.find_element("panel").unwrap().attached_region,
+            None
+        );
+        assert_eq!(
+            loaded
+                .find_element("panel")
+                .unwrap()
+                .attached_region
+                .as_deref(),
+            Some("drawer")
+        );
     }
 
     #[test]

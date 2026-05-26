@@ -962,7 +962,7 @@ export class ProjectStore {
     if (override.y !== undefined && override.y !== null) next.y = override.y;
     if (override.width !== undefined && override.width !== null) next.width = override.width;
     if (override.height !== undefined && override.height !== null) next.height = override.height;
-    if (override.attached_region !== undefined && override.attached_region !== null) next.attached_region = override.attached_region;
+    if (override.attached_region !== undefined) next.attached_region = override.attached_region;
     if (override.layer !== undefined && override.layer !== null) next.layer = override.layer;
     return next;
   }

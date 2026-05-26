@@ -10,10 +10,11 @@ use tauri::{AppHandle, Emitter, Manager};
 use crate::animation::Animation;
 use crate::project::{
     AssetMetadata, AttachedRegion, AttachedRegionAnchor, AttachedRegionState,
-    AttachedRegionStateOverridePatch, CodegenMode, EditScope, Element, ElementStateOverridePatch,
-    ElementType, FillDirection, GroupStateOverride, Layer, ModTarget, NineSliceMode, Project,
-    ProjectExportSettings, ProjectSessionManager, ProjectState, SemanticGroup, SemanticGroupKind,
-    SlotRole, StateOverrideTarget, TextureRenderMode,
+    AttachedRegionStateOverridePatch, CodegenMode, EditScope, Element,
+    ElementAttachedRegionStateOverride, ElementStateOverridePatch, ElementType, FillDirection,
+    GroupStateOverride, Layer, ModTarget, NineSliceMode, Project, ProjectExportSettings,
+    ProjectSessionManager, ProjectState, SemanticGroup, SemanticGroupKind, SlotRole,
+    StateOverrideTarget, TextureRenderMode,
 };
 use crate::{templates, AppState};
 
@@ -2786,7 +2787,9 @@ fn parse_element_state_patch(
             "y" => patch.y = Some(nullable_i32(value, key)?),
             "width" => patch.width = Some(nullable_u32(value, key)?),
             "height" => patch.height = Some(nullable_u32(value, key)?),
-            "attached_region" => patch.attached_region = Some(Some(nullable_string(value, key)?)),
+            "attached_region" => {
+                patch.attached_region = Some(attached_region_override(value, key)?)
+            }
             "layer" => {
                 patch.layer = Some(if value.is_null() {
                     None
@@ -4231,6 +4234,19 @@ fn nullable_string(value: &serde_json::Value, key: &str) -> Result<Option<String
     value
         .as_str()
         .map(|value| Some(value.to_string()))
+        .ok_or_else(|| format!("{key} must be a string or null"))
+}
+
+fn attached_region_override(
+    value: &serde_json::Value,
+    key: &str,
+) -> Result<ElementAttachedRegionStateOverride, String> {
+    if value.is_null() {
+        return Ok(ElementAttachedRegionStateOverride::Detached);
+    }
+    value
+        .as_str()
+        .map(|value| ElementAttachedRegionStateOverride::Region(value.to_string()))
         .ok_or_else(|| format!("{key} must be a string or null"))
 }
 
@@ -7418,6 +7434,92 @@ mod tests {
         assert_eq!(
             session.project.state_overrides["expanded"].elements["panel"].x,
             Some(24)
+        );
+    }
+
+    #[test]
+    fn element_update_with_state_id_can_detach_from_attached_region() {
+        let state = test_state();
+        let project_id = {
+            let mut sessions = state.sessions.lock().unwrap();
+            let mut project = Project::new("State Element Detach", 96, 48, ModTarget::Forge);
+            let mut region = schema_default_attached_region();
+            region.id = "attached_panel".into();
+            project.attached_regions.push(region);
+            project.elements.push(
+                parse_element_arg(&serde_json::json!({
+                    "id": "panel",
+                    "type": "slot",
+                    "x": 0,
+                    "y": 0,
+                    "size": 18,
+                    "attached_region": "attached_panel"
+                }))
+                .unwrap(),
+            );
+            sessions.create_session(project)
+        };
+        let add_response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "state-add-element-detach",
+                "method": "tools/call",
+                "params": {
+                    "name": "state_add",
+                    "arguments": {
+                        "project_id": project_id,
+                        "id": "collapsed",
+                        "label": "Collapsed"
+                    }
+                }
+            }),
+            &state,
+        );
+        assert!(add_response["error"].is_null(), "{add_response:#}");
+
+        let update_response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "element-update-state-detach",
+                "method": "tools/call",
+                "params": {
+                    "name": "element_update",
+                    "arguments": {
+                        "project_id": project_id,
+                        "id": "panel",
+                        "state_id": "collapsed",
+                        "changes": { "attached_region": null }
+                    }
+                }
+            }),
+            &state,
+        );
+        assert!(update_response["error"].is_null(), "{update_response:#}");
+
+        let sessions = state.sessions.lock().unwrap();
+        let session = sessions.resolve(Some(&project_id)).unwrap();
+        assert_eq!(
+            session
+                .project
+                .find_element("panel")
+                .unwrap()
+                .attached_region
+                .as_deref(),
+            Some("attached_panel")
+        );
+        assert_eq!(
+            session.project.state_overrides["collapsed"].elements["panel"].attached_region,
+            ElementAttachedRegionStateOverride::Detached
+        );
+        assert_eq!(
+            session
+                .project
+                .effective_for_state(Some("collapsed"))
+                .unwrap()
+                .find_element("panel")
+                .unwrap()
+                .attached_region,
+            None
         );
     }
 

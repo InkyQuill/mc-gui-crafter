@@ -425,6 +425,9 @@ State tools:
 Element state overrides allow only `visible`, `x`, `y`, `width`, `height`,
 `attached_region`, and `layer`. Attached-region overrides allow only `visible`,
 `x`, `y`, `width`, and `height`. Group overrides currently allow `visible`.
+For element overrides, `attached_region: null` explicitly detaches the element
+in that state; use `state_override_clear` to inherit the base attached-region
+membership again.
 Existing `element_update` and `element_update_many` default to base-project
 edits. They write state overrides only when `state_id` is provided or
 `edit_scope` is `"state"`; base-only fields such as `content`, `asset`,
