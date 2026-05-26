@@ -174,7 +174,7 @@ function clampMockLayout(layout: EditorLayoutConfig): EditorLayoutConfig {
     version: 1,
     right_dock_width: right,
     properties_width: properties,
-    browser_tab: layout.browser_tab === "assets" ? "assets" : "layers",
+    browser_tab: layout.browser_tab === "assets" || layout.browser_tab === "states" ? layout.browser_tab : "layers",
   };
 }
 

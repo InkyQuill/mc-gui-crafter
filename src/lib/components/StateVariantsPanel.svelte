@@ -5,6 +5,7 @@
   import type { EditScope, ProjectState, StateOverrideTargetKind } from "../types";
 
   let confirmRemoveId = $state<string | null>(null);
+  let confirmClearId = $state<string | null>(null);
   let clearing = $state(false);
 
   let selectedState = $derived.by(() => {
@@ -73,6 +74,7 @@
     await runAction(async () => {
       await project.setActiveState(id, project.editScope);
       confirmRemoveId = null;
+      confirmClearId = null;
     });
   }
 
@@ -115,6 +117,10 @@
 
   async function clearAllOverrides() {
     if (!project.activeStateId || selectedOverrideCount === 0 || clearing) return;
+    if (confirmClearId !== project.activeStateId) {
+      confirmClearId = project.activeStateId;
+      return;
+    }
 
     const stateId = project.activeStateId;
     const overrides = project.stateOverrides[stateId];
@@ -131,7 +137,7 @@
     }
 
     clearing = true;
-    await runAction(async () => {
+    try {
       for (const request of requests) {
         await api.stateOverrideClear({
           state_id: stateId,
@@ -142,8 +148,15 @@
       }
       await project.refreshSessions();
       await project.hydrateActiveProject();
-    }, "State overrides cleared.");
-    clearing = false;
+      confirmClearId = null;
+      status.success("State overrides cleared.");
+    } catch (error) {
+      status.error(readableError(error));
+      await project.refreshSessions();
+      await project.hydrateActiveProject();
+    } finally {
+      clearing = false;
+    }
   }
 </script>
 
@@ -172,7 +185,7 @@
     </button>
   </div>
 
-  <div class="state-list" role="listbox" aria-label="State variants">
+  <div class="state-list" aria-label="State variants">
     {#if project.states.length === 0}
       <p class="muted">No states</p>
     {:else}
@@ -235,11 +248,12 @@
         <span>override targets</span>
       </div>
       <button
+        class:confirming={confirmClearId === selectedState.id}
         onclick={clearAllOverrides}
         disabled={selectedOverrideCount === 0 || clearing}
         title="Clear all overrides for selected state"
       >
-        Clear All
+        {confirmClearId === selectedState.id ? "Confirm Clear" : "Clear All"}
       </button>
     </div>
 
@@ -421,6 +435,11 @@
   .override-section strong {
     color: var(--text);
     margin-right: 4px;
+  }
+
+  .override-section button.confirming {
+    border-color: var(--danger);
+    color: var(--danger);
   }
 
   .danger-row {

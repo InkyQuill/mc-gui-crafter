@@ -176,7 +176,8 @@
         onclick={() => handleToolbarScope("base")}
         title="Edit base layout"
       >
-        Base
+        <span class="scope-full">Base</span>
+        <span class="scope-short">B</span>
       </button>
       <button
         class:active={project.editScope === "state"}
@@ -184,7 +185,8 @@
         onclick={() => handleToolbarScope("state")}
         title="Edit active state overrides"
       >
-        State
+        <span class="scope-full">State</span>
+        <span class="scope-short">S</span>
       </button>
     </div>
   </div>
@@ -345,9 +347,11 @@
   .state-toolbar {
     gap: 5px;
     max-width: clamp(190px, 22vw, 300px);
+    overflow: hidden;
   }
 
   .state-toolbar select {
+    flex: 1 1 82px;
     min-width: 82px;
     max-width: 140px;
     height: 24px;
@@ -367,6 +371,7 @@
   .scope-toggle {
     display: flex;
     align-items: center;
+    flex: 0 0 auto;
     border: 1px solid var(--border);
     border-radius: 4px;
     overflow: hidden;
@@ -377,6 +382,10 @@
     border-radius: 0;
     padding-inline: 7px;
     height: 22px;
+  }
+
+  .scope-short {
+    display: none;
   }
 
   .project-name {
@@ -418,11 +427,28 @@
     }
 
     .state-toolbar {
-      max-width: 170px;
+      gap: 3px;
+      max-width: 132px;
     }
 
     .state-toolbar select {
-      max-width: 94px;
+      flex-basis: 72px;
+      min-width: 64px;
+      max-width: 76px;
+      padding-inline: 5px 16px;
+    }
+
+    .scope-toggle button {
+      width: 24px;
+      padding-inline: 0;
+    }
+
+    .scope-full {
+      display: none;
+    }
+
+    .scope-short {
+      display: inline;
     }
   }
 </style>

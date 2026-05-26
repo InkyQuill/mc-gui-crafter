@@ -49,7 +49,7 @@ impl EditorLayoutConfig {
                 DEFAULT_PROPERTIES_WIDTH.min(max_properties)
             };
         let browser_tab = match self.browser_tab.as_str() {
-            "layers" | "assets" => self.browser_tab,
+            "layers" | "assets" | "states" => self.browser_tab,
             _ => "layers".into(),
         };
         Self {
@@ -267,6 +267,27 @@ mod tests {
         );
         assert_eq!(clamped.window.as_ref().unwrap().x, None);
         assert_eq!(clamped.window.as_ref().unwrap().y, None);
+    }
+
+    #[test]
+    fn layout_config_preserves_states_browser_tab() {
+        let config = AppConfig {
+            mcp_port: Some(49_152),
+            editor_layout: Some(EditorLayoutConfig {
+                version: 1,
+                right_dock_width: DEFAULT_RIGHT_DOCK_WIDTH,
+                properties_width: DEFAULT_PROPERTIES_WIDTH,
+                browser_tab: "states".into(),
+            }),
+            window: Some(WindowConfig::default()),
+        };
+
+        let clamped = config.clamped();
+
+        assert_eq!(
+            clamped.editor_layout.as_ref().unwrap().browser_tab,
+            "states"
+        );
     }
 
     #[test]
