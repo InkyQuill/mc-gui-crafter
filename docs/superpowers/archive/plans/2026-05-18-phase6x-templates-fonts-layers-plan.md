@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust (Tauri 2 backend), TypeScript/Svelte 5 (frontend), `ab_glyph` for TTF rasterization, `zip` for JAR reading.
 
-**Spec:** `docs/superpowers/specs/2026-05-18-phase6x-templates-fonts-layers-design.md`
+**Spec:** `docs/superpowers/archive/specs/2026-05-18-phase6x-templates-fonts-layers-design.md`
 
 ---
 

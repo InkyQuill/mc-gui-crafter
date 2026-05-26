@@ -78,6 +78,15 @@
     editor.resetView(project.guiSize);
   }
 
+  async function handleToolbarStateChange(event: Event) {
+    const stateId = (event.currentTarget as HTMLSelectElement).value || null;
+    await project.setActiveState(stateId, stateId ? project.editScope : "base");
+  }
+
+  async function handleToolbarScope(scope: "base" | "state") {
+    await project.setEditScope(scope);
+  }
+
   function isEditableTarget(target: EventTarget | null): boolean {
     if (!(target instanceof HTMLElement)) return false;
 
@@ -145,6 +154,45 @@
     <span class="zoom-label">{editor.zoom}×</span>
     <button class="icon-button" onclick={() => editor.zoomIn()} title="Zoom in" aria-label="Zoom in">+</button>
     <button class="icon-button" onclick={() => editor.resetView(project.guiSize)} title="Reset view" aria-label="Reset view">⊡</button>
+  </div>
+
+  <div class="toolbar-group state-toolbar">
+    <select
+      aria-label="Active state variant"
+      disabled={!project.isOpen}
+      value={project.activeStateId ?? ""}
+      onchange={handleToolbarStateChange}
+      title="Active state variant"
+    >
+      <option value="">Base</option>
+      {#each project.states as state (state.id)}
+        <option value={state.id}>{state.label || state.id}</option>
+      {/each}
+    </select>
+    <div class="scope-toggle" aria-label="Edit scope">
+      <button
+        class:active={project.editScope === "base"}
+        disabled={!project.isOpen}
+        onclick={() => handleToolbarScope("base")}
+        title="Edit base layout"
+        aria-label="Edit base layout"
+        aria-pressed={project.editScope === "base"}
+      >
+        <span class="scope-full">Base</span>
+        <span class="scope-short">B</span>
+      </button>
+      <button
+        class:active={project.editScope === "state"}
+        disabled={!project.isOpen || !project.activeStateId}
+        onclick={() => handleToolbarScope("state")}
+        title="Edit active state overrides"
+        aria-label="Edit active state overrides"
+        aria-pressed={project.editScope === "state"}
+      >
+        <span class="scope-full">State</span>
+        <span class="scope-short">S</span>
+      </button>
+    </div>
   </div>
 
   <div class="toolbar-group">
@@ -300,6 +348,50 @@
     flex: 0 0 28px;
   }
 
+  .state-toolbar {
+    gap: 5px;
+    max-width: clamp(190px, 22vw, 300px);
+    overflow: hidden;
+  }
+
+  .state-toolbar select {
+    flex: 1 1 82px;
+    min-width: 82px;
+    max-width: 140px;
+    height: 24px;
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    background: var(--surface-raised);
+    color: var(--text);
+    font: inherit;
+    font-size: 12px;
+    padding: 2px 22px 2px 7px;
+  }
+
+  .state-toolbar select:disabled {
+    opacity: 0.35;
+  }
+
+  .scope-toggle {
+    display: flex;
+    align-items: center;
+    flex: 0 0 auto;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    overflow: hidden;
+  }
+
+  .scope-toggle button {
+    border: 0;
+    border-radius: 0;
+    padding-inline: 7px;
+    height: 22px;
+  }
+
+  .scope-short {
+    display: none;
+  }
+
   .project-name {
     margin-left: 0;
     color: var(--muted-text);
@@ -336,6 +428,31 @@
 
     .file-actions {
       max-width: 260px;
+    }
+
+    .state-toolbar {
+      gap: 3px;
+      max-width: 132px;
+    }
+
+    .state-toolbar select {
+      flex-basis: 72px;
+      min-width: 64px;
+      max-width: 76px;
+      padding-inline: 5px 16px;
+    }
+
+    .scope-toggle button {
+      width: 24px;
+      padding-inline: 0;
+    }
+
+    .scope-full {
+      display: none;
+    }
+
+    .scope-short {
+      display: inline;
     }
   }
 </style>

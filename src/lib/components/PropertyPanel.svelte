@@ -12,7 +12,7 @@
     void editor.selectionRevision;
     return editor.selectedElementId;
   });
-  let selectedEl = $derived(selectedElementId ? project.elementById(selectedElementId) : null);
+  let selectedEl = $derived(selectedElementId ? project.effectiveElementById(selectedElementId) : null);
   let selectedTargetSize = $derived.by((): Size | null => {
     if (!selectedEl) return null;
     if (selectedEl.width === undefined || selectedEl.height === undefined) return null;
@@ -25,7 +25,7 @@
   let selectedRegion = $derived.by(() => {
     void editor.regionSelectionRevision;
     const id = editor.selectedAttachedRegionId;
-    return id ? project.attachedRegionById(id) : null;
+    return id ? project.effectiveAttachedRegionById(id) : null;
   });
   let fontOptions = $derived.by(() => {
     const options = project.fonts.filter((font, index, fonts) => fonts.findIndex(candidate => candidate.id === font.id) === index);
@@ -61,6 +61,14 @@
 
   function updateRegion(id: string, changes: Partial<AttachedRegion>) {
     void project.updateAttachedRegion(id, changes);
+  }
+
+  function elementOverrideMarker(field: "visible" | "x" | "y" | "width" | "height" | "attached_region" | "layer"): string {
+    return selectedEl && project.hasElementOverride(selectedEl.id, field) ? "*" : "";
+  }
+
+  function regionOverrideMarker(field: "visible" | "x" | "y" | "width" | "height"): string {
+    return selectedRegion && project.hasAttachedRegionOverride(selectedRegion.id, field) ? "*" : "";
   }
 
   function numberValue(value: string, fallback = 0): number {
@@ -196,6 +204,11 @@
       <div class="prop-row">
         <span class="prop-label">ID</span>
         <span class="prop-value mono">{selectedEl.id}</span>
+        {#if project.hasElementOverride(selectedEl.id)}
+          <button class="override-clear-btn" title="Clear state overrides" onclick={() => project.clearElementOverride(selectedEl.id)}>×</button>
+        {:else if project.isElementStateOwned(selectedEl.id)}
+          <span class="state-marker">Owned</span>
+        {/if}
       </div>
       <div class="prop-row">
         <span class="prop-label">Type</span>
@@ -210,26 +223,32 @@
         {/if}
       </div>
       <div class="prop-row">
-        <label for="prop-x">X</label>
+        <label for="prop-x">X{elementOverrideMarker("x")}</label>
         <input
           id="prop-x"
           type="number"
           value={selectedEl.x}
           oninput={(e) => updateProp("x", parseInt(e.currentTarget.value) || 0)}
         />
+        {#if project.hasElementOverride(selectedEl.id, "x")}
+          <button class="override-clear-btn" title="Clear state override" onclick={() => project.clearElementOverride(selectedEl.id, "x")}>×</button>
+        {/if}
       </div>
       <div class="prop-row">
-        <label for="prop-y">Y</label>
+        <label for="prop-y">Y{elementOverrideMarker("y")}</label>
         <input
           id="prop-y"
           type="number"
           value={selectedEl.y}
           oninput={(e) => updateProp("y", parseInt(e.currentTarget.value) || 0)}
         />
+        {#if project.hasElementOverride(selectedEl.id, "y")}
+          <button class="override-clear-btn" title="Clear state override" onclick={() => project.clearElementOverride(selectedEl.id, "y")}>×</button>
+        {/if}
       </div>
 
       <div class="prop-row">
-        <label for="prop-layer">Layer</label>
+        <label for="prop-layer">Layer{elementOverrideMarker("layer")}</label>
         <select
           id="prop-layer"
           value={selectedEl.layer ?? "background"}
@@ -239,19 +258,37 @@
           <option value="overlay">Overlay</option>
           <option value="animatable">Animatable</option>
         </select>
+        {#if project.hasElementOverride(selectedEl.id, "layer")}
+          <button class="override-clear-btn" title="Clear state override" onclick={() => project.clearElementOverride(selectedEl.id, "layer")}>×</button>
+        {/if}
       </div>
       <div class="prop-row">
-        <label for="prop-attached-region">Region</label>
+        <label for="prop-attached-region">Region{elementOverrideMarker("attached_region")}</label>
         <select
           id="prop-attached-region"
           value={selectedEl.attached_region ?? ""}
           onchange={(e) => updateSelectedElement({ attached_region: e.currentTarget.value || null })}
         >
           <option value="">(none)</option>
-          {#each project.attachedRegions as region (region.id)}
+          {#each project.effectiveAttachedRegions as region (region.id)}
             <option value={region.id}>{region.id}</option>
           {/each}
         </select>
+        {#if project.hasElementOverride(selectedEl.id, "attached_region")}
+          <button class="override-clear-btn" title="Clear state override" onclick={() => project.clearElementOverride(selectedEl.id, "attached_region")}>×</button>
+        {/if}
+      </div>
+      <div class="prop-row">
+        <label for="prop-visible">Visible{elementOverrideMarker("visible")}</label>
+        <input
+          id="prop-visible"
+          type="checkbox"
+          checked={selectedEl.visible ?? true}
+          onchange={(e) => updateSelectedElement({ visible: e.currentTarget.checked })}
+        />
+        {#if project.hasElementOverride(selectedEl.id, "visible")}
+          <button class="override-clear-btn" title="Clear state override" onclick={() => project.clearElementOverride(selectedEl.id, "visible")}>×</button>
+        {/if}
       </div>
 
       {#if selectedEl.type === "slot"}
@@ -266,22 +303,28 @@
         </div>
       {:else if selectedEl.type === "texture" || selectedEl.type === "progress" || selectedEl.type === "fluid_tank" || selectedEl.type === "energy_bar" || selectedEl.type === "button" || selectedEl.type === "toggle_button"}
         <div class="prop-row">
-          <label for="prop-width">Width</label>
+          <label for="prop-width">Width{elementOverrideMarker("width")}</label>
           <input
             id="prop-width"
             type="number"
             value={selectedEl.width ?? ""}
             oninput={(e) => updateProp("width", parseInt(e.currentTarget.value) || undefined)}
           />
+          {#if project.hasElementOverride(selectedEl.id, "width")}
+            <button class="override-clear-btn" title="Clear state override" onclick={() => project.clearElementOverride(selectedEl.id, "width")}>×</button>
+          {/if}
         </div>
         <div class="prop-row">
-          <label for="prop-height">Height</label>
+          <label for="prop-height">Height{elementOverrideMarker("height")}</label>
           <input
             id="prop-height"
             type="number"
             value={selectedEl.height ?? ""}
             oninput={(e) => updateProp("height", parseInt(e.currentTarget.value) || undefined)}
           />
+          {#if project.hasElementOverride(selectedEl.id, "height")}
+            <button class="override-clear-btn" title="Clear state override" onclick={() => project.clearElementOverride(selectedEl.id, "height")}>×</button>
+          {/if}
         </div>
       {/if}
 
@@ -612,6 +655,11 @@
       <div class="prop-row">
         <span class="prop-label">ID</span>
         <span class="prop-value mono">{selectedRegion.id}</span>
+        {#if project.hasAttachedRegionOverride(selectedRegion.id)}
+          <button class="override-clear-btn" title="Clear state overrides" onclick={() => project.clearAttachedRegionOverride(selectedRegion.id)}>×</button>
+        {:else if project.isAttachedRegionStateOwned(selectedRegion.id)}
+          <span class="state-marker">Owned</span>
+        {/if}
       </div>
       <div class="prop-row">
         <label for="prop-region-anchor">Anchor</label>
@@ -626,25 +674,31 @@
         </select>
       </div>
       <div class="prop-row">
-        <label for="prop-region-x">X</label>
+        <label for="prop-region-x">X{regionOverrideMarker("x")}</label>
         <input
           id="prop-region-x"
           type="number"
           value={selectedRegion.x}
           onchange={(e) => updateRegion(selectedRegion.id, { x: numberValue(e.currentTarget.value, selectedRegion.x) })}
         />
+        {#if project.hasAttachedRegionOverride(selectedRegion.id, "x")}
+          <button class="override-clear-btn" title="Clear state override" onclick={() => project.clearAttachedRegionOverride(selectedRegion.id, "x")}>×</button>
+        {/if}
       </div>
       <div class="prop-row">
-        <label for="prop-region-y">Y</label>
+        <label for="prop-region-y">Y{regionOverrideMarker("y")}</label>
         <input
           id="prop-region-y"
           type="number"
           value={selectedRegion.y}
           onchange={(e) => updateRegion(selectedRegion.id, { y: numberValue(e.currentTarget.value, selectedRegion.y) })}
         />
+        {#if project.hasAttachedRegionOverride(selectedRegion.id, "y")}
+          <button class="override-clear-btn" title="Clear state override" onclick={() => project.clearAttachedRegionOverride(selectedRegion.id, "y")}>×</button>
+        {/if}
       </div>
       <div class="prop-row">
-        <label for="prop-region-width">Width</label>
+        <label for="prop-region-width">Width{regionOverrideMarker("width")}</label>
         <input
           id="prop-region-width"
           type="number"
@@ -652,9 +706,12 @@
           value={selectedRegion.width}
           onchange={(e) => updateRegion(selectedRegion.id, { width: Math.max(1, numberValue(e.currentTarget.value, selectedRegion.width)) })}
         />
+        {#if project.hasAttachedRegionOverride(selectedRegion.id, "width")}
+          <button class="override-clear-btn" title="Clear state override" onclick={() => project.clearAttachedRegionOverride(selectedRegion.id, "width")}>×</button>
+        {/if}
       </div>
       <div class="prop-row">
-        <label for="prop-region-height">Height</label>
+        <label for="prop-region-height">Height{regionOverrideMarker("height")}</label>
         <input
           id="prop-region-height"
           type="number"
@@ -662,6 +719,21 @@
           value={selectedRegion.height}
           onchange={(e) => updateRegion(selectedRegion.id, { height: Math.max(1, numberValue(e.currentTarget.value, selectedRegion.height)) })}
         />
+        {#if project.hasAttachedRegionOverride(selectedRegion.id, "height")}
+          <button class="override-clear-btn" title="Clear state override" onclick={() => project.clearAttachedRegionOverride(selectedRegion.id, "height")}>×</button>
+        {/if}
+      </div>
+      <div class="prop-row">
+        <label for="prop-region-visible">Visible{regionOverrideMarker("visible")}</label>
+        <input
+          id="prop-region-visible"
+          type="checkbox"
+          checked={selectedRegion.visible ?? true}
+          onchange={(e) => updateRegion(selectedRegion.id, { visible: e.currentTarget.checked })}
+        />
+        {#if project.hasAttachedRegionOverride(selectedRegion.id, "visible")}
+          <button class="override-clear-btn" title="Clear state override" onclick={() => project.clearAttachedRegionOverride(selectedRegion.id, "visible")}>×</button>
+        {/if}
       </div>
       <div class="prop-row">
         <label for="prop-region-state">State</label>
@@ -783,6 +855,12 @@
     font-size: 11px;
   }
 
+  .state-marker {
+    color: var(--accent);
+    font-size: 9px;
+    text-transform: uppercase;
+  }
+
   .prop-section {
     display: flex;
     flex-direction: column;
@@ -867,6 +945,23 @@
     border-radius: 2px;
     font-family: inherit;
     width: 100%;
+  }
+
+  .override-clear-btn {
+    flex: 0 0 22px;
+    min-width: 22px;
+    height: 22px;
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--accent);
+    border-radius: 2px;
+    cursor: pointer;
+    font-family: monospace;
+    font-size: 11px;
+  }
+
+  .override-clear-btn:hover {
+    background: var(--surface-raised);
   }
 
   .secondary-btn:hover {

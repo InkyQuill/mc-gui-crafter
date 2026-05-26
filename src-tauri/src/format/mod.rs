@@ -1,4 +1,4 @@
-use crate::project::{AssetMetadata, Project};
+use crate::project::{AssetMetadata, Project, ProjectState, ProjectStateOverrides};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::{Read, Write};
@@ -10,6 +10,12 @@ struct LayoutData {
     elements: Vec<crate::project::Element>,
     #[serde(default)]
     groups: Vec<crate::project::Group>,
+    #[serde(default)]
+    attached_regions: Vec<crate::project::AttachedRegion>,
+    #[serde(default)]
+    states: Vec<ProjectState>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    state_overrides: HashMap<String, ProjectStateOverrides>,
     #[serde(default)]
     semantic_groups: Vec<crate::project::SemanticGroup>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
@@ -52,6 +58,9 @@ pub fn load_from_mcgui(path: &str) -> Result<Project, String> {
     let mut project = Project::new(&name, gui_width, gui_height, mod_target);
     project.elements = layout.elements;
     project.groups = layout.groups;
+    project.attached_regions = layout.attached_regions;
+    project.states = layout.states;
+    project.state_overrides = layout.state_overrides;
     project.semantic_groups = layout.semantic_groups;
     project.asset_metadata = layout.asset_metadata;
     project.export_settings = layout.export_settings;
@@ -126,6 +135,9 @@ pub fn save_to_mcgui(project: &Project) -> Result<(), String> {
     let layout = LayoutData {
         elements: project.elements.clone(),
         groups: project.groups.clone(),
+        attached_regions: project.attached_regions.clone(),
+        states: project.states.clone(),
+        state_overrides: project.state_overrides.clone(),
         semantic_groups: project.semantic_groups.clone(),
         asset_metadata: project.asset_metadata.clone(),
         export_settings: project.export_settings.clone(),
@@ -199,9 +211,10 @@ mod tests {
     use super::*;
     use crate::animation::{Animation, AnimationType};
     use crate::project::{
-        AssetMetadata, CodegenMode, Element, ElementType, FillDirection, FontAsset, FontSource,
+        AssetMetadata, AttachedRegion, AttachedRegionAnchor, AttachedRegionState, CodegenMode,
+        Element, ElementStateOverride, ElementType, FillDirection, FontAsset, FontSource,
         GlyphInfo, GlyphMap, Group, Layer, ModTarget, NineSlice, NineSliceMode, Project,
-        ProjectExportSettings, SemanticGroup, SemanticGroupKind, UvRect,
+        ProjectExportSettings, ProjectState, SemanticGroup, SemanticGroupKind, UvRect,
     };
 
     fn temp_project_path() -> String {
@@ -268,6 +281,8 @@ mod tests {
             x: 1,
             y: 2,
             elements: vec!["texture_1".to_string()],
+            visible: None,
+            state_owned: Vec::new(),
         });
         project.animations.push(Animation {
             id: "fill_1".to_string(),
@@ -350,6 +365,53 @@ mod tests {
             }
             FontSource::Minecraft { .. } => panic!("expected TTF font"),
         }
+    }
+
+    #[test]
+    fn mcgui_round_trip_preserves_state_variant_layout_fields() {
+        let path = temp_project_path();
+        let mut project = Project::new("States", 176, 166, ModTarget::Forge);
+        project.project_path = Some(path.clone());
+        project.attached_regions.push(AttachedRegion {
+            id: "drawer".into(),
+            anchor: AttachedRegionAnchor::Right,
+            x: 176,
+            y: 0,
+            width: 54,
+            height: 72,
+            state: AttachedRegionState::Toggleable,
+            kind: None,
+            semantic_group: None,
+            visible: true,
+            state_owned: vec!["expanded".into()],
+        });
+        project.states.push(ProjectState {
+            id: "expanded".into(),
+            label: "Expanded".into(),
+            description: None,
+            initial: true,
+            export_role: Some("expanded".into()),
+        });
+        project
+            .state_overrides
+            .entry("expanded".into())
+            .or_default()
+            .elements
+            .insert(
+                "slot_0".into(),
+                ElementStateOverride {
+                    x: Some(24),
+                    ..Default::default()
+                },
+            );
+
+        save_to_mcgui(&project).unwrap();
+        let loaded = load_from_mcgui(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+
+        assert_eq!(loaded.attached_regions, project.attached_regions);
+        assert_eq!(loaded.states, project.states);
+        assert_eq!(loaded.state_overrides, project.state_overrides);
     }
 
     #[test]

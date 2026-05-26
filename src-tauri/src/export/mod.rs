@@ -20,6 +20,8 @@ pub struct ExportConfig {
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct ExportPreview {
     pub target: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub state_id: Option<String>,
     pub mod_id: String,
     pub package: String,
     pub class_name: String,
@@ -131,7 +133,17 @@ pub fn export_project(
     config: &ExportConfig,
     target: &str,
 ) -> Result<Vec<String>, String> {
-    let plan = plan_export(project, config, target)?;
+    export_project_for_state(project, config, target, None)
+}
+
+pub fn export_project_for_state(
+    project: &Project,
+    config: &ExportConfig,
+    target: &str,
+    state_id: Option<&str>,
+) -> Result<Vec<String>, String> {
+    let export_project = project_for_export_state(project, state_id)?;
+    let plan = plan_export(export_project.as_ref(), config, target, state_id)?;
     if !plan.errors.is_empty() {
         return Err(plan.errors.join("\n"));
     }
@@ -150,12 +162,22 @@ pub fn preview_export(
     config: &ExportConfig,
     target: &str,
 ) -> Result<ExportPreview, String> {
-    let settings = effective_export_settings(project, config);
-    let validation = visual_authoring_validation(project);
+    preview_export_for_state(project, config, target, None)
+}
+
+pub fn preview_export_for_state(
+    project: &Project,
+    config: &ExportConfig,
+    target: &str,
+    state_id: Option<&str>,
+) -> Result<ExportPreview, String> {
+    let export_project = project_for_export_state(project, state_id)?;
+    let settings = effective_export_settings(export_project.as_ref(), config);
+    let validation = visual_authoring_validation(export_project.as_ref());
     let preview_project = if validation.invalid_nine_slice_elements.is_empty() {
-        Cow::Borrowed(project)
+        Cow::Borrowed(export_project.as_ref())
     } else {
-        let mut preview_project = project.clone();
+        let mut preview_project = export_project.as_ref().clone();
         for element in &mut preview_project.elements {
             if validation.invalid_nine_slice_elements.contains(&element.id) {
                 element.render_mode = TextureRenderMode::Plain;
@@ -163,17 +185,19 @@ pub fn preview_export(
         }
         Cow::Owned(preview_project)
     };
-    let plan = plan_export(preview_project.as_ref(), config, target)?;
+    let plan = plan_export(preview_project.as_ref(), config, target, state_id)?;
     let mut warnings = if config.overwrite {
         Vec::new()
     } else {
         existing_file_warnings(&plan.files)
     };
-    warnings.extend(semantic_warnings(project, &settings));
-    warnings.extend(progress_texture_warnings(project));
+    warnings.extend(semantic_warnings(export_project.as_ref(), &settings));
+    warnings.extend(progress_texture_warnings(export_project.as_ref()));
+    warnings.extend(state_variant_warnings(project));
     warnings.extend(validation.warnings);
     Ok(ExportPreview {
         target: plan.target.loader_id().to_string(),
+        state_id: state_id.map(str::to_string),
         mod_id: plan.export.mod_id,
         package: plan.export.package,
         class_name: plan.export.class_name,
@@ -188,10 +212,21 @@ pub fn preview_export(
     })
 }
 
+fn project_for_export_state<'a>(
+    project: &'a Project,
+    state_id: Option<&str>,
+) -> Result<Cow<'a, Project>, String> {
+    match state_id {
+        Some(state_id) => Ok(Cow::Owned(project.effective_for_state(Some(state_id))?)),
+        None => Ok(Cow::Borrowed(project)),
+    }
+}
+
 fn plan_export(
     project: &Project,
     config: &ExportConfig,
     target: &str,
+    state_id: Option<&str>,
 ) -> Result<ExportPlan, String> {
     let target = ExportTarget::parse(target)?;
     let export = SanitizedExport::new(config)?;
@@ -271,7 +306,12 @@ fn plan_export(
     }
 
     let layout_project = project_with_effective_settings(project, &settings);
-    let layout = layout_json_value(&layout_project, textures_json);
+    let layout = match state_id {
+        Some(state_id) => {
+            layout_json_value_for_state(&layout_project, textures_json, Some(state_id))
+        }
+        None => layout_json_value(&layout_project, textures_json),
+    };
     let layout_path = export
         .asset_dir()
         .join(format!("gui/{}_layout.json", export.resource_name));
@@ -381,7 +421,15 @@ fn project_with_effective_settings<'a>(
     }
 }
 
-fn layout_json_value(project: &Project, mut textures_json: serde_json::Value) -> serde_json::Value {
+fn layout_json_value(project: &Project, textures_json: serde_json::Value) -> serde_json::Value {
+    layout_json_value_for_state(project, textures_json, None)
+}
+
+fn layout_json_value_for_state(
+    project: &Project,
+    mut textures_json: serde_json::Value,
+    state_id: Option<&str>,
+) -> serde_json::Value {
     let visual_bounds = project.visual_bounds();
     textures_json["visual_offset_x"] = serde_json::json!(visual_bounds.x);
     textures_json["visual_offset_y"] = serde_json::json!(visual_bounds.y);
@@ -398,17 +446,23 @@ fn layout_json_value(project: &Project, mut textures_json: serde_json::Value) ->
         })
         .collect();
 
-    serde_json::json!({
+    let mut layout = serde_json::json!({
         "gui_size": project.gui_size,
         "visual_bounds": visual_bounds,
         "textures": textures_json,
         "elements": elements_json,
         "groups": project.groups,
+        "states": project.states,
+        "state_overrides": project.state_overrides,
         "semantic_groups": project.semantic_groups,
         "attached_regions": project.attached_regions,
         "animations": project.animations,
         "export_settings": project.export_settings,
-    })
+    });
+    if let Some(state_id) = state_id {
+        layout["effective_state"] = serde_json::json!(state_id);
+    }
+    layout
 }
 
 fn write_file(path: &Path, data: &[u8]) -> Result<(), String> {
@@ -627,6 +681,100 @@ fn progress_source_dimensions(
     } else {
         Some((texture_width, texture_height))
     }
+}
+
+fn state_variant_warnings(project: &Project) -> Vec<String> {
+    let mut warnings = Vec::new();
+    let mut seen_state_ids = HashSet::new();
+    let mut duplicate_state_ids = HashSet::new();
+    let mut initial_count = 0;
+
+    for state in &project.states {
+        if !seen_state_ids.insert(state.id.as_str())
+            && duplicate_state_ids.insert(state.id.as_str())
+        {
+            warnings.push(format!("State id '{}' is duplicated.", state.id));
+        }
+        if state.label.trim().is_empty() {
+            warnings.push(format!("State '{}' has an empty label.", state.id));
+        }
+        if state.initial {
+            initial_count += 1;
+        }
+    }
+
+    if initial_count > 1 {
+        warnings.push(format!(
+            "Project has {initial_count} initial states; only one initial state is expected."
+        ));
+    }
+
+    for (state_id, overrides) in &project.state_overrides {
+        if project.find_state(state_id).is_none() {
+            warnings.push(format!(
+                "State overrides reference missing state '{}'.",
+                state_id
+            ));
+        }
+        for element_id in overrides.elements.keys() {
+            if project.find_element(element_id).is_none() {
+                warnings.push(format!(
+                    "State '{}' override references missing element '{}'.",
+                    state_id, element_id
+                ));
+            }
+        }
+        for group_id in overrides.groups.keys() {
+            if !project.groups.iter().any(|group| group.id == *group_id) {
+                warnings.push(format!(
+                    "State '{}' override references missing group '{}'.",
+                    state_id, group_id
+                ));
+            }
+        }
+        for region_id in overrides.attached_regions.keys() {
+            if project.find_attached_region(region_id).is_none() {
+                warnings.push(format!(
+                    "State '{}' override references missing attached region '{}'.",
+                    state_id, region_id
+                ));
+            }
+        }
+    }
+
+    for region in &project.attached_regions {
+        if region.state_owned.is_empty() {
+            continue;
+        }
+
+        let mut visible_in_owner_state = false;
+        for state_id in &region.state_owned {
+            if project.find_state(state_id).is_none() {
+                warnings.push(format!(
+                    "Attached region '{}' is owned by missing state '{}'.",
+                    region.id, state_id
+                ));
+                continue;
+            }
+            if let Ok(effective) = project.effective_for_state(Some(state_id)) {
+                if effective
+                    .find_attached_region(&region.id)
+                    .is_some_and(|effective_region| effective_region.visible)
+                {
+                    visible_in_owner_state = true;
+                }
+            }
+        }
+
+        if !visible_in_owner_state {
+            warnings.push(format!(
+                "Attached region '{}' is state-owned but is not visible in any owning state.",
+                region.id
+            ));
+        }
+    }
+
+    warnings
 }
 
 fn semantic_warnings(project: &Project, settings: &ProjectExportSettings) -> Vec<String> {
@@ -2234,9 +2382,11 @@ mod tests {
     use super::*;
     use crate::animation::{Animation, AnimationType};
     use crate::project::{
-        AssetMetadata, AttachedRegion, AttachedRegionAnchor, AttachedRegionState, Element,
-        ElementType, FillDirection, Layer, ModTarget, NineSlice, NineSliceMode, SemanticGroup,
-        SemanticGroupKind, Size, SlotRole, TextureRenderMode, UvRect,
+        AssetMetadata, AttachedRegion, AttachedRegionAnchor, AttachedRegionState,
+        AttachedRegionStateOverride, Element, ElementStateOverride, ElementType, FillDirection,
+        GroupStateOverride, Layer, ModTarget, NineSlice, NineSliceMode, ProjectState,
+        ProjectStateOverrides, SemanticGroup, SemanticGroupKind, Size, SlotRole, TextureRenderMode,
+        UvRect,
     };
     use image::{Rgba, RgbaImage};
     use std::collections::HashMap;
@@ -2375,6 +2525,8 @@ mod tests {
                 },
             ],
             groups: Vec::new(),
+            states: Vec::new(),
+            state_overrides: HashMap::new(),
             animations: vec![Animation {
                 id: "cook_progress".to_string(),
                 animation_type: AnimationType::Fill,
@@ -2713,6 +2865,7 @@ mod tests {
             kind: Some("returns_pocket".to_string()),
             semantic_group: Some("food_returns".to_string()),
             visible: true,
+            state_owned: Vec::new(),
         });
 
         let layout = layout_json_value(
@@ -2732,6 +2885,194 @@ mod tests {
             layout["attached_regions"][0]["semantic_group"],
             "food_returns"
         );
+    }
+
+    #[test]
+    fn export_preview_warns_for_missing_state_override_targets() {
+        let output_dir = TempExportDir::new("state-warnings");
+        let mut project = Project::new("State Warnings", 176, 166, ModTarget::Forge);
+        project.states.push(ProjectState {
+            id: "expanded".into(),
+            label: "Expanded".into(),
+            description: None,
+            initial: true,
+            export_role: None,
+        });
+        let mut overrides = ProjectStateOverrides::default();
+        overrides.elements.insert(
+            "missing_panel".into(),
+            ElementStateOverride {
+                x: Some(10),
+                ..Default::default()
+            },
+        );
+        overrides.groups.insert(
+            "missing_group".into(),
+            GroupStateOverride {
+                visible: Some(true),
+            },
+        );
+        overrides.attached_regions.insert(
+            "missing_region".into(),
+            AttachedRegionStateOverride {
+                visible: Some(true),
+                ..Default::default()
+            },
+        );
+        project.state_overrides.insert("expanded".into(), overrides);
+
+        let preview = preview_export(
+            &project,
+            &export_config(output_dir.path(), "StateWarningsGui"),
+            "forge",
+        )
+        .unwrap();
+
+        assert!(preview
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("missing_panel")));
+        assert!(preview
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("missing_group")));
+        assert!(preview
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("missing_region")));
+    }
+
+    #[test]
+    fn export_preview_warns_for_invalid_state_metadata() {
+        let output_dir = TempExportDir::new("state-metadata-warnings");
+        let mut project = Project::new("State Metadata", 176, 166, ModTarget::Forge);
+        project.states.push(ProjectState {
+            id: "expanded".into(),
+            label: "Expanded".into(),
+            description: None,
+            initial: true,
+            export_role: None,
+        });
+        project.states.push(ProjectState {
+            id: "expanded".into(),
+            label: "   ".into(),
+            description: None,
+            initial: true,
+            export_role: None,
+        });
+        project.attached_regions.push(AttachedRegion {
+            id: "drawer".into(),
+            anchor: AttachedRegionAnchor::Right,
+            x: 176,
+            y: 0,
+            width: 48,
+            height: 80,
+            state: AttachedRegionState::Static,
+            kind: None,
+            semantic_group: None,
+            visible: false,
+            state_owned: vec!["expanded".into()],
+        });
+
+        let preview = preview_export(
+            &project,
+            &export_config(output_dir.path(), "StateMetadataGui"),
+            "forge",
+        )
+        .unwrap();
+
+        assert!(preview
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("duplicated")));
+        assert!(preview
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("empty label")));
+        assert!(preview
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("initial states")));
+        assert!(preview
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("not visible in any owning state")));
+    }
+
+    #[test]
+    fn export_layout_includes_state_definitions_and_overrides() {
+        let mut project = Project::new("State Layout", 176, 166, ModTarget::Forge);
+        project.states.push(ProjectState {
+            id: "collapsed".into(),
+            label: "Collapsed".into(),
+            description: None,
+            initial: true,
+            export_role: Some("collapsed".into()),
+        });
+        let mut overrides = ProjectStateOverrides::default();
+        overrides.elements.insert(
+            "panel".into(),
+            ElementStateOverride {
+                x: Some(96),
+                visible: Some(true),
+                ..Default::default()
+            },
+        );
+        project
+            .state_overrides
+            .insert("collapsed".into(), overrides);
+
+        let layout =
+            layout_json_value_for_state(&project, textures_json_for_test(), Some("collapsed"));
+
+        assert_eq!(layout["states"][0]["id"], "collapsed");
+        assert_eq!(layout["states"][0]["export_role"], "collapsed");
+        assert_eq!(
+            layout["state_overrides"]["collapsed"]["elements"]["panel"]["x"],
+            96
+        );
+        assert_eq!(layout["effective_state"], "collapsed");
+    }
+
+    #[test]
+    fn export_preview_can_target_specific_state() {
+        let output_dir = TempExportDir::new("state-export");
+        let mut project = Project::new("State Export", 176, 166, ModTarget::Forge);
+        project
+            .elements
+            .push(button_element("panel", ElementType::Texture, 0, 0, None));
+        project.states.push(ProjectState {
+            id: "expanded".into(),
+            label: "Expanded".into(),
+            description: None,
+            initial: true,
+            export_role: Some("expanded".into()),
+        });
+        let mut overrides = ProjectStateOverrides::default();
+        overrides.elements.insert(
+            "panel".into(),
+            ElementStateOverride {
+                x: Some(96),
+                ..Default::default()
+            },
+        );
+        project.state_overrides.insert("expanded".into(), overrides);
+
+        let preview = preview_export_for_state(
+            &project,
+            &export_config(output_dir.path(), "StateExportGui"),
+            "forge",
+            Some("expanded"),
+        )
+        .unwrap();
+
+        assert_eq!(preview.state_id.as_deref(), Some("expanded"));
+        let layout_path = preview
+            .files
+            .iter()
+            .find(|path| path.ends_with("stateexportgui_layout.json"))
+            .unwrap();
+        assert!(layout_path.contains(output_dir.path().to_string_lossy().as_ref()));
     }
 
     #[test]
@@ -3316,8 +3657,13 @@ mod tests {
                     overwrite: false,
                 };
 
-                let plan =
-                    plan_export(&sample_project(project_target.clone()), &config, target).unwrap();
+                let plan = plan_export(
+                    &sample_project(project_target.clone()),
+                    &config,
+                    target,
+                    None,
+                )
+                .unwrap();
                 let planned_output = plan
                     .files
                     .iter()
@@ -3650,6 +3996,7 @@ mod tests {
             kind: Some("returns_pocket".to_string()),
             semantic_group: Some("food_returns".to_string()),
             visible: true,
+            state_owned: Vec::new(),
         });
 
         export_project(&project, &config, "forge").unwrap();
@@ -4540,7 +4887,7 @@ mod tests {
             settings_override: None,
             overwrite: false,
         };
-        let plan = plan_export(&project, &config, "forge").unwrap();
+        let plan = plan_export(&project, &config, "forge", None).unwrap();
 
         for file in plan.files {
             if file

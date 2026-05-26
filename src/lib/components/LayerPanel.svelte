@@ -61,17 +61,19 @@
   function groupedRows(): LayerRow[] {
     const consumed = new Set<string>();
     const rows: LayerRow[] = [];
-    const reversed = [...project.elements].reverse();
+    const effectiveElements = project.effectiveElements;
+    const effectiveRegions = project.effectiveAttachedRegions;
+    const reversed = [...effectiveElements].reverse();
 
-    for (const region of project.attachedRegions) {
-      const elements = project.elements.filter(element => element.attached_region === region.id);
+    for (const region of effectiveRegions) {
+      const elements = effectiveElements.filter(element => element.attached_region === region.id);
       if (elements.length === 0) continue;
       for (const element of elements) consumed.add(element.id);
       rows.push({ kind: "attached_region", region, meta: attachedRegionMeta(region, elements.length), elements });
     }
 
     for (const semantic of project.semanticGroups) {
-      const elements = project.elements.filter(element => element.inventory_group === semantic.id);
+      const elements = effectiveElements.filter(element => element.inventory_group === semantic.id);
       if (elements.length >= 3) {
         for (const element of elements) consumed.add(element.id);
         rows.push({ kind: "group", id: semantic.id, label: semantic.id, meta: groupMeta(semantic, elements.length), elements });
@@ -80,7 +82,7 @@
 
     for (const group of project.groups) {
       if (rows.some(row => row.kind === "group" && row.id === group.id)) continue;
-      const elements = group.elements.map(id => project.elementById(id)).filter(element => element !== undefined);
+      const elements = group.elements.map(id => project.effectiveElementById(id)).filter(element => element !== undefined);
       if (elements.length >= 3) {
         for (const element of elements) consumed.add(element.id);
         rows.push({ kind: "group", id: group.id, label: group.id, meta: groupMeta(group, elements.length), elements });
@@ -97,6 +99,24 @@
 
   function toggleVisibility(el: Element) {
     project.updateElement(el.id, { visible: !(el.visible ?? true) });
+  }
+
+  function stateBadgeForElement(el: Element): string | null {
+    if (project.hasElementOverride(el.id)) return "Override";
+    if (project.isElementStateOwned(el.id)) return "Owned";
+    return null;
+  }
+
+  function stateBadgeForRegion(region: AttachedRegion): string | null {
+    if (project.hasAttachedRegionOverride(region.id)) return "Override";
+    if (project.isAttachedRegionStateOwned(region.id)) return "Owned";
+    return null;
+  }
+
+  function rowKey(row: LayerRow): string {
+    if (row.kind === "element") return `element:${row.element.id}`;
+    if (row.kind === "attached_region") return `attached_region:${row.region.id}`;
+    return `group:${row.id}`;
   }
 
   let selectedGroupIds = $derived.by(() => {
@@ -126,8 +146,10 @@
 
   let rows = $derived.by(() => {
     void project.revision;
-    void project.elements.length;
-    void project.attachedRegions.length;
+    void project.effectiveElements.length;
+    void project.effectiveAttachedRegions.length;
+    void project.activeStateId;
+    void project.editScope;
     void project.groups.length;
     void project.semanticGroups.length;
     void editor.selectionRevision;
@@ -137,7 +159,7 @@
 </script>
 
 <aside class="layers">
-  <h3>Layers ({project.elements.length})</h3>
+  <h3>Layers ({project.effectiveElements.length})</h3>
   <div class="group-actions">
     <button
       disabled={selectedCount < 2}
@@ -159,9 +181,10 @@
     <p class="muted">No elements</p>
   {:else}
     {#snippet elementRow(el: Element, nested = false)}
-      {@const idx = project.elements.indexOf(el)}
+      {@const idx = project.elements.findIndex(element => element.id === el.id)}
       {@const isBackmost = idx === 0}
       {@const isFrontmost = idx === project.elements.length - 1}
+      {@const stateBadge = stateBadgeForElement(el)}
       <div class="layer-row" class:nested>
         <button
           class="layer-item"
@@ -172,10 +195,22 @@
           <span class="layer-icon">{iconForElement(el)}</span>
           <span class="layer-text">
             <span class="layer-title">{displayId(el.id)}</span>
-            <span class="layer-meta">{elementMeta(el)}</span>
+            <span class="layer-meta">
+              {elementMeta(el)}
+              {#if stateBadge}
+                <span class="state-badge">{stateBadge}</span>
+              {/if}
+            </span>
           </span>
         </button>
         <div class="layer-actions">
+          {#if project.hasElementOverride(el.id)}
+            <button
+              class="clear-btn"
+              onclick={() => project.clearElementOverride(el.id)}
+              title="Clear state overrides"
+            >×</button>
+          {/if}
           <button
             class="reorder-btn"
             disabled={isBackmost}
@@ -200,7 +235,7 @@
     {/snippet}
 
     <div class="layer-list">
-      {#each rows as row}
+      {#each rows as row (rowKey(row))}
         {#if row.kind === "group"}
           <div class="group-row">
             <button class="group-main" onclick={() => toggleGroup(row.id)}>
@@ -217,6 +252,7 @@
             {/each}
           {/if}
         {:else if row.kind === "attached_region"}
+          {@const stateBadge = stateBadgeForRegion(row.region)}
           <div class="group-row">
             <button
               class="group-main"
@@ -229,9 +265,21 @@
               <span class="disclosure">{collapsedGroups.has(`attached:${row.region.id}`) ? "▸" : "▾"}</span>
               <span class="group-text">
                 <span class="group-title">{displayId(row.region.id)}</span>
-                <span class="group-meta">{row.meta}</span>
+                <span class="group-meta">
+                  {row.meta}
+                  {#if stateBadge}
+                    <span class="state-badge">{stateBadge}</span>
+                  {/if}
+                </span>
               </span>
             </button>
+            {#if project.hasAttachedRegionOverride(row.region.id)}
+              <button
+                class="clear-btn group-clear"
+                onclick={() => project.clearAttachedRegionOverride(row.region.id)}
+                title="Clear state overrides"
+              >×</button>
+            {/if}
           </div>
           {#if !collapsedGroups.has(`attached:${row.region.id}`)}
             {#each row.elements as el (el.id)}
@@ -356,6 +404,14 @@
     font-size: 10px;
   }
 
+  .state-badge {
+    display: inline-block;
+    margin-left: 5px;
+    color: var(--accent);
+    font-size: 9px;
+    text-transform: uppercase;
+  }
+
   .layer-item {
     display: grid;
     grid-template-columns: 18px minmax(0, 1fr);
@@ -409,7 +465,7 @@
     gap: 1px;
   }
 
-  .reorder-btn, .visibility-btn {
+  .reorder-btn, .visibility-btn, .clear-btn {
     background: transparent;
     border: 1px solid transparent;
     color: var(--muted-text);
@@ -421,7 +477,7 @@
     min-width: 22px;
   }
 
-  .reorder-btn:hover:not(:disabled), .visibility-btn:hover {
+  .reorder-btn:hover:not(:disabled), .visibility-btn:hover, .clear-btn:hover {
     background: var(--surface-raised);
     color: var(--muted-text);
   }
@@ -433,5 +489,13 @@
 
   .visibility-btn {
     font-size: 10px;
+  }
+
+  .clear-btn {
+    color: var(--accent);
+  }
+
+  .group-clear {
+    align-self: stretch;
   }
 </style>
