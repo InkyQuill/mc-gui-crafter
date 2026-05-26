@@ -19,7 +19,7 @@ export type FillDirection = "left_to_right" | "right_to_left" | "bottom_to_top" 
 
 export type ModTarget = "forge" | "fabric" | "neoforge";
 
-export type BrowserTab = "layers" | "assets";
+export type BrowserTab = "layers" | "assets" | "states";
 
 export interface EditorLayoutConfig {
   version: number;

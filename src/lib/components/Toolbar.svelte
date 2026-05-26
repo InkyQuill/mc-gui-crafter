@@ -78,6 +78,15 @@
     editor.resetView(project.guiSize);
   }
 
+  async function handleToolbarStateChange(event: Event) {
+    const stateId = (event.currentTarget as HTMLSelectElement).value || null;
+    await project.setActiveState(stateId, stateId ? project.editScope : "base");
+  }
+
+  async function handleToolbarScope(scope: "base" | "state") {
+    await project.setEditScope(scope);
+  }
+
   function isEditableTarget(target: EventTarget | null): boolean {
     if (!(target instanceof HTMLElement)) return false;
 
@@ -145,6 +154,39 @@
     <span class="zoom-label">{editor.zoom}×</span>
     <button class="icon-button" onclick={() => editor.zoomIn()} title="Zoom in" aria-label="Zoom in">+</button>
     <button class="icon-button" onclick={() => editor.resetView(project.guiSize)} title="Reset view" aria-label="Reset view">⊡</button>
+  </div>
+
+  <div class="toolbar-group state-toolbar">
+    <select
+      aria-label="Active state variant"
+      disabled={!project.isOpen}
+      value={project.activeStateId ?? ""}
+      onchange={handleToolbarStateChange}
+      title="Active state variant"
+    >
+      <option value="">Base</option>
+      {#each project.states as state (state.id)}
+        <option value={state.id}>{state.label || state.id}</option>
+      {/each}
+    </select>
+    <div class="scope-toggle" aria-label="Edit scope">
+      <button
+        class:active={project.editScope === "base"}
+        disabled={!project.isOpen}
+        onclick={() => handleToolbarScope("base")}
+        title="Edit base layout"
+      >
+        Base
+      </button>
+      <button
+        class:active={project.editScope === "state"}
+        disabled={!project.isOpen || !project.activeStateId}
+        onclick={() => handleToolbarScope("state")}
+        title="Edit active state overrides"
+      >
+        State
+      </button>
+    </div>
   </div>
 
   <div class="toolbar-group">
@@ -300,6 +342,43 @@
     flex: 0 0 28px;
   }
 
+  .state-toolbar {
+    gap: 5px;
+    max-width: clamp(190px, 22vw, 300px);
+  }
+
+  .state-toolbar select {
+    min-width: 82px;
+    max-width: 140px;
+    height: 24px;
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    background: var(--surface-raised);
+    color: var(--text);
+    font: inherit;
+    font-size: 12px;
+    padding: 2px 22px 2px 7px;
+  }
+
+  .state-toolbar select:disabled {
+    opacity: 0.35;
+  }
+
+  .scope-toggle {
+    display: flex;
+    align-items: center;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    overflow: hidden;
+  }
+
+  .scope-toggle button {
+    border: 0;
+    border-radius: 0;
+    padding-inline: 7px;
+    height: 22px;
+  }
+
   .project-name {
     margin-left: 0;
     color: var(--muted-text);
@@ -336,6 +415,14 @@
 
     .file-actions {
       max-width: 260px;
+    }
+
+    .state-toolbar {
+      max-width: 170px;
+    }
+
+    .state-toolbar select {
+      max-width: 94px;
     }
   }
 </style>

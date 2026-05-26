@@ -12,7 +12,7 @@ function clampLayout(layout: Partial<EditorLayoutConfig> | null | undefined): Ed
   const right = Math.min(900, Math.max(360, Math.round(layout?.right_dock_width ?? DEFAULT_EDITOR_LAYOUT.right_dock_width)));
   const maxProperties = Math.max(240, right - 160);
   const properties = Math.min(maxProperties, Math.max(240, Math.round(layout?.properties_width ?? DEFAULT_EDITOR_LAYOUT.properties_width)));
-  const tab: BrowserTab = layout?.browser_tab === "assets" ? "assets" : "layers";
+  const tab: BrowserTab = layout?.browser_tab === "assets" || layout?.browser_tab === "states" ? layout.browser_tab : "layers";
   return {
     version: 1,
     right_dock_width: right,

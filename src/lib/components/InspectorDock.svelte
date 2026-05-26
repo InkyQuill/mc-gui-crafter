@@ -2,6 +2,7 @@
   import PropertyPanel from "./PropertyPanel.svelte";
   import LayerPanel from "./LayerPanel.svelte";
   import AssetLibrary from "./AssetLibrary.svelte";
+  import StateVariantsPanel from "./StateVariantsPanel.svelte";
   import { layout } from "../stores/layout.svelte";
   import type { BrowserTab } from "../types";
 
@@ -60,12 +61,15 @@
     <div class="browser-tabs" role="tablist" aria-label="Editor browsers">
       <button class:active={layout.values.browser_tab === "layers"} onclick={() => setTab("layers")}>Layers</button>
       <button class:active={layout.values.browser_tab === "assets"} onclick={() => setTab("assets")}>Assets</button>
+      <button class:active={layout.values.browser_tab === "states"} onclick={() => setTab("states")}>States</button>
     </div>
     <div class="browser-content">
       {#if layout.values.browser_tab === "layers"}
         <LayerPanel />
-      {:else}
+      {:else if layout.values.browser_tab === "assets"}
         <AssetLibrary />
+      {:else}
+        <StateVariantsPanel />
       {/if}
     </div>
   </section>
