@@ -3528,6 +3528,7 @@ mod tests {
                 x: 8,
                 y: 18,
                 elements: vec!["slot_1".to_string(), "slot_2".to_string()],
+                visible: None,
                 state_owned: Vec::new(),
             });
         }
@@ -3954,6 +3955,7 @@ mod tests {
                 x: 108,
                 y: 26,
                 elements: vec!["slot_1".to_string(), "returns_0".to_string()],
+                visible: None,
                 state_owned: Vec::new(),
             });
         }

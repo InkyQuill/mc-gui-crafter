@@ -63,8 +63,14 @@ interface MockSession {
   edit_scope: EditScope;
   can_undo: boolean;
   can_redo: boolean;
-  undoStack: ProjectData[];
-  redoStack: ProjectData[];
+  undoStack: MockSessionSnapshot[];
+  redoStack: MockSessionSnapshot[];
+}
+
+interface MockSessionSnapshot {
+  project: ProjectData;
+  active_state_id: string | null;
+  edit_scope: EditScope;
 }
 
 export interface ElementMoveRequest {
@@ -200,8 +206,34 @@ function updateMockHistoryFlags(session: MockSession) {
   session.can_redo = session.redoStack.length > 0;
 }
 
-function markMockChanged(session: MockSession, previous: ProjectData) {
-  session.undoStack.push(previous);
+function mockSnapshot(
+  session: MockSession,
+  project: ProjectData = session.project,
+  activeStateId = session.active_state_id,
+  editScope = session.edit_scope,
+): MockSessionSnapshot {
+  return {
+    project: clone(project),
+    active_state_id: activeStateId,
+    edit_scope: editScope,
+  };
+}
+
+function restoreMockSnapshot(session: MockSession, snapshot: MockSessionSnapshot): MockSessionSnapshot {
+  const current = mockSnapshot(session);
+  session.project = clone(snapshot.project);
+  session.active_state_id = snapshot.active_state_id;
+  session.edit_scope = snapshot.edit_scope;
+  return current;
+}
+
+function markMockChanged(
+  session: MockSession,
+  previous: ProjectData,
+  previousActiveStateId = session.active_state_id,
+  previousEditScope = session.edit_scope,
+) {
+  session.undoStack.push(mockSnapshot(session, previous, previousActiveStateId, previousEditScope));
   session.redoStack = [];
   session.project.is_dirty = true;
   session.revision += 1;
@@ -835,8 +867,7 @@ async function mockInvoke(cmd: string, args?: Record<string, unknown>): Promise<
       const session = mockSession(args?.project_id);
       const previous = session.undoStack.pop();
       if (!previous) throw "Nothing to undo";
-      session.redoStack.push(clone(session.project));
-      session.project = previous;
+      session.redoStack.push(restoreMockSnapshot(session, previous));
       syncMockAssetMetadataFromProject(session);
       session.project.is_dirty = true;
       session.revision += 1;
@@ -847,8 +878,7 @@ async function mockInvoke(cmd: string, args?: Record<string, unknown>): Promise<
       const session = mockSession(args?.project_id);
       const next = session.redoStack.pop();
       if (!next) throw "Nothing to redo";
-      session.undoStack.push(clone(session.project));
-      session.project = next;
+      session.undoStack.push(restoreMockSnapshot(session, next));
       syncMockAssetMetadataFromProject(session);
       session.project.is_dirty = true;
       session.revision += 1;
@@ -979,6 +1009,8 @@ async function mockInvoke(cmd: string, args?: Record<string, unknown>): Promise<
       const id = String(args?.id);
       if (!(session.project.states ?? []).some(state => state.id === id)) throw `unknown state '${id}'`;
       const previous = clone(session.project);
+      const previousActiveStateId = session.active_state_id;
+      const previousEditScope = session.edit_scope;
       session.project.states = (session.project.states ?? []).filter(state => state.id !== id);
       if (session.project.state_overrides) delete session.project.state_overrides[id];
       session.project.groups = session.project.groups.map(group => ({
@@ -993,7 +1025,7 @@ async function mockInvoke(cmd: string, args?: Record<string, unknown>): Promise<
         session.active_state_id = (session.project.states ?? []).find(state => state.initial)?.id ?? session.project.states?.[0]?.id ?? null;
         session.edit_scope = "base";
       }
-      markMockChanged(session, previous);
+      markMockChanged(session, previous, previousActiveStateId, previousEditScope);
       return clone(session.project);
     }
     case "state_set_active": {

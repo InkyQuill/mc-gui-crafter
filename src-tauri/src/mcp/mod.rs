@@ -463,6 +463,8 @@ struct ProjectMutationSnapshot {
     revision: u64,
     is_dirty: bool,
     project_path: Option<String>,
+    active_state_id: Option<String>,
+    edit_scope: EditScope,
     active_project_id: Option<String>,
 }
 
@@ -482,6 +484,8 @@ fn project_mutation_snapshot(
         revision: session.revision,
         is_dirty: session.project.is_dirty,
         project_path: session.project.project_path.clone(),
+        active_state_id: session.active_state_id.clone(),
+        edit_scope: session.edit_scope,
         active_project_id,
     })
 }
@@ -531,7 +535,6 @@ fn is_mutating_tool(tool_name: &str) -> bool {
             | "project_render"
             | "project_screenshot"
             | "state_list"
-            | "state_set_active"
             | "element_list"
             | "group_list"
             | "attached_region_list"
@@ -876,31 +879,50 @@ fn get_tool_definitions() -> Vec<serde_json::Value> {
         td(
             "element_update_many",
             "Update multiple elements atomically in one project revision",
-            project_schema(vec![(
-                "updates",
-                serde_json::json!({
-                    "type": "array",
-                    "description": "Element update patches",
-                    "items": {
-                        "type": "object",
-                            "properties": {
-                                "id": { "type": "string" },
-                                "changes": { "type": "object" },
-                                "state_id": {
-                                    "type": "string",
-                                    "description": "Optional state ID for this update"
+            project_schema(vec![
+                (
+                    "updates",
+                    serde_json::json!({
+                        "type": "array",
+                        "description": "Element update patches",
+                        "items": {
+                            "type": "object",
+                                "properties": {
+                                    "id": { "type": "string" },
+                                    "changes": { "type": "object" },
+                                    "state_id": {
+                                        "type": "string",
+                                        "description": "Optional state ID for this update"
+                                    },
+                                    "edit_scope": {
+                                        "type": "string",
+                                        "enum": ["base", "state"],
+                                        "description": "Set to state to write alpha state overrides"
+                                    }
                                 },
-                                "edit_scope": {
-                                    "type": "string",
-                                    "enum": ["base", "state"],
-                                    "description": "Set to state to write alpha state overrides"
-                                }
-                            },
-                        "required": ["id", "changes"]
-                    }
-                }),
-                true,
-            )]),
+                            "required": ["id", "changes"]
+                        }
+                    }),
+                    true,
+                ),
+                (
+                    "state_id",
+                    serde_json::json!({
+                        "type": "string",
+                        "description": "Optional batch-wide state ID for all updates that do not provide their own state_id"
+                    }),
+                    false,
+                ),
+                (
+                    "edit_scope",
+                    serde_json::json!({
+                        "type": "string",
+                        "enum": ["base", "state"],
+                        "description": "Optional batch-wide edit scope for all updates that do not provide their own edit_scope"
+                    }),
+                    false,
+                ),
+            ]),
         ),
         td(
             "element_resize",
@@ -2143,6 +2165,7 @@ fn slot_grid_add(
         x,
         y,
         elements: element_ids,
+        visible: None,
         state_owned: Vec::new(),
     });
     let semantic_group = match (semantic_group_kind, inventory_group.clone()) {
@@ -3352,6 +3375,7 @@ fn group_upsert(
         x,
         y,
         elements: element_ids,
+        visible: existing.and_then(|group| group.visible),
         state_owned: Vec::new(),
     };
     let mut next_groups = Vec::new();
@@ -4479,6 +4503,51 @@ mod tests {
     }
 
     #[test]
+    fn state_set_active_is_mutating_for_project_changed_detection() {
+        let state = test_state();
+        let project_id = {
+            let mut sessions = state.sessions.lock().unwrap();
+            let mut project = Project::new("State Activation", 176, 166, ModTarget::Forge);
+            project.states.push(ProjectState {
+                id: "expanded".into(),
+                label: "Expanded".into(),
+                description: None,
+                initial: true,
+                export_role: None,
+            });
+            sessions.create_session(project)
+        };
+        let args = serde_json::json!({ "project_id": project_id });
+        let before = project_mutation_snapshot(&state, &args);
+
+        let response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "state-set-active",
+                "method": "tools/call",
+                "params": {
+                    "name": "state_set_active",
+                    "arguments": {
+                        "project_id": project_id,
+                        "state_id": "expanded",
+                        "edit_scope": "state"
+                    }
+                }
+            }),
+            &state,
+        );
+
+        assert!(response["error"].is_null(), "{response:#}");
+        assert!(is_mutating_tool("state_set_active"));
+        assert!(should_emit_project_changed(
+            "state_set_active",
+            &state,
+            &args,
+            before
+        ));
+    }
+
+    #[test]
     fn project_render_and_asset_list_do_not_inline_binary_payloads_by_default() {
         let state = test_state();
         let project_id = {
@@ -4563,6 +4632,7 @@ mod tests {
                 x: 8,
                 y: 18,
                 elements: vec!["a".to_string(), "b".to_string()],
+                visible: None,
                 state_owned: Vec::new(),
             });
             sessions.create_session(project)
@@ -4784,6 +4854,26 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert!(names.contains(&"element_update_many"));
+    }
+
+    #[test]
+    fn element_update_many_schema_exposes_batch_state_scope() {
+        let tools = get_tool_definitions();
+        let tool = tools
+            .iter()
+            .find(|tool| tool["name"] == "element_update_many")
+            .expect("element_update_many should be listed");
+        let properties = &tool["inputSchema"]["properties"];
+
+        assert_eq!(properties["state_id"]["type"], "string");
+        assert_eq!(
+            properties["edit_scope"]["enum"],
+            serde_json::json!(["base", "state"])
+        );
+        assert!(properties["updates"]["items"]["properties"]
+            .as_object()
+            .unwrap()
+            .contains_key("state_id"));
     }
 
     #[test]
@@ -5215,6 +5305,7 @@ mod tests {
                 x: 8,
                 y: 18,
                 elements: vec!["a".to_string(), "b".to_string()],
+                visible: None,
                 state_owned: Vec::new(),
             });
             sessions.create_session(project)
@@ -5265,6 +5356,7 @@ mod tests {
                 x: 99,
                 y: 77,
                 elements: vec!["a".to_string(), "b".to_string()],
+                visible: None,
                 state_owned: Vec::new(),
             });
             sessions.create_session(project)
@@ -5326,6 +5418,7 @@ mod tests {
                 x: 8,
                 y: 18,
                 elements: vec!["a".to_string(), "b".to_string()],
+                visible: None,
                 state_owned: Vec::new(),
             });
             project.groups.push(crate::project::Group {
@@ -5333,6 +5426,7 @@ mod tests {
                 x: 44,
                 y: 18,
                 elements: vec!["c".to_string(), "d".to_string()],
+                visible: None,
                 state_owned: Vec::new(),
             });
             sessions.create_session(project)
@@ -6732,6 +6826,7 @@ mod tests {
                 x: 108,
                 y: 26,
                 elements: vec!["returns_0".to_string(), "returns_1".to_string()],
+                visible: None,
                 state_owned: Vec::new(),
             });
         }
@@ -8218,6 +8313,7 @@ mod tests {
             x: 1,
             y: 2,
             elements: vec!["other_a".to_string(), "other_b".to_string()],
+            visible: None,
             state_owned: Vec::new(),
         }];
         {

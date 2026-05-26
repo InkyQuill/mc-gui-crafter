@@ -175,6 +175,8 @@
         disabled={!project.isOpen}
         onclick={() => handleToolbarScope("base")}
         title="Edit base layout"
+        aria-label="Edit base layout"
+        aria-pressed={project.editScope === "base"}
       >
         <span class="scope-full">Base</span>
         <span class="scope-short">B</span>
@@ -184,6 +186,8 @@
         disabled={!project.isOpen || !project.activeStateId}
         onclick={() => handleToolbarScope("state")}
         title="Edit active state overrides"
+        aria-label="Edit active state overrides"
+        aria-pressed={project.editScope === "state"}
       >
         <span class="scope-full">State</span>
         <span class="scope-short">S</span>

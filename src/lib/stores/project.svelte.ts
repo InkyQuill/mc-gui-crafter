@@ -477,6 +477,11 @@ export class ProjectStore {
 
     const stateFields = this.pickElementStateOverrideFields(changes);
     const baseChanges = this.omitElementStateOverrideFields(changes);
+    if (this.isEditingStateOverrides && el.type === "slot" && changes.size !== undefined) {
+      stateFields.width = changes.size;
+      stateFields.height = changes.size;
+      delete baseChanges.size;
+    }
 
     if (this.isEditingStateOverrides && Object.keys(stateFields).length > 0) {
       await this.commitElementStateOverride(id, stateFields, false);
@@ -812,7 +817,7 @@ export class ProjectStore {
     const override = this.activeStateOverrides?.elements?.[elementId];
     if (!override) return false;
     if (!field) return Object.keys(override).length > 0;
-    return override[field] !== undefined && override[field] !== null;
+    return Object.prototype.hasOwnProperty.call(override, field);
   }
 
   hasAttachedRegionOverride(regionId: string, field?: keyof AttachedRegionStateOverride): boolean {

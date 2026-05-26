@@ -183,6 +183,7 @@ export interface Group {
   x: number;
   y: number;
   elements: string[];
+  visible?: boolean | null;
   state_owned?: string[];
 }
 

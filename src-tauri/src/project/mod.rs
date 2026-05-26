@@ -774,6 +774,8 @@ pub struct Group {
     pub x: i32,
     pub y: i32,
     pub elements: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub visible: Option<bool>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub state_owned: Vec<String>,
 }
@@ -817,9 +819,34 @@ pub struct ProjectSession {
     pub active_state_id: Option<String>,
     pub edit_scope: EditScope,
     #[serde(skip)]
-    pub undo_stack: Vec<Project>,
+    pub undo_stack: Vec<ProjectSessionSnapshot>,
     #[serde(skip)]
-    pub redo_stack: Vec<Project>,
+    pub redo_stack: Vec<ProjectSessionSnapshot>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProjectSessionSnapshot {
+    pub project: Project,
+    pub active_state_id: Option<String>,
+    pub edit_scope: EditScope,
+}
+
+impl ProjectSession {
+    fn snapshot(&self) -> ProjectSessionSnapshot {
+        ProjectSessionSnapshot {
+            project: self.project.clone(),
+            active_state_id: self.active_state_id.clone(),
+            edit_scope: self.edit_scope,
+        }
+    }
+
+    fn restore_snapshot(&mut self, snapshot: ProjectSessionSnapshot) -> ProjectSessionSnapshot {
+        let current = self.snapshot();
+        self.project = snapshot.project;
+        self.active_state_id = snapshot.active_state_id;
+        self.edit_scope = snapshot.edit_scope;
+        current
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -927,7 +954,7 @@ impl ProjectSessionManager {
 
     pub fn record_history(&mut self, project_id: Option<&str>) -> Result<(), String> {
         let session = self.resolve_mut(project_id)?;
-        session.undo_stack.push(session.project.clone());
+        session.undo_stack.push(session.snapshot());
         session.redo_stack.clear();
         Ok(())
     }
@@ -950,7 +977,7 @@ impl ProjectSessionManager {
         let active_id = self.active_project_id.clone();
         let session = self.resolve_mut(project_id)?;
         let previous = session.undo_stack.pop().ok_or("Nothing to undo")?;
-        let current = std::mem::replace(&mut session.project, previous);
+        let current = session.restore_snapshot(previous);
         session.redo_stack.push(current);
         session.revision += 1;
         session.project.is_dirty = true;
@@ -964,7 +991,7 @@ impl ProjectSessionManager {
         let active_id = self.active_project_id.clone();
         let session = self.resolve_mut(project_id)?;
         let next = session.redo_stack.pop().ok_or("Nothing to redo")?;
-        let current = std::mem::replace(&mut session.project, next);
+        let current = session.restore_snapshot(next);
         session.undo_stack.push(current);
         session.revision += 1;
         session.project.is_dirty = true;
@@ -1140,6 +1167,19 @@ impl Project {
             }
         }
 
+        for (group_id, override_value) in &overrides.groups {
+            let Some(group) = effective
+                .groups
+                .iter_mut()
+                .find(|group| group.id == *group_id)
+            else {
+                continue;
+            };
+            if let Some(value) = override_value.visible {
+                group.visible = Some(value);
+            }
+        }
+
         Ok(effective)
     }
 
@@ -1208,6 +1248,41 @@ impl Project {
         self.prune_state_override_target(
             state_id,
             StateOverrideTarget::AttachedRegion(region_id.to_string()),
+        );
+        self.is_dirty = true;
+        Ok(true)
+    }
+
+    pub fn update_group_state_override(
+        &mut self,
+        state_id: &str,
+        group_id: &str,
+        visible: Option<bool>,
+    ) -> Result<bool, String> {
+        if self.find_state(state_id).is_none() {
+            return Err(format!("unknown state '{state_id}'"));
+        }
+        if !self.groups.iter().any(|group| group.id == group_id) {
+            return Err(format!("unknown group '{group_id}'"));
+        }
+
+        let before = self.state_overrides.get(state_id).cloned();
+        let override_value = self
+            .state_overrides
+            .entry(state_id.to_string())
+            .or_default()
+            .groups
+            .entry(group_id.to_string())
+            .or_default();
+        if override_value.visible == visible {
+            self.restore_state_overrides(state_id, before);
+            return Ok(false);
+        }
+
+        override_value.visible = visible;
+        self.prune_state_override_target(
+            state_id,
+            StateOverrideTarget::Group(group_id.to_string()),
         );
         self.is_dirty = true;
         Ok(true)
@@ -1445,6 +1520,7 @@ impl Project {
             x: min_x,
             y: min_y,
             elements: unique_ids,
+            visible: None,
             state_owned: Vec::new(),
         };
         self.groups.push(group.clone());
@@ -1752,6 +1828,40 @@ mod tests {
                 .as_deref(),
             Some("drawer")
         );
+    }
+
+    #[test]
+    fn effective_layout_applies_group_visible_override() {
+        let mut project = Project::new("Group State", 176, 166, ModTarget::Forge);
+        project
+            .elements
+            .push(base_element_for_test("slot_0", ElementType::Slot, 8, 18));
+        project
+            .elements
+            .push(base_element_for_test("slot_1", ElementType::Slot, 26, 18));
+        project.groups.push(Group {
+            id: "machine_slots".into(),
+            x: 8,
+            y: 18,
+            elements: vec!["slot_0".into(), "slot_1".into()],
+            visible: None,
+            state_owned: Vec::new(),
+        });
+        project.states.push(ProjectState {
+            id: "collapsed".into(),
+            label: "Collapsed".into(),
+            description: None,
+            initial: true,
+            export_role: None,
+        });
+
+        project
+            .update_group_state_override("collapsed", "machine_slots", Some(false))
+            .unwrap();
+
+        let effective = project.effective_for_state(Some("collapsed")).unwrap();
+        assert_eq!(project.groups[0].visible, None);
+        assert_eq!(effective.groups[0].visible, Some(false));
     }
 
     #[test]
@@ -2542,6 +2652,20 @@ mod tests {
     fn session_history_undo_redo_restores_snapshots_and_clears_redo() {
         let mut manager = ProjectSessionManager::default();
         let id = manager.create_session(Project::new("History", 176, 166, ModTarget::Forge));
+        manager
+            .resolve_mut(Some(&id))
+            .unwrap()
+            .project
+            .states
+            .push(ProjectState {
+                id: "expanded".into(),
+                label: "Expanded".into(),
+                description: None,
+                initial: true,
+                export_role: None,
+            });
+        manager.resolve_mut(Some(&id)).unwrap().active_state_id = Some("expanded".into());
+        manager.resolve_mut(Some(&id)).unwrap().edit_scope = EditScope::State;
 
         manager.record_history(Some(&id)).unwrap();
         manager
@@ -2549,6 +2673,8 @@ mod tests {
             .unwrap()
             .project
             .add_element(sample_element("slot_1"));
+        manager.resolve_mut(Some(&id)).unwrap().active_state_id = None;
+        manager.resolve_mut(Some(&id)).unwrap().edit_scope = EditScope::Base;
         manager.mark_changed(Some(&id)).unwrap();
 
         let undone = manager.undo(Some(&id)).unwrap();
@@ -2556,12 +2682,29 @@ mod tests {
             manager.resolve(Some(&id)).unwrap().project.elements.len(),
             0
         );
+        assert_eq!(
+            manager
+                .resolve(Some(&id))
+                .unwrap()
+                .active_state_id
+                .as_deref(),
+            Some("expanded")
+        );
+        assert_eq!(
+            manager.resolve(Some(&id)).unwrap().edit_scope,
+            EditScope::State
+        );
         assert_eq!(undone.revision, 2);
 
         manager.redo(Some(&id)).unwrap();
         assert_eq!(
             manager.resolve(Some(&id)).unwrap().project.elements.len(),
             1
+        );
+        assert_eq!(manager.resolve(Some(&id)).unwrap().active_state_id, None);
+        assert_eq!(
+            manager.resolve(Some(&id)).unwrap().edit_scope,
+            EditScope::Base
         );
 
         manager.record_history(Some(&id)).unwrap();
