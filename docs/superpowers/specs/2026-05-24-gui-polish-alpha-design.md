@@ -1,189 +1,195 @@
 # GUI Polish Alpha Design
 
+## Status
+
+This spec is now the remaining GUI polish slice for closed alpha. The original
+editor UX polish scope has mostly been implemented and archived at
+`docs/superpowers/archive/specs/2026-05-24-editor-ux-polish-design.md`.
+
+Implemented behavior such as generated background elements, the inspector dock,
+UV editing, layer/browser density, state variants, config persistence, and
+reset shortcuts should not regress. This document focuses on the remaining
+top-chrome polish needed before alpha.
+
 ## Context
 
-The MCP workflow is now usable, but closed alpha also needs the desktop editor
-to feel dependable for manual authoring. Recent UX reviews found that the
-editor should better expose buttons, progress textures, layers, assets,
-properties, generated backgrounds, and layout persistence.
+The editor now has enough manual authoring surface for closed alpha, but the top
+toolbar has become crowded. Project tabs currently live in the primary toolbar
+beside file actions, view controls, state controls, preferences, and the project
+name. On smaller windows this leaves too little room for open project tabs and
+forces unrelated controls to compete for horizontal space.
 
-This epic is the GUI/editor polish slice for alpha. It complements the MCP,
-visual authoring, and state variant epics without turning into a full workspace
-framework.
+Project tabs are navigation, not a primary command group. They should move into
+a compact secondary toolbar directly under the main toolbar.
 
 ## Goals
 
-- Make new GUI projects visibly start with their generated background panel.
-- Let users add and edit buttons from the UI, including text, tooltip, and icon
-  metadata.
-- Let users choose progress textures and atlas UVs from Properties.
-- Make Properties and Layers usable together on one screen.
-- Reduce Layers panel friction for slot-heavy Minecraft layouts.
-- Persist editor/app geometry and provide reliable reset shortcuts.
-- Keep the closed-alpha UI focused and predictable.
+- Move open-project tabs out of the primary toolbar into a dedicated second row.
+- Give project tabs substantially more horizontal space without hiding core
+  commands.
+- Keep the primary toolbar focused on commands and mode controls.
+- Preserve existing project switching, closing, dirty markers, and hydration
+  behavior.
+- Keep the no-project start screen from losing vertical space to an empty tab
+  row.
+- Improve top-chrome accessibility and overflow behavior as part of the move.
+- Update this spec so it describes current remaining work rather than completed
+  editor polish.
 
 ## Non-Goals
 
-- Do not build a full Blender/Photoshop workspace framework in this epic.
-- Do not implement movable/pinnable arbitrary panels.
-- Do not implement public release settings, installers, or marketplace flows.
-- Do not implement full runtime state toggle codegen.
+- Do not implement draggable/reorderable project tabs.
+- Do not add pinned projects, tab groups, split editors, or workspace profiles.
+- Do not build a movable/pinnable workspace framework.
+- Do not redesign the inspector dock, element palette, canvas, timeline, or
+  status bar in this slice.
+- Do not revisit generated background, UV editor, or config persistence behavior
+  except to prevent regressions.
 
-## New GUI Background Behavior
+## Two-Row Toolbar
 
-Creating a new GUI should create exactly one visible generated background
-texture element by default:
+The top chrome should be structured as two rows within the existing toolbar
+component boundary:
 
-- `id`: stable generated id such as `background`;
-- `type`: `texture`;
-- `asset`: generated GUI panel texture;
-- `x`: `0`;
-- `y`: `0`;
-- `width`: project GUI width;
-- `height`: project GUI height;
-- `layer`: `background`;
-- z-order: bottom-most element.
+- **Primary toolbar**
+  - app logo;
+  - New/Open/Save/Save As/Export;
+  - Undo/Redo;
+  - Grid and zoom controls;
+  - active state selector and Base/State scope toggle;
+  - shortcuts and preferences.
+- **Project tabs toolbar**
+  - open project tabs;
+  - dirty markers;
+  - close buttons;
+  - optional active-project context on the right.
 
-The generated background should appear immediately in the editor, in Layers,
-through MCP `element_list`, and in exports. Templates must avoid duplicate
-backgrounds.
+`ProjectTabs` should be removed from the primary toolbar row. The second row
+should span the available window width so tabs no longer compete with command
+groups. The row should remain compact, roughly the height of the current tab
+buttons, and should use the same restrained editor styling as the rest of the
+app.
 
-The `empty` template description should be updated. It is no longer a blank
-canvas; it is an empty GUI with a generated background panel.
+When there are no open sessions, the project tabs toolbar should not reserve
+visible height. The start screen should keep its current vertical space.
 
-## Progress Editing
+## Project Tabs Behavior
 
-Progress elements must expose their visual source in Properties:
+Existing tab behavior remains the source of truth:
 
-- selected asset;
-- optional UV rectangle;
-- direction;
-- width and height.
+- each open session renders one tab;
+- the active tab is visually distinct and exposes `aria-current`;
+- dirty projects keep a dirty marker;
+- each tab keeps a close button with an accessible name;
+- switching a tab uses the existing project switch flow;
+- closing a tab uses the existing project close flow;
+- switching or closing still clears selection and resets the canvas view as it
+  does today.
 
-The alpha UI should launch the shared UV editor from Properties so the user can
-choose an atlas region. The progress element remains responsible for fill/mask
-behavior. Decorative frames around progress bars should remain normal texture
-elements.
+Long project names should use ellipsis. The active tab or optional right-side
+context may show the full current project title only if it does not reduce tab
+capacity. If that context would crowd the row, the active tab title is enough.
 
-Preview/export should warn when a progress element is sized differently from
-its selected source or UV region, because stretching pixel-art progress arrows
-is often accidental.
+## Overflow And Responsive Rules
 
-## Button Authoring
+The primary toolbar should continue to use compact controls at narrower widths,
+but project tabs must no longer cause primary toolbar clipping.
 
-The UI must allow adding button/toggle button elements, not only editing them
-through MCP.
+The second toolbar owns tab overflow:
 
-Properties for a button should expose:
+- tabs should have a readable minimum width;
+- tabs may flex up to a reasonable maximum width;
+- overflow should stay inside the tab row through horizontal scrolling or a
+  clipped/faded tab strip;
+- overflow must not push command controls offscreen;
+- close buttons should remain reachable for visible tabs.
 
-- button text or fallback label;
-- tooltip;
-- icon asset;
-- icon UV rectangle;
-- layer;
-- semantic/control metadata where available.
+The responsive target is practical desktop use, not a mobile-first redesign.
+The layout should be checked at wide desktop, the existing 940px breakpoint, and
+a narrow desktop/mobile-ish viewport.
 
-Buttons should support standalone PNG icons and atlas-backed icons. Icon UV
-selection should use the same shared UV editor as progress and texture regions.
+## Accessibility
 
-For alpha, icon-only and text-only buttons are the priority. Icon plus text may
-be supported if it fits the existing renderer without complicating the model.
+The tab row should keep clear navigation semantics:
 
-## Inspector Dock
+- the container remains labelled as open projects;
+- active tab state is exposed with `aria-current="page"` or an equivalent
+  pattern already used by the component;
+- close buttons include project-specific `aria-label` text;
+- focus outlines remain visible on tab buttons and close buttons;
+- keyboard tab order follows visual order: primary commands first, project tabs
+  second, workspace content after.
 
-Replace the cramped single right sidebar with a persisted inspector dock that
-keeps Properties and Layers available at the same time.
+The primary toolbar's state scope buttons and icon buttons should keep their
+current accessible names and pressed/disabled state behavior.
 
-The right side contains two adjacent columns:
+## Component Boundaries
 
-- Properties column: always visible while the dock is open;
-- Browser column: tabbed Layers/Assets browser.
+`Toolbar.svelte` remains responsible for command handlers and project-tab
+callbacks:
 
-The layout should be horizontally resizable with safe min/max clamps. Saved
-values must never allow a panel to disappear or take over the entire editor.
+- `handleSwitchProject`;
+- `handleCloseProject`;
+- file actions;
+- undo/redo;
+- view controls;
+- state selector and edit-scope changes.
 
-This is inspired by professional editor workflows: select from Layers, edit in
-Properties immediately. GIMP is not a UX reference for this work.
+`ProjectTabs.svelte` remains a presentation component. It should continue to
+receive:
 
-## Layers And Assets Density
+- `sessions`;
+- `activeProjectId`;
+- `onswitch`;
+- `onclose`.
 
-Layers should become compact enough for slot-heavy GUIs:
+The implementation should not introduce new store state for tab placement. The
+move is layout-only unless a small derived display helper is needed.
 
-- use two-line element rows when needed;
-- show id/name on the primary line;
-- show type, layer, slot role, dimensions, direction, visibility, lock, and
-  state markers on the secondary line as space allows;
-- support collapsible project groups and semantic groups;
-- keep player inventory, hotbar, and large slot grids collapsible;
-- selection from Layers must immediately update Properties.
+## Remaining GUI Polish Items
 
-Assets should live beside Layers as a tab in the Browser column and remain
-usable at the new dock width.
+After the tab-row move, the remaining polish pass should cover:
 
-## Configuration And Window Persistence
+- primary toolbar density after `ProjectTabs` is removed;
+- second-row spacing, borders, active state, and empty state;
+- tab overflow behavior with many open projects;
+- no-project layout behavior;
+- high-contrast and light/dark theme compatibility;
+- basic keyboard and screen-reader affordances for the top chrome.
 
-Persist editor layout and window geometry in
-`~/.config/mc-gui-crafter/config.json`, alongside existing application config.
-The app must create `~/.config/mc-gui-crafter` if it does not exist and preserve
-unrelated config fields.
+Future workspace framework scope remains separate:
 
-Persist:
-
-- total right dock width;
-- Properties column width;
-- active Browser tab;
-- app window position and size;
-- editor window position and size where applicable;
-- layout version, starting at `1`.
-
-On startup, invalid or out-of-range values should be clamped or reset to safe
-defaults.
-
-Shortcuts:
-
-- `Ctrl+R`: center/reset the current canvas view state;
-- `Ctrl+Shift+Alt+R`: reset UI layout, dock sizes, app window geometry, and
-  editor window geometry.
-
-The full UI reset should not reset project data, theme, MCP port, recent
-projects, or unrelated config.
-
-## Roadmap Updates
-
-When this epic is implemented, the roadmap should mark the alpha GUI polish
-items as complete and keep a later workspace framework item open.
-
-Future workspace framework scope:
-
-- movable/pinnable panels;
+- movable and pinnable panels;
 - workspace profiles;
-- richer asset/UV panes;
+- richer asset/UV workspace panes;
 - optional stacked or pinned Layers/Assets behavior;
-- more advanced editor window management.
-
-That larger framework is explicitly after closed alpha.
+- advanced project-tab management.
 
 ## Testing
 
-Backend/model tests:
+Automated checks:
 
-- new project creation produces exactly one background texture element;
-- `empty` template metadata reflects the generated panel behavior;
-- save/load round-trips progress asset/UV and button icon/tooltip metadata;
-- config load/save persists dock widths, active tab, and window geometry;
-- invalid layout and window config values clamp to safe defaults;
-- full UI reset preserves unrelated config fields.
+- `pnpm check`;
+- `pnpm run build`;
+- Svelte autofixer on changed `.svelte` files;
+- existing Rust tests should not need changes for this layout-only slice.
 
-Frontend/manual checks:
+Manual checks:
 
-- create a new GUI and confirm the generated background is visible immediately;
-- add a button from UI, edit its text, tooltip, and icon UV;
-- add/select a progress element and change its texture/UV;
-- select elements from Layers and edit them in Properties without switching
-  screens;
-- collapse a large slot group in Layers;
-- resize the right dock, restart, and confirm the layout persists;
-- move/resize the app and editor windows, restart, and confirm geometry
-  persists;
-- use `Ctrl+R` to recenter canvas and `Ctrl+Shift+Alt+R` to reset UI/window
-  geometry.
+- open no project and confirm the second toolbar is hidden;
+- create or open one project and confirm one tab appears in the second toolbar;
+- open multiple projects and confirm tabs have more room than before;
+- switch between projects and confirm selection clears and canvas view resets;
+- close the active project and confirm the next active session behaves as
+  before;
+- confirm dirty markers remain visible;
+- confirm tab close buttons remain accessible and clickable;
+- verify no primary toolbar controls are clipped at wide desktop, around 940px,
+  and a narrow desktop/mobile-ish viewport;
+- verify dark, light, and high-contrast themes keep readable borders, focus
+  rings, and active tab state.
+
+## Roadmap
+
+When implemented, mark the remaining GUI polish/project-tab-toolbar item as
+complete. Keep the larger workspace framework as a future roadmap item.
