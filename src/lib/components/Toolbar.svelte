@@ -273,7 +273,7 @@
     align-items: stretch;
     gap: 8px;
     min-width: 0;
-    height: 30px;
+    height: 36px;
     padding: 0 12px;
     border-top: 1px solid var(--border);
     background: var(--surface);

@@ -47,9 +47,14 @@
     min-width: 0;
     overflow-x: auto;
     overflow-y: hidden;
+    scrollbar-gutter: stable;
     scrollbar-width: thin;
     border-left: 1px solid var(--border);
     border-right: 1px solid var(--border);
+  }
+
+  .project-tabs::-webkit-scrollbar {
+    height: 8px;
   }
 
   .tab {
