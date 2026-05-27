@@ -109,7 +109,6 @@
 - [x] Visual Authoring Alpha implementation plan written.
 - [x] Visual Authoring Alpha implementation complete.
 - [x] Editable State Variants Alpha.
-- [ ] GUI Polish Alpha.
 - [x] More starter templates: advanced machine, fluid tank, brewing stand, anvil, and Custom Grid as a default 3×3 starter layout
 - [x] Minecraft visual fidelity pass: light/dark Minecraft-like themes, generated default GUI textures, and vanilla-aligned template slot metrics
 - [x] Semantic slot roles and semantic group metadata for machine, player, hotbar, scrollable, virtual, upgrade, filter, ghost, and offhand slots
@@ -118,6 +117,7 @@
 - [x] MCP alpha ergonomics: bulk element/grid creation, compact asset metadata, default player inventory/hotbar grids, generated button visuals, and semantic preview warnings
 - [x] MCP/UI polish v2: screenshot previews, button/toggle authoring, icon/tooltip metadata, overwrite previews, and validation polish
 - [x] Editor UX polish: generated background elements, progress texture editing, persisted inspector dock, grouped Layers, reusable UV Editor, and UI/window layout reset
+- [x] GUI polish alpha top chrome: project tabs moved to a dedicated second toolbar row with preserved switching, closing, dirty markers, and overflow behavior
 - [x] Parameterized custom grid generation through MCP `slot_grid_add`
 - [x] Static attached regions: active outside-GUI flair, side panels, return pockets, computed visual bounds, and MCP authoring
 - [ ] Expression support in animation bindings (`cook_time / total_cook_time`)

@@ -124,106 +124,111 @@
 
 <svelte:window onkeydown={handleKeydown} />
 
-<header class="toolbar">
-  <span class="logo">MCGUI Crafter</span>
+<header class="toolbar-shell">
+  <div class="toolbar-primary">
+    <span class="logo">MCGUI Crafter</span>
 
-  <div class="toolbar-group file-actions">
-    <button onclick={() => showNewDialog = true} title="New project">New</button>
-    <button onclick={handleOpen} title="Open .mcgui">Open</button>
-    <button onclick={handleSave} disabled={!project.isOpen} title="Save project">
-      Save{project.isDirty ? " *" : ""}
-    </button>
-    <button onclick={handleSaveAs} disabled={!project.isOpen} title="Save project as">
-      Save As
-    </button>
-    <button onclick={() => showExportDialog = true} disabled={!project.isOpen} title="Export to mod loader code">
-      Export
-    </button>
-  </div>
+    <div class="toolbar-group file-actions">
+      <button onclick={() => showNewDialog = true} title="New project">New</button>
+      <button onclick={handleOpen} title="Open .mcgui">Open</button>
+      <button onclick={handleSave} disabled={!project.isOpen} title="Save project">
+        Save{project.isDirty ? " *" : ""}
+      </button>
+      <button onclick={handleSaveAs} disabled={!project.isOpen} title="Save project as">
+        Save As
+      </button>
+      <button onclick={() => showExportDialog = true} disabled={!project.isOpen} title="Export to mod loader code">
+        Export
+      </button>
+    </div>
 
-  <div class="toolbar-group icon-actions">
-    <button class="icon-button" onclick={handleUndo} disabled={!project.canUndo} title="Undo" aria-label="Undo">↩</button>
-    <button class="icon-button" onclick={handleRedo} disabled={!project.canRedo} title="Redo" aria-label="Redo">↪</button>
-  </div>
+    <div class="toolbar-group icon-actions">
+      <button class="icon-button" onclick={handleUndo} disabled={!project.canUndo} title="Undo" aria-label="Undo">↩</button>
+      <button class="icon-button" onclick={handleRedo} disabled={!project.canRedo} title="Redo" aria-label="Redo">↪</button>
+    </div>
 
-  <div class="toolbar-group">
-    <button onclick={toggleGrid} class:active={editor.showGrid} title="Toggle grid">
-      Grid
-    </button>
-    <button class="icon-button" onclick={() => editor.zoomOut()} title="Zoom out" aria-label="Zoom out">−</button>
-    <span class="zoom-label">{editor.zoom}×</span>
-    <button class="icon-button" onclick={() => editor.zoomIn()} title="Zoom in" aria-label="Zoom in">+</button>
-    <button class="icon-button" onclick={() => editor.resetView(project.guiSize)} title="Reset view" aria-label="Reset view">⊡</button>
-  </div>
+    <div class="toolbar-group">
+      <button onclick={toggleGrid} class:active={editor.showGrid} title="Toggle grid">
+        Grid
+      </button>
+      <button class="icon-button" onclick={() => editor.zoomOut()} title="Zoom out" aria-label="Zoom out">−</button>
+      <span class="zoom-label">{editor.zoom}×</span>
+      <button class="icon-button" onclick={() => editor.zoomIn()} title="Zoom in" aria-label="Zoom in">+</button>
+      <button class="icon-button" onclick={() => editor.resetView(project.guiSize)} title="Reset view" aria-label="Reset view">⊡</button>
+    </div>
 
-  <div class="toolbar-group state-toolbar">
-    <select
-      aria-label="Active state variant"
-      disabled={!project.isOpen}
-      value={project.activeStateId ?? ""}
-      onchange={handleToolbarStateChange}
-      title="Active state variant"
-    >
-      <option value="">Base</option>
-      {#each project.states as state (state.id)}
-        <option value={state.id}>{state.label || state.id}</option>
-      {/each}
-    </select>
-    <div class="scope-toggle" aria-label="Edit scope">
-      <button
-        class:active={project.editScope === "base"}
+    <div class="toolbar-group state-toolbar">
+      <select
+        aria-label="Active state variant"
         disabled={!project.isOpen}
-        onclick={() => handleToolbarScope("base")}
-        title="Edit base layout"
-        aria-label="Edit base layout"
-        aria-pressed={project.editScope === "base"}
+        value={project.activeStateId ?? ""}
+        onchange={handleToolbarStateChange}
+        title="Active state variant"
       >
-        <span class="scope-full">Base</span>
-        <span class="scope-short">B</span>
+        <option value="">Base</option>
+        {#each project.states as state (state.id)}
+          <option value={state.id}>{state.label || state.id}</option>
+        {/each}
+      </select>
+      <div class="scope-toggle" aria-label="Edit scope">
+        <button
+          class:active={project.editScope === "base"}
+          disabled={!project.isOpen}
+          onclick={() => handleToolbarScope("base")}
+          title="Edit base layout"
+          aria-label="Edit base layout"
+          aria-pressed={project.editScope === "base"}
+        >
+          <span class="scope-full">Base</span>
+          <span class="scope-short">B</span>
+        </button>
+        <button
+          class:active={project.editScope === "state"}
+          disabled={!project.isOpen || !project.activeStateId}
+          onclick={() => handleToolbarScope("state")}
+          title="Edit active state overrides"
+          aria-label="Edit active state overrides"
+          aria-pressed={project.editScope === "state"}
+        >
+          <span class="scope-full">State</span>
+          <span class="scope-short">S</span>
+        </button>
+      </div>
+    </div>
+
+    <div class="toolbar-group utility-actions">
+      <button
+        class="icon-button"
+        onclick={() => showShortcutsDialog = true}
+        title="Keyboard shortcuts (?)"
+        aria-label="Open keyboard shortcuts"
+      >
+        ?
       </button>
       <button
-        class:active={project.editScope === "state"}
-        disabled={!project.isOpen || !project.activeStateId}
-        onclick={() => handleToolbarScope("state")}
-        title="Edit active state overrides"
-        aria-label="Edit active state overrides"
-        aria-pressed={project.editScope === "state"}
+        class="icon-button"
+        onclick={() => showPreferencesDialog = true}
+        title="Preferences"
+        aria-label="Open preferences"
       >
-        <span class="scope-full">State</span>
-        <span class="scope-short">S</span>
+        ⚙
       </button>
     </div>
   </div>
 
-  <div class="toolbar-group">
-    <button
-      class="icon-button"
-      onclick={() => showShortcutsDialog = true}
-      title="Keyboard shortcuts (?)"
-      aria-label="Open keyboard shortcuts"
-    >
-      ?
-    </button>
-    <button
-      class="icon-button"
-      onclick={() => showPreferencesDialog = true}
-      title="Preferences"
-      aria-label="Open preferences"
-    >
-      ⚙
-    </button>
-  </div>
-
-  <ProjectTabs
-    sessions={project.sessions}
-    activeProjectId={project.activeProjectId}
-    onswitch={handleSwitchProject}
-    onclose={handleCloseProject}
-  />
-
-  <span class="project-name">
-    {project.isOpen ? project.name : "No project"}
-  </span>
+  {#if project.sessions.length > 0}
+    <div class="toolbar-tabs-row">
+      <ProjectTabs
+        sessions={project.sessions}
+        activeProjectId={project.activeProjectId}
+        onswitch={handleSwitchProject}
+        onclose={handleCloseProject}
+      />
+      <span class="project-name">
+        {project.isOpen ? project.name : "No project"}
+      </span>
+    </div>
+  {/if}
 </header>
 
 {#if showNewDialog}
@@ -243,18 +248,35 @@
 {/if}
 
 <style>
-  .toolbar {
+  .toolbar-shell {
+    display: flex;
+    flex-direction: column;
+    flex-shrink: 0;
+    min-width: 0;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    user-select: none;
+  }
+
+  .toolbar-primary {
     display: flex;
     align-items: center;
     gap: 8px;
     padding: 5px 12px;
-    background: var(--surface);
-    border-bottom: 1px solid var(--border);
     height: 36px;
-    flex-shrink: 0;
     min-width: 0;
     overflow: hidden;
-    user-select: none;
+  }
+
+  .toolbar-tabs-row {
+    display: flex;
+    align-items: stretch;
+    gap: 8px;
+    min-width: 0;
+    height: 36px;
+    padding: 0 12px;
+    border-top: 1px solid var(--border);
+    background: var(--surface);
   }
 
   .logo {
@@ -276,8 +298,9 @@
     min-width: 0;
   }
 
-  .toolbar-group:last-of-type {
+  .utility-actions {
     border-right: none;
+    margin-left: auto;
   }
 
   .file-actions {
@@ -393,14 +416,14 @@
   }
 
   .project-name {
-    margin-left: 0;
+    align-self: center;
     color: var(--muted-text);
     font-size: 12px;
-    max-width: 200px;
+    max-width: min(240px, 28vw);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    flex: 0 1 160px;
+    flex: 0 1 auto;
     min-width: 0;
   }
 
@@ -411,8 +434,12 @@
   }
 
   @media (max-width: 940px) {
-    .toolbar {
+    .toolbar-primary {
       gap: 6px;
+      padding-inline: 8px;
+    }
+
+    .toolbar-tabs-row {
       padding-inline: 8px;
     }
 

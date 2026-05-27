@@ -43,18 +43,26 @@
   .project-tabs {
     display: flex;
     align-items: stretch;
-    flex: 1 1 120px;
-    min-width: 90px;
-    overflow: hidden;
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-gutter: stable;
+    scrollbar-width: thin;
     border-left: 1px solid var(--border);
+    border-right: 1px solid var(--border);
+  }
+
+  .project-tabs::-webkit-scrollbar {
+    height: 8px;
   }
 
   .tab {
     display: flex;
     align-items: center;
-    min-width: 72px;
-    max-width: 180px;
-    flex: 1 1 132px;
+    min-width: 112px;
+    max-width: 220px;
+    flex: 1 0 148px;
     border-right: 1px solid var(--border);
     background: var(--surface);
   }
@@ -121,5 +129,12 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  @media (max-width: 940px) {
+    .tab {
+      min-width: 96px;
+      flex-basis: 120px;
+    }
   }
 </style>

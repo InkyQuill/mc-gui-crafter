@@ -9,6 +9,7 @@ node_modules/
 
 # Local agent/runtime state
 .pi/
+.superpowers/
 
 # Build output
 dist/
