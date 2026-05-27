@@ -248,32 +248,35 @@
 {/if}
 
 <style>
+  .toolbar-shell {
+    display: flex;
+    flex-direction: column;
+    flex-shrink: 0;
+    min-width: 0;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    user-select: none;
+  }
+
   .toolbar-primary {
     display: flex;
     align-items: center;
     gap: 8px;
     padding: 5px 12px;
-    background: var(--surface);
-    border-bottom: 1px solid var(--border);
     height: 36px;
-    flex-shrink: 0;
     min-width: 0;
     overflow: hidden;
-    user-select: none;
   }
 
   .toolbar-tabs-row {
     display: flex;
-    align-items: center;
+    align-items: stretch;
     gap: 8px;
-    padding: 0 12px;
-    background: var(--surface);
-    border-bottom: 1px solid var(--border);
-    height: 30px;
-    flex-shrink: 0;
     min-width: 0;
-    overflow: hidden;
-    user-select: none;
+    height: 30px;
+    padding: 0 12px;
+    border-top: 1px solid var(--border);
+    background: var(--surface);
   }
 
   .logo {
@@ -295,8 +298,9 @@
     min-width: 0;
   }
 
-  .toolbar-group:last-of-type {
+  .utility-actions {
     border-right: none;
+    margin-left: auto;
   }
 
   .file-actions {
@@ -412,14 +416,14 @@
   }
 
   .project-name {
-    margin-left: 0;
+    align-self: center;
     color: var(--muted-text);
     font-size: 12px;
-    max-width: 200px;
+    max-width: min(240px, 28vw);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    flex: 0 1 160px;
+    flex: 0 1 auto;
     min-width: 0;
   }
 
@@ -432,6 +436,10 @@
   @media (max-width: 940px) {
     .toolbar-primary {
       gap: 6px;
+      padding-inline: 8px;
+    }
+
+    .toolbar-tabs-row {
       padding-inline: 8px;
     }
 
