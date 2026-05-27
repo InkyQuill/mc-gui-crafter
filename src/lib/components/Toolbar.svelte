@@ -262,6 +262,20 @@
     user-select: none;
   }
 
+  .toolbar-tabs-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0 12px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    height: 30px;
+    flex-shrink: 0;
+    min-width: 0;
+    overflow: hidden;
+    user-select: none;
+  }
+
   .logo {
     font-weight: 700;
     color: var(--accent);
