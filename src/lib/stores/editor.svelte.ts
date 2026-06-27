@@ -12,6 +12,7 @@ class EditorStore {
   selectedElementId = $state<string | null>(null);
   selectedAttachedRegionId = $state<string | null>(null);
   selectedIds = $state<Set<string>>(new Set());
+  selectionAnchorId = $state<string | null>(null);
   zoom = $state(2);
   activeTool = $state<EditorTool>("select");
   toolRevision = $state(0);
@@ -89,15 +90,58 @@ class EditorStore {
       const next = new Set(this.selectedIds);
       if (next.has(id)) {
         next.delete(id);
+        this.selectedElementId = next.size > 0 ? [...next][0] : null;
       } else {
         next.add(id);
+        this.selectedElementId = id;
       }
       this.selectedIds = next;
-      this.selectedElementId = next.size > 0 ? [...next][0] : null;
+      this.selectionAnchorId = id;
     } else {
       this.selectedElementId = id;
       this.selectedIds = id ? new Set([id]) : new Set();
+      this.selectionAnchorId = id;
     }
+    this.selectionRevision += 1;
+  }
+
+  setSelectedElements(ids: string[], primaryId: string | null = ids[0] ?? null): void {
+    if (this.selectedAttachedRegionId !== null) {
+      this.selectedAttachedRegionId = null;
+      this.regionSelectionRevision += 1;
+    }
+
+    const next = new Set(ids);
+    const primary = primaryId && next.has(primaryId) ? primaryId : ids.find(id => next.has(id)) ?? null;
+    this.selectedIds = next;
+    this.selectedElementId = primary;
+    this.selectionAnchorId = primary;
+    this.selectionRevision += 1;
+  }
+
+  selectElementRange(orderedIds: string[], targetId: string, additive = false): void {
+    const targetIndex = orderedIds.indexOf(targetId);
+    const anchorIndex = this.selectionAnchorId ? orderedIds.indexOf(this.selectionAnchorId) : -1;
+
+    if (targetIndex === -1 || anchorIndex === -1) {
+      this.selectElement(targetId);
+      return;
+    }
+
+    if (this.selectedAttachedRegionId !== null) {
+      this.selectedAttachedRegionId = null;
+      this.regionSelectionRevision += 1;
+    }
+
+    const start = Math.min(anchorIndex, targetIndex);
+    const end = Math.max(anchorIndex, targetIndex);
+    const next = additive ? new Set(this.selectedIds) : new Set<string>();
+    for (const id of orderedIds.slice(start, end + 1)) {
+      next.add(id);
+    }
+
+    this.selectedIds = next;
+    this.selectedElementId = targetId;
     this.selectionRevision += 1;
   }
 
@@ -105,6 +149,7 @@ class EditorStore {
     this.selectedAttachedRegionId = id;
     this.selectedElementId = null;
     this.selectedIds = new Set();
+    this.selectionAnchorId = null;
     this.selectionRevision += 1;
     this.regionSelectionRevision += 1;
   }
@@ -116,6 +161,7 @@ class EditorStore {
     }
     this.selectedElementId = null;
     this.selectedIds = new Set();
+    this.selectionAnchorId = null;
     this.selectionRevision += 1;
   }
 

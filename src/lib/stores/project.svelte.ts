@@ -531,6 +531,42 @@ export class ProjectStore {
     await this.hydrateActiveProject();
   }
 
+  async updateElements(patches: api.ElementPatchRequest[]): Promise<Element[]> {
+    if (patches.length === 0) return [];
+
+    const basePatches: api.ElementPatchRequest[] = [];
+    if (this.isEditingStateOverrides) {
+      for (const patch of patches) {
+        const element = this.elements.find(item => item.id === patch.id);
+        if (!element) continue;
+
+        const stateFields = this.pickElementStateOverrideFields(patch.changes);
+        const baseChanges = this.omitElementStateOverrideFields(patch.changes);
+        if (element.type === "slot" && patch.changes.size !== undefined) {
+          stateFields.width = patch.changes.size;
+          stateFields.height = patch.changes.size;
+          delete baseChanges.size;
+        }
+
+        if (Object.keys(stateFields).length > 0) {
+          await this.commitElementStateOverride(patch.id, stateFields, false);
+        }
+        if (Object.keys(baseChanges).length > 0) {
+          basePatches.push({ id: patch.id, changes: baseChanges });
+        }
+      }
+    } else {
+      basePatches.push(...patches);
+    }
+
+    const updated = basePatches.length > 0
+      ? await api.elementUpdateMany(basePatches, this.activeProjectId ?? undefined)
+      : [];
+    await this.refreshSessions();
+    await this.hydrateActiveProject();
+    return updated;
+  }
+
   async updateExportSettings(changes: Partial<ProjectExportSettings>) {
     const next: ProjectExportSettings = {
       ...this.exportSettings,
@@ -910,11 +946,11 @@ export class ProjectStore {
     }
   }
 
-  private pickElementStateOverrideFields(changes: Partial<Element>): StateOverrideFields {
+  private pickElementStateOverrideFields(changes: api.ElementChanges): StateOverrideFields {
     return this.pickAllowedFields(changes, ELEMENT_STATE_OVERRIDE_FIELDS);
   }
 
-  private omitElementStateOverrideFields(changes: Partial<Element>): Partial<Element> {
+  private omitElementStateOverrideFields(changes: api.ElementChanges): api.ElementChanges {
     return this.omitAllowedFields(changes, ELEMENT_STATE_OVERRIDE_FIELDS);
   }
 
