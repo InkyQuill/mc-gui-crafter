@@ -195,12 +195,50 @@ export interface ElementMoveRequest {
   y: number;
 }
 
-export type ElementChanges = Partial<Omit<Element, "id" | "type">>;
+type NullableElementField =
+  | "width"
+  | "height"
+  | "size"
+  | "asset"
+  | "icon"
+  | "icon_uv"
+  | "tooltip"
+  | "direction"
+  | "content"
+  | "font"
+  | "color"
+  | "shadow"
+  | "animation"
+  | "uv"
+  | "nine_slice"
+  | "slot_role"
+  | "slot_index"
+  | "inventory_group"
+  | "scroll_binding"
+  | "scroll_min"
+  | "scroll_max"
+  | "visible_rows"
+  | "total_rows"
+  | "columns"
+  | "target_group"
+  | "binding"
+  | "dock"
+  | "open_width"
+  | "open_height"
+  | "attached_region";
+
+export type ElementChanges = Partial<{
+  [Field in keyof Omit<Element, "id" | "type">]: Field extends NullableElementField
+    ? Element[Field] | null
+    : Element[Field];
+}>;
 
 export interface ElementPatchRequest {
   id: string;
   changes: ElementChanges;
 }
+
+const MOCK_UNDEFINED_NOOP = Symbol("mock undefined element update no-op");
 
 const mockSessions: MockSession[] = [];
 const mockAssetDataUrls = new Map<string, Map<string, string>>();
@@ -539,7 +577,10 @@ function validateMockElementChange(field: string, value: unknown): unknown {
   if (!MOCK_ELEMENT_MUTABLE_FIELDS.has(field)) {
     throw `Invalid element update: ${field} is not a valid field`;
   }
-  if (value === null || value === undefined) {
+  if (value === undefined) {
+    return MOCK_UNDEFINED_NOOP;
+  }
+  if (value === null) {
     if (
       field === "visible" ||
       field === "render_mode" ||
@@ -591,17 +632,11 @@ function applyMockElementChanges(element: Element, changes: unknown): Element {
   }
 
   const object = changes as Record<string, unknown>;
-  if (Object.prototype.hasOwnProperty.call(object, "id") && object.id !== element.id) {
-    throw "Element id cannot be changed";
-  }
-  if (Object.prototype.hasOwnProperty.call(object, "type")) {
-    throw "Element type cannot be changed";
-  }
 
   const next = clone(element) as Element & Record<string, unknown>;
   for (const [key, value] of Object.entries(object)) {
-    if (key === "id" || key === "type") continue;
     const nextValue = validateMockElementChange(key, value);
+    if (nextValue === MOCK_UNDEFINED_NOOP) continue;
     if (nextValue === undefined) {
       delete next[key];
       continue;

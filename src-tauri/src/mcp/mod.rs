@@ -1002,21 +1002,26 @@ fn get_tool_definitions() -> Vec<serde_json::Value> {
                     serde_json::json!({
                         "type": "array",
                         "description": "Element update patches",
+                        "minItems": 1,
                         "items": {
                             "type": "object",
-                                "properties": {
-                                    "id": { "type": "string" },
-                                    "changes": { "type": "object" },
-                                    "state_id": {
-                                        "type": "string",
-                                        "description": "Optional state ID for this update"
-                                    },
-                                    "edit_scope": {
-                                        "type": "string",
-                                        "enum": ["base", "state"],
-                                        "description": "Set to state to write alpha state overrides"
-                                    }
+                            "additionalProperties": false,
+                            "properties": {
+                                "id": { "type": "string" },
+                                "changes": {
+                                    "type": "object",
+                                    "additionalProperties": true
                                 },
+                                "state_id": {
+                                    "type": "string",
+                                    "description": "Optional state ID for this update"
+                                },
+                                "edit_scope": {
+                                    "type": "string",
+                                    "enum": ["base", "state"],
+                                    "description": "Set to state to write alpha state overrides"
+                                },
+                            },
                             "required": ["id", "changes"]
                         }
                     }),
@@ -1547,7 +1552,7 @@ fn props(items: &[(&str, &str, &str, bool)]) -> serde_json::Value {
             required.push((*name).to_string());
         }
     }
-    serde_json::json!({ "type": "object", "properties": properties, "required": required })
+    serde_json::json!({ "type": "object", "properties": properties, "required": required, "additionalProperties": false })
 }
 
 fn project_schema(items: Vec<(&str, serde_json::Value, bool)>) -> serde_json::Value {
@@ -1566,7 +1571,7 @@ fn project_schema(items: Vec<(&str, serde_json::Value, bool)>) -> serde_json::Va
             required.push(name.to_string());
         }
     }
-    serde_json::json!({ "type": "object", "properties": properties, "required": required })
+    serde_json::json!({ "type": "object", "properties": properties, "required": required, "additionalProperties": false })
 }
 
 fn object_schema(items: Vec<(&str, serde_json::Value, bool)>) -> serde_json::Value {
@@ -1578,7 +1583,7 @@ fn object_schema(items: Vec<(&str, serde_json::Value, bool)>) -> serde_json::Val
             required.push(name.to_string());
         }
     }
-    serde_json::json!({ "type": "object", "properties": properties, "required": required })
+    serde_json::json!({ "type": "object", "properties": properties, "required": required, "additionalProperties": false })
 }
 
 fn serde_values<T: Serialize>(values: impl IntoIterator<Item = T>) -> serde_json::Value {
@@ -2836,6 +2841,11 @@ struct ElementPatch {
 }
 
 fn parse_element_patches(args: &serde_json::Value) -> Result<Vec<ElementPatch>, String> {
+    reject_unknown_argument_fields(
+        args,
+        &["project_id", "updates", "state_id", "edit_scope"],
+        "element_update_many",
+    )?;
     let updates = args
         .get("updates")
         .and_then(|value| value.as_array())
@@ -2890,6 +2900,24 @@ fn parse_element_patches(args: &serde_json::Value) -> Result<Vec<ElementPatch>, 
         });
     }
     Ok(patches)
+}
+
+fn reject_unknown_argument_fields(
+    args: &serde_json::Value,
+    allowed: &[&str],
+    command: &str,
+) -> Result<(), String> {
+    let object = args
+        .as_object()
+        .ok_or_else(|| format!("{command} arguments must be an object"))?;
+    for key in object.keys() {
+        if !allowed.contains(&key.as_str()) {
+            return Err(format!(
+                "Invalid {command} argument: {key} is not a valid field"
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn element_move(
@@ -3289,6 +3317,11 @@ fn element_update(
     project_id: Option<&str>,
     args: &serde_json::Value,
 ) -> Result<serde_json::Value, String> {
+    reject_unknown_argument_fields(
+        args,
+        &["project_id", "id", "changes", "state_id", "edit_scope"],
+        "element_update",
+    )?;
     let id = required_str(args, "id")?;
     let changes = args
         .get("changes")
@@ -7835,6 +7868,115 @@ mod tests {
         assert_eq!(
             response["error"]["message"].as_str().unwrap(),
             "Invalid element update: id is not a mutable field"
+        );
+        assert_eq!(mutation_snapshot_for(&state, &project_id), before);
+        let sessions = state.sessions.lock().unwrap();
+        let session = sessions.resolve(Some(&project_id)).unwrap();
+        assert_eq!(session.project.find_element("a").unwrap().x, 8);
+        assert_eq!(session.revision, 0);
+    }
+
+    #[test]
+    fn element_update_rejects_unknown_root_argument_without_mutation() {
+        let state = test_state();
+        let project_id = {
+            let mut sessions = state.sessions.lock().unwrap();
+            let mut project = Project::new(
+                "Update Reject Unknown Root Argument",
+                176,
+                166,
+                ModTarget::Forge,
+            );
+            project.elements.push(
+                parse_element_arg(&serde_json::json!({
+                    "id": "a",
+                    "type": "slot",
+                    "x": 8,
+                    "y": 18,
+                    "size": 18
+                }))
+                .unwrap(),
+            );
+            sessions.create_session(project)
+        };
+        let before = mutation_snapshot_for(&state, &project_id);
+
+        let response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "update-unknown-root-argument",
+                "method": "tools/call",
+                "params": {
+                    "name": "element_update",
+                    "arguments": {
+                        "project_id": project_id,
+                        "id": "a",
+                        "stateId": "expanded",
+                        "changes": { "x": 12 }
+                    }
+                }
+            }),
+            &state,
+        );
+
+        assert_eq!(
+            response["error"]["message"].as_str().unwrap(),
+            "Invalid element_update argument: stateId is not a valid field"
+        );
+        assert_eq!(mutation_snapshot_for(&state, &project_id), before);
+        let sessions = state.sessions.lock().unwrap();
+        let session = sessions.resolve(Some(&project_id)).unwrap();
+        assert_eq!(session.project.find_element("a").unwrap().x, 8);
+        assert_eq!(session.revision, 0);
+    }
+
+    #[test]
+    fn element_update_many_rejects_unknown_root_argument_without_mutation() {
+        let state = test_state();
+        let project_id = {
+            let mut sessions = state.sessions.lock().unwrap();
+            let mut project = Project::new(
+                "Update Many Reject Unknown Root Argument",
+                176,
+                166,
+                ModTarget::Forge,
+            );
+            project.elements.push(
+                parse_element_arg(&serde_json::json!({
+                    "id": "a",
+                    "type": "slot",
+                    "x": 8,
+                    "y": 18,
+                    "size": 18
+                }))
+                .unwrap(),
+            );
+            sessions.create_session(project)
+        };
+        let before = mutation_snapshot_for(&state, &project_id);
+
+        let response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "update-many-unknown-root-argument",
+                "method": "tools/call",
+                "params": {
+                    "name": "element_update_many",
+                    "arguments": {
+                        "project_id": project_id,
+                        "stateId": "expanded",
+                        "updates": [
+                            { "id": "a", "changes": { "x": 12 } }
+                        ]
+                    }
+                }
+            }),
+            &state,
+        );
+
+        assert_eq!(
+            response["error"]["message"].as_str().unwrap(),
+            "Invalid element_update_many argument: stateId is not a valid field"
         );
         assert_eq!(mutation_snapshot_for(&state, &project_id), before);
         let sessions = state.sessions.lock().unwrap();
