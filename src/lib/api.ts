@@ -611,6 +611,26 @@ function applyMockElementChanges(element: Element, changes: unknown): Element {
   return next;
 }
 
+function canonicalizeMockElementDefaults(element: Element): Element {
+  const next = clone(element) as Element & Record<string, unknown>;
+  const visible = next.visible === undefined ? true : next.visible;
+  const renderMode = next.render_mode === undefined ? "plain" : next.render_mode;
+  const layer = next.layer === undefined ? "background" : next.layer;
+
+  delete next.visible;
+  delete next.render_mode;
+  delete next.layer;
+
+  next.visible = visible;
+  next.render_mode = renderMode;
+  next.layer = layer;
+  return next;
+}
+
+function mockElementsEqual(left: Element, right: Element): boolean {
+  return JSON.stringify(canonicalizeMockElementDefaults(left)) === JSON.stringify(canonicalizeMockElementDefaults(right));
+}
+
 function mockAssetsForSession(session: MockSession): Map<string, string> {
   let assets = mockAssetDataUrls.get(session.id);
   if (!assets) {
@@ -1510,8 +1530,8 @@ async function mockInvoke(cmd: string, args?: Record<string, unknown>): Promise<
       const index = session.project.elements.findIndex(e => e.id === args?.id);
       const el = session.project.elements[index];
       if (!el) throw "Element not found";
-      const next = applyMockElementChanges(el, args?.changes);
-      if (JSON.stringify(next) !== JSON.stringify(el)) {
+      const next = canonicalizeMockElementDefaults(applyMockElementChanges(el, args?.changes));
+      if (!mockElementsEqual(next, el)) {
         const previous = clone(session.project);
         const refreshGroupPositions = el.x !== next.x || el.y !== next.y;
         session.project.elements[index] = clone(next);
@@ -1535,7 +1555,7 @@ async function mockInvoke(cmd: string, args?: Record<string, unknown>): Promise<
         seen.add(patch.id);
         const current = session.project.elements.find(element => element.id === patch.id);
         if (!current) throw `Element not found: ${patch.id}`;
-        const element = applyMockElementChanges(current, patch.changes);
+        const element = canonicalizeMockElementDefaults(applyMockElementChanges(current, patch.changes));
         return {
           id: patch.id,
           coordinateChanged: current.x !== element.x || current.y !== element.y,
@@ -1545,7 +1565,7 @@ async function mockInvoke(cmd: string, args?: Record<string, unknown>): Promise<
 
       if (nextElements.some(({ id, element }) => {
         const current = session.project.elements.find(currentElement => currentElement.id === id);
-        return JSON.stringify(current) !== JSON.stringify(element);
+        return current !== undefined && !mockElementsEqual(current, element);
       })) {
         const previous = clone(session.project);
         for (const next of nextElements) {
