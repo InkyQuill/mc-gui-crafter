@@ -17,6 +17,8 @@ Photoshop define edit targets.
   and `Shift+click`.
 - Make the properties panel edit all selected objects when a supported field is
   changed.
+- Keep the object-list selection and editor selection frames mirrored so the
+  user always sees the same selected objects in both places.
 - Show mixed values clearly instead of choosing an arbitrary object's value.
 - Remove implicit bulk actions such as "Apply to all slots".
 - Prevent ambiguous geometry edits from the properties panel during
@@ -43,11 +45,18 @@ The object list becomes the primary precise selection surface.
   the primary selection.
 - The primary selected object remains the last clicked selected object. It is
   used for focus, scroll anchoring, and any single-object-only affordance.
+- Editor selection frames mirror the full object-list selection. If an object is
+  selected in the list, its canvas frame is drawn; if a canvas frame is selected,
+  the corresponding list row is selected.
 
 Canvas selection should follow the same modifier model where practical:
 `Ctrl`/`Cmd+click` toggles an object, `Shift+click` may continue to add objects
 for compatibility, and dragging an already-selected object moves the whole
 selected set.
+
+Multi-selection frames are for selection identity and group dragging only. They
+must not draw resize handles or any other resize nodes. Resize handles are a
+single-object affordance only.
 
 ## Property Panel Model
 
@@ -68,8 +77,13 @@ For a mixed-type multi-selection, the panel shows only compositing fields:
 - Attached region
 
 The underlying project field remains `attached_region`; the UI label should be
-`Attached region` so users understand that it assigns selected objects to an
-existing attached region.
+`Attached region`. An attached region is a named geometry and anchoring
+container for elements that live outside or alongside the main GUI rectangle,
+such as side panels, upgrade pockets, return pockets, floating toggles, or
+decorative flair. Child elements keep normal absolute coordinates relative to
+the main GUI origin and store the region id in `attached_region`. Moving the
+region moves its assigned children together; semantic groups still describe
+runtime meaning separately.
 
 ## Mixed Values
 
@@ -117,6 +131,8 @@ Verification should cover:
 - Object-list `Ctrl`/`Cmd+click` toggles selection.
 - Object-list `Shift+click` selects a contiguous visible range.
 - Multi-selected rows are all visibly selected.
+- Canvas selection frames mirror the selected rows in the object list.
+- Multi-selection canvas frames do not draw resize handles.
 - Same-type slot selection exposes slot texture/background fields and applies
   changes to all selected slots.
 - Same-type selection hides or disables position and size fields.
