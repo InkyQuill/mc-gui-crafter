@@ -190,9 +190,11 @@ export interface ElementMoveRequest {
   y: number;
 }
 
+export type ElementChanges = Partial<Omit<Element, "id" | "type">>;
+
 export interface ElementPatchRequest {
   id: string;
-  changes: Partial<Element>;
+  changes: ElementChanges;
 }
 
 const mockSessions: MockSession[] = [];
@@ -371,6 +373,27 @@ function refreshMockGroupPositions(session: MockSession, movedIds: Iterable<stri
     group.x = Math.min(...elements.map(element => element.x));
     group.y = Math.min(...elements.map(element => element.y));
   }
+}
+
+function applyMockElementChanges(element: Element, changes: unknown): Element {
+  if (typeof changes !== "object" || changes === null || Array.isArray(changes)) {
+    throw "Element changes must be an object";
+  }
+
+  const object = changes as Record<string, unknown>;
+  if (Object.prototype.hasOwnProperty.call(object, "id") && object.id !== element.id) {
+    throw "Element id cannot be changed";
+  }
+  if (Object.prototype.hasOwnProperty.call(object, "type")) {
+    throw "Element type cannot be changed";
+  }
+
+  const mutableChanges: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(object)) {
+    if (key === "id" || key === "type") continue;
+    mutableChanges[key] = value;
+  }
+  return { ...element, ...clone(mutableChanges) };
 }
 
 function mockAssetsForSession(session: MockSession): Map<string, string> {
@@ -1270,7 +1293,7 @@ async function mockInvoke(cmd: string, args?: Record<string, unknown>): Promise<
       const session = mockSession(args?.project_id);
       const el = session.project.elements.find(e => e.id === args?.id);
       if (!el) throw "Element not found";
-      const next = { ...el, ...(args?.changes as Partial<Element>) };
+      const next = applyMockElementChanges(el, args?.changes);
       if (JSON.stringify(next) !== JSON.stringify(el)) {
         const previous = clone(session.project);
         Object.assign(el, clone(next));
@@ -1292,22 +1315,25 @@ async function mockInvoke(cmd: string, args?: Record<string, unknown>): Promise<
         seen.add(patch.id);
         const current = session.project.elements.find(element => element.id === patch.id);
         if (!current) throw `Element not found: ${patch.id}`;
-        return { ...current, ...patch.changes };
+        return {
+          id: patch.id,
+          element: applyMockElementChanges(current, patch.changes),
+        };
       });
 
-      if (nextElements.some(next => {
-        const current = session.project.elements.find(element => element.id === next.id);
-        return JSON.stringify(current) !== JSON.stringify(next);
+      if (nextElements.some(({ id, element }) => {
+        const current = session.project.elements.find(currentElement => currentElement.id === id);
+        return JSON.stringify(current) !== JSON.stringify(element);
       })) {
         const previous = clone(session.project);
         for (const next of nextElements) {
           const index = session.project.elements.findIndex(element => element.id === next.id);
-          session.project.elements[index] = clone(next);
+          session.project.elements[index] = clone(next.element);
         }
         markMockChanged(session, previous);
       }
 
-      return nextElements.map(element => clone(element));
+      return nextElements.map(({ element }) => clone(element));
     }
     case "element_resize": {
       const session = mockSession(args?.project_id);
@@ -1752,7 +1778,7 @@ export async function elementMoveMany(moves: ElementMoveRequest[], projectId?: s
   return invoke("element_move_many", { moves, project_id: projectId }) as Promise<Element[]>;
 }
 
-export async function elementUpdate(id: string, changes: Partial<Element>, projectId?: string): Promise<Element> {
+export async function elementUpdate(id: string, changes: ElementChanges, projectId?: string): Promise<Element> {
   const invoke = await getInvoke();
   return invoke("element_update", { id, changes, project_id: projectId }) as Promise<Element>;
 }

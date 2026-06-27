@@ -3806,6 +3806,90 @@ mod tests {
     }
 
     #[test]
+    fn element_update_many_rejects_duplicate_ids_without_changes() {
+        let mut sessions = ProjectSessionManager::default();
+        let project_id = sessions.create_session(Project::new(
+            "Batch Update Duplicate",
+            176,
+            166,
+            ModTarget::Forge,
+        ));
+        sessions
+            .resolve_mut(Some(&project_id))
+            .unwrap()
+            .project
+            .add_element(sample_element("slot_1", 8, 18));
+
+        let error = element_update_many_in_session(
+            &mut sessions,
+            Some(&project_id),
+            vec![
+                ElementPatch {
+                    id: "slot_1".to_string(),
+                    changes: serde_json::json!({ "visible": false }),
+                },
+                ElementPatch {
+                    id: "slot_1".to_string(),
+                    changes: serde_json::json!({ "x": 10 }),
+                },
+            ],
+        )
+        .unwrap_err();
+
+        assert_eq!(error, "Duplicate element update: slot_1");
+        let unchanged = sessions
+            .resolve(Some(&project_id))
+            .unwrap()
+            .project
+            .find_element("slot_1")
+            .unwrap();
+        assert_eq!(unchanged.x, 8);
+        assert!(unchanged.visible);
+        let summary = session_summary(&sessions, &project_id).unwrap();
+        assert_eq!(summary.revision, 0);
+        assert!(!summary.can_undo);
+    }
+
+    #[test]
+    fn element_update_many_noop_preserves_redo() {
+        let mut sessions = ProjectSessionManager::default();
+        let project_id =
+            sessions.create_session(Project::new("Batch Update Redo", 176, 166, ModTarget::Forge));
+        sessions
+            .resolve_mut(Some(&project_id))
+            .unwrap()
+            .project
+            .add_element(sample_element("slot_1", 8, 18));
+
+        element_update_many_in_session(
+            &mut sessions,
+            Some(&project_id),
+            vec![ElementPatch {
+                id: "slot_1".to_string(),
+                changes: serde_json::json!({ "x": 10 }),
+            }],
+        )
+        .unwrap();
+
+        sessions.undo(Some(&project_id)).unwrap();
+        let unchanged = element_update_many_in_session(
+            &mut sessions,
+            Some(&project_id),
+            vec![ElementPatch {
+                id: "slot_1".to_string(),
+                changes: serde_json::json!({ "x": 8 }),
+            }],
+        )
+        .unwrap();
+
+        assert_eq!(unchanged.len(), 1);
+        assert_eq!(unchanged[0].x, 8);
+        let summary = session_summary(&sessions, &project_id).unwrap();
+        assert!(!summary.can_undo);
+        assert!(summary.can_redo);
+    }
+
+    #[test]
     fn element_update_many_failure_is_atomic() {
         let mut sessions = ProjectSessionManager::default();
         let project_id = sessions.create_session(Project::new(
