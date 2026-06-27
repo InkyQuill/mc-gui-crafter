@@ -1,7 +1,7 @@
 <script lang="ts">
   import { project } from "../stores/project.svelte";
   import { editor } from "../stores/editor.svelte";
-  import { appendSessionLog } from "../api";
+  import * as api from "../api";
   import { readableError, status } from "../stores/status.svelte";
   import UvEditorDialog from "./UvEditorDialog.svelte";
   import type { AttachedRegion, AttachedRegionAnchor, AttachedRegionState, CodegenMode, Element, NineSlice, Size, SlotRole, TextureRenderMode, UvRect } from "../types";
@@ -16,15 +16,17 @@
     return editor.selectedElementId;
   });
   let selectedEl = $derived(selectedElementId ? project.effectiveElementById(selectedElementId) : null);
-  let selectedSlotIds = $derived.by(() => {
+  let selectedElements = $derived.by(() => {
     void editor.selectionRevision;
-    const ids = [...editor.selectedIds]
-      .map(id => project.elementById(id))
-      .filter((element): element is Element => element?.type === "slot" || element?.type === "virtual_slot_cell")
-      .map(element => element.id);
-    if (ids.length > 0) return ids;
-    return selectedEl && (selectedEl.type === "slot" || selectedEl.type === "virtual_slot_cell") ? [selectedEl.id] : [];
+    return [...editor.selectedIds]
+      .map(id => project.effectiveElementById(id))
+      .filter((element): element is Element => Boolean(element));
   });
+  let hasMultiSelection = $derived(selectedElements.length > 1);
+  let selectedTypes = $derived(new Set(selectedElements.map(element => element.type)));
+  let isSameTypeMultiSelection = $derived(hasMultiSelection && selectedTypes.size === 1);
+  let isMixedTypeMultiSelection = $derived(hasMultiSelection && selectedTypes.size > 1);
+  let selectedSlots = $derived(selectedElements.filter(element => element.type === "slot" || element.type === "virtual_slot_cell"));
   let selectedTargetSize = $derived.by((): Size | null => {
     if (!selectedEl) return null;
     if (selectedEl.width === undefined || selectedEl.height === undefined) return null;
@@ -65,7 +67,7 @@
       : "";
     if (!mismatch || key === lastLoggedSizeMismatch) return;
     lastLoggedSizeMismatch = key;
-    void appendSessionLog({
+    void api.appendSessionLog({
       level: "warning",
       source: "ui",
       category: "validation",
@@ -98,12 +100,17 @@
     project.updateElement(editor.selectedElementId, { [key]: value });
   }
 
-  function updateTextureProp(key: "asset" | "uv", value: unknown) {
+  function updateTextureProp(key: "asset", value: string | null): void;
+  function updateTextureProp(key: "uv", value: UvRect | null): void;
+  function updateTextureProp(key: "asset" | "uv", value: string | UvRect | null) {
+    const changes: api.ElementChanges = key === "asset"
+      ? { asset: value as string | null }
+      : { uv: value as UvRect | null };
     if (selectedEl?.type === "slot" || selectedEl?.type === "virtual_slot_cell") {
-      updateElementsSequentially(selectedSlotIds, { [key]: value });
+      updateSelectedSlots(changes);
       return;
     }
-    updateProp(key, value);
+    updateProp(key, changes[key]);
   }
 
   function updateSelectedElement(changes: Partial<Element>) {
@@ -113,24 +120,14 @@
 
   function applySlotBackgroundToAllSlots() {
     if (!selectedEl || (selectedEl.type !== "slot" && selectedEl.type !== "virtual_slot_cell")) return;
-    const changes: Partial<Element> = {
+    const changes: api.ElementChanges = {
       asset: selectedEl.asset,
       uv: selectedEl.uv ?? null,
     };
-    updateElementsSequentially(
-      project.elements
-        .filter(element => element.type === "slot" || element.type === "virtual_slot_cell")
-        .map(element => element.id),
-      changes,
-    );
-  }
-
-  function updateElementsSequentially(ids: string[], changes: Partial<Element>) {
-    void (async () => {
-      for (const id of ids) {
-        await project.updateElement(id, changes);
-      }
-    })();
+    const patches = project.elements
+      .filter(element => element.type === "slot" || element.type === "virtual_slot_cell")
+      .map(element => ({ id: element.id, changes }));
+    void project.updateElements(patches);
   }
 
   function updateRegion(id: string, changes: Partial<AttachedRegion>) {
@@ -149,6 +146,69 @@
     const parsed = Number.parseInt(value, 10);
     return Number.isFinite(parsed) ? parsed : fallback;
   }
+
+  type MixedValue<T> = { mixed: true; value: null } | { mixed: false; value: T | null };
+
+  function structurallyEqual(left: unknown, right: unknown): boolean {
+    if (Object.is(left, right)) return true;
+    if (left === null || right === null) return left === right;
+    if (typeof left !== "object" || typeof right !== "object") return false;
+    return JSON.stringify(left) === JSON.stringify(right);
+  }
+
+  function mixedValue<T>(elements: Element[], read: (element: Element) => T): MixedValue<T> {
+    if (elements.length === 0) return { mixed: false, value: null };
+    const value = read(elements[0]);
+    return elements.every(element => structurallyEqual(read(element), value))
+      ? { mixed: false, value }
+      : { mixed: true, value: null };
+  }
+
+  function mixedSelectValue<T extends string | null | undefined>(field: MixedValue<T>): string {
+    return field.mixed ? "__mixed__" : field.value ?? "";
+  }
+
+  function updateSelectedElements(changes: api.ElementChanges) {
+    updateSelectedElementsWhere(() => true, changes);
+  }
+
+  function updateSelectedElementsWhere(predicate: (element: Element) => boolean, changes: api.ElementChanges) {
+    const patches = selectedElements
+      .filter(predicate)
+      .map(element => ({ id: element.id, changes }));
+    void project.updateElements(patches);
+  }
+
+  function updateSelectedSlots(changes: api.ElementChanges) {
+    const selectedSlotIds = selectedSlots.map(element => element.id);
+    const patches = selectedSlotIds.map(id => ({ id, changes }));
+    void project.updateElements(patches);
+  }
+
+  let multiLayer = $derived(mixedValue(selectedElements, element => element.layer ?? "background"));
+  let multiVisible = $derived(mixedValue(selectedElements, element => element.visible ?? true));
+  let multiAttachedRegion = $derived(mixedValue(selectedElements, element => element.attached_region ?? ""));
+  let multiSlotAsset = $derived(mixedValue(selectedSlots, element => element.asset ?? ""));
+  let multiSlotUv = $derived(mixedValue(selectedSlots, element => element.uv ?? null));
+  let multiSlotRole = $derived(mixedValue(selectedSlots, element => element.slot_role ?? ""));
+  let multiInventoryGroup = $derived(mixedValue(selectedSlots, element => element.inventory_group ?? ""));
+  let multiScrollBinding = $derived(mixedValue(selectedSlots, element => element.scroll_binding ?? ""));
+
+  function retainTask6MultiSelectionModel() {
+    void isSameTypeMultiSelection;
+    void isMixedTypeMultiSelection;
+    void mixedSelectValue(multiLayer);
+    void multiVisible;
+    void mixedSelectValue(multiAttachedRegion);
+    void mixedSelectValue(multiSlotAsset);
+    void multiSlotUv;
+    void mixedSelectValue(multiSlotRole);
+    void mixedSelectValue(multiInventoryGroup);
+    void mixedSelectValue(multiScrollBinding);
+    void updateSelectedElements;
+  }
+
+  retainTask6MultiSelectionModel();
 
   function updateUv(key: "x" | "y" | "width" | "height", value: string) {
     if (!selectedEl) return;
@@ -203,7 +263,7 @@
       updateSelectedElement({ icon: asset, icon_uv: uv });
     } else {
       if (selectedEl?.type === "slot" || selectedEl?.type === "virtual_slot_cell") {
-        updateElementsSequentially(selectedSlotIds, { asset, uv });
+        updateSelectedSlots({ asset, uv });
       } else {
         updateSelectedElement({ asset, uv });
       }
@@ -543,7 +603,7 @@
           <select
             id="prop-asset"
             value={selectedEl.asset ?? ""}
-            onchange={(e) => updateTextureProp("asset", e.currentTarget.value || undefined)}
+            onchange={(e) => updateTextureProp("asset", e.currentTarget.value || null)}
           >
             <option value="">(none)</option>
             {#each project.assets as a (a)}
