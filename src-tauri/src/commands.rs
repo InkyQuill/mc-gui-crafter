@@ -3861,6 +3861,44 @@ mod tests {
     }
 
     #[test]
+    fn element_update_rejects_unknown_uv_key_without_changes() {
+        let mut sessions = ProjectSessionManager::default();
+        let project_id = sessions.create_session(Project::new(
+            "Update Unknown UV Key",
+            176,
+            166,
+            ModTarget::Forge,
+        ));
+        sessions
+            .resolve_mut(Some(&project_id))
+            .unwrap()
+            .project
+            .add_element(sample_element("slot_1", 8, 18));
+
+        let error = update_element_in_session(
+            &mut sessions,
+            Some(&project_id),
+            "slot_1",
+            serde_json::json!({
+                "uv": { "x": 1, "y": 2, "width": 16, "height": 16, "extra": true }
+            }),
+        )
+        .unwrap_err();
+
+        assert!(error.contains("unknown field `extra`"), "{error}");
+        let unchanged = sessions
+            .resolve(Some(&project_id))
+            .unwrap()
+            .project
+            .find_element("slot_1")
+            .unwrap();
+        assert!(unchanged.uv.is_none());
+        let summary = session_summary(&sessions, &project_id).unwrap();
+        assert_eq!(summary.revision, 0);
+        assert!(!summary.can_undo);
+    }
+
+    #[test]
     fn element_update_many_changes_multiple_elements_in_one_revision() {
         let mut sessions = ProjectSessionManager::default();
         let project_id =
@@ -3936,6 +3974,54 @@ mod tests {
         let project = &sessions.resolve(Some(&project_id)).unwrap().project;
         assert!(project.find_element("slot_1").unwrap().visible);
         assert!(project.find_element("slot_2").unwrap().visible);
+        let summary = session_summary(&sessions, &project_id).unwrap();
+        assert_eq!(summary.revision, 0);
+        assert!(!summary.can_undo);
+    }
+
+    #[test]
+    fn element_update_many_rejects_unknown_nine_slice_key_without_changes() {
+        let mut sessions = ProjectSessionManager::default();
+        let project_id = sessions.create_session(Project::new(
+            "Batch Update Unknown Nine Slice Key",
+            176,
+            166,
+            ModTarget::Forge,
+        ));
+        let session = sessions.resolve_mut(Some(&project_id)).unwrap();
+        session.project.add_element(sample_element("slot_1", 8, 18));
+        session
+            .project
+            .add_element(sample_element("slot_2", 26, 18));
+
+        let error = element_update_many_in_session(
+            &mut sessions,
+            Some(&project_id),
+            vec![
+                ElementPatch {
+                    id: "slot_1".to_string(),
+                    changes: serde_json::json!({ "visible": false }),
+                },
+                ElementPatch {
+                    id: "slot_2".to_string(),
+                    changes: serde_json::json!({
+                        "nine_slice": {
+                            "left": 2,
+                            "right": 2,
+                            "top": 2,
+                            "bottom": 2,
+                            "extra": true
+                        }
+                    }),
+                },
+            ],
+        )
+        .unwrap_err();
+
+        assert!(error.contains("unknown field `extra`"), "{error}");
+        let project = &sessions.resolve(Some(&project_id)).unwrap().project;
+        assert!(project.find_element("slot_1").unwrap().visible);
+        assert!(project.find_element("slot_2").unwrap().nine_slice.is_none());
         let summary = session_summary(&sessions, &project_id).unwrap();
         assert_eq!(summary.revision, 0);
         assert!(!summary.can_undo);

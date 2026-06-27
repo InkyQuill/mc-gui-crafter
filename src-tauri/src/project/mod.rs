@@ -218,6 +218,7 @@ fn is_default_layer(layer: &Layer) -> bool {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct UvRect {
     pub x: u32,
     pub y: u32,
@@ -239,6 +240,7 @@ fn default_nine_slice_mode() -> NineSliceMode {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct NineSlice {
     pub left: u32,
     pub right: u32,

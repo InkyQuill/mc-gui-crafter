@@ -3264,12 +3264,16 @@ fn element_update(
     if &updated == current {
         return Ok(serde_json::to_value(current).unwrap());
     }
+    let refresh_group_positions = current.x != updated.x || current.y != updated.y;
     sessions.record_history(project_id)?;
     let session = sessions.resolve_mut(project_id)?;
     *session
         .project
         .find_element_mut(id)
         .ok_or("Element not found")? = updated.clone();
+    if refresh_group_positions {
+        refresh_group_positions_for_elements(&mut session.project, &[id.to_string()]);
+    }
     sessions.mark_changed(project_id)?;
     Ok(serde_json::to_value(updated).unwrap())
 }
@@ -3293,7 +3297,7 @@ fn element_update_many(
         return element_update_many_state_overrides(sessions, project_id, &patches);
     }
 
-    let (session_id, updated, changed_count) = {
+    let (session_id, updated, changed_count, coordinate_changed_ids) = {
         let session = sessions.resolve(project_id)?;
         let mut updated = Vec::with_capacity(patches.len());
         for patch in &patches {
@@ -3303,16 +3307,24 @@ fn element_update_many(
                 .ok_or_else(|| format!("Element not found: {}", patch.id))?;
             updated.push(apply_element_changes(current, &patch.changes)?);
         }
-        let changed_count = updated
-            .iter()
-            .filter(|element| {
-                session
-                    .project
-                    .find_element(&element.id)
-                    .is_some_and(|current| current != *element)
-            })
-            .count();
-        (session.id.clone(), updated, changed_count)
+        let mut changed_count = 0usize;
+        let mut coordinate_changed_ids = Vec::new();
+        for element in &updated {
+            if let Some(current) = session.project.find_element(&element.id) {
+                if current != element {
+                    changed_count += 1;
+                }
+                if current.x != element.x || current.y != element.y {
+                    coordinate_changed_ids.push(element.id.clone());
+                }
+            }
+        }
+        (
+            session.id.clone(),
+            updated,
+            changed_count,
+            coordinate_changed_ids,
+        )
     };
 
     if changed_count == 0 {
@@ -3331,6 +3343,7 @@ fn element_update_many(
             .find_element_mut(&element.id)
             .ok_or_else(|| format!("Element not found: {}", element.id))? = element.clone();
     }
+    refresh_group_positions_for_elements(&mut session.project, &coordinate_changed_ids);
     sessions.mark_changed(project_id)?;
 
     Ok(serde_json::json!({
@@ -7357,6 +7370,120 @@ mod tests {
         let session = sessions.resolve(Some(&project_id)).unwrap();
         assert_eq!(session.project.find_element("a").unwrap().x, 8);
         assert_eq!(session.project.find_element("b").unwrap().x, 30);
+        assert_eq!(session.revision, 1);
+    }
+
+    #[test]
+    fn element_update_refreshes_group_position_after_coordinate_change() {
+        let state = test_state();
+        let project_id = {
+            let mut sessions = state.sessions.lock().unwrap();
+            let mut project = Project::new("Update Group Position", 176, 166, ModTarget::Forge);
+            for (id, x) in [("a", 8), ("b", 26)] {
+                project.elements.push(
+                    parse_element_arg(&serde_json::json!({
+                        "id": id,
+                        "type": "slot",
+                        "x": x,
+                        "y": 18,
+                        "size": 18
+                    }))
+                    .unwrap(),
+                );
+            }
+            project.groups.push(crate::project::Group {
+                id: "machine".to_string(),
+                x: 8,
+                y: 18,
+                elements: vec!["a".to_string(), "b".to_string()],
+                visible: None,
+                state_owned: Vec::new(),
+            });
+            sessions.create_session(project)
+        };
+
+        let response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "update-group-position",
+                "method": "tools/call",
+                "params": {
+                    "name": "element_update",
+                    "arguments": {
+                        "project_id": project_id,
+                        "id": "a",
+                        "changes": { "x": 12, "y": 24 }
+                    }
+                }
+            }),
+            &state,
+        );
+
+        assert!(response["error"].is_null(), "{response:#}");
+        let sessions = state.sessions.lock().unwrap();
+        let session = sessions.resolve(Some(&project_id)).unwrap();
+        assert_eq!(
+            (session.project.groups[0].x, session.project.groups[0].y),
+            (12, 18)
+        );
+        assert_eq!(session.revision, 1);
+    }
+
+    #[test]
+    fn element_update_many_refreshes_group_position_after_coordinate_change() {
+        let state = test_state();
+        let project_id = {
+            let mut sessions = state.sessions.lock().unwrap();
+            let mut project =
+                Project::new("Update Many Group Position", 176, 166, ModTarget::Forge);
+            for (id, x) in [("a", 8), ("b", 26)] {
+                project.elements.push(
+                    parse_element_arg(&serde_json::json!({
+                        "id": id,
+                        "type": "slot",
+                        "x": x,
+                        "y": 18,
+                        "size": 18
+                    }))
+                    .unwrap(),
+                );
+            }
+            project.groups.push(crate::project::Group {
+                id: "machine".to_string(),
+                x: 8,
+                y: 18,
+                elements: vec!["a".to_string(), "b".to_string()],
+                visible: None,
+                state_owned: Vec::new(),
+            });
+            sessions.create_session(project)
+        };
+
+        let response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "update-many-group-position",
+                "method": "tools/call",
+                "params": {
+                    "name": "element_update_many",
+                    "arguments": {
+                        "project_id": project_id,
+                        "updates": [
+                            { "id": "a", "changes": { "x": 12, "y": 24 } }
+                        ]
+                    }
+                }
+            }),
+            &state,
+        );
+
+        assert!(response["error"].is_null(), "{response:#}");
+        let sessions = state.sessions.lock().unwrap();
+        let session = sessions.resolve(Some(&project_id)).unwrap();
+        assert_eq!(
+            (session.project.groups[0].x, session.project.groups[0].y),
+            (12, 18)
+        );
         assert_eq!(session.revision, 1);
     }
 
