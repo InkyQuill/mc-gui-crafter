@@ -1454,10 +1454,55 @@ fn apply_element_changes(element: &Element, changes: serde_json::Value) -> Resul
         if key == "id" || key == "type" {
             continue;
         }
+        if !is_mutable_element_field(key) {
+            return Err(format!(
+                "Invalid element update: {key} is not a valid field"
+            ));
+        }
         target.insert(key.clone(), new_value.clone());
     }
 
     serde_json::from_value(value).map_err(|error| format!("Invalid element update: {error}"))
+}
+
+fn is_mutable_element_field(field: &str) -> bool {
+    matches!(
+        field,
+        "x" | "y"
+            | "width"
+            | "height"
+            | "size"
+            | "asset"
+            | "icon"
+            | "icon_uv"
+            | "tooltip"
+            | "direction"
+            | "content"
+            | "font"
+            | "color"
+            | "shadow"
+            | "animation"
+            | "visible"
+            | "uv"
+            | "render_mode"
+            | "nine_slice"
+            | "layer"
+            | "slot_role"
+            | "slot_index"
+            | "inventory_group"
+            | "scroll_binding"
+            | "scroll_min"
+            | "scroll_max"
+            | "visible_rows"
+            | "total_rows"
+            | "columns"
+            | "target_group"
+            | "binding"
+            | "dock"
+            | "open_width"
+            | "open_height"
+            | "attached_region"
+    )
 }
 
 fn create_attached_region_in_session(
@@ -3776,6 +3821,46 @@ mod tests {
     }
 
     #[test]
+    fn element_update_rejects_unknown_key_without_changes() {
+        let mut sessions = ProjectSessionManager::default();
+        let project_id = sessions.create_session(Project::new(
+            "Update Unknown Key",
+            176,
+            166,
+            ModTarget::Forge,
+        ));
+        sessions
+            .resolve_mut(Some(&project_id))
+            .unwrap()
+            .project
+            .add_element(sample_element("slot_1", 8, 18));
+
+        let error = update_element_in_session(
+            &mut sessions,
+            Some(&project_id),
+            "slot_1",
+            serde_json::json!({ "unknown_key": true }),
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            error,
+            "Invalid element update: unknown_key is not a valid field"
+        );
+        let unchanged = sessions
+            .resolve(Some(&project_id))
+            .unwrap()
+            .project
+            .find_element("slot_1")
+            .unwrap();
+        assert_eq!(unchanged.x, 8);
+        assert!(unchanged.visible);
+        let summary = session_summary(&sessions, &project_id).unwrap();
+        assert_eq!(summary.revision, 0);
+        assert!(!summary.can_undo);
+    }
+
+    #[test]
     fn element_update_many_changes_multiple_elements_in_one_revision() {
         let mut sessions = ProjectSessionManager::default();
         let project_id =
@@ -3811,6 +3896,49 @@ mod tests {
         let summary = session_summary(&sessions, &project_id).unwrap();
         assert_eq!(summary.revision, 1);
         assert!(summary.can_undo);
+    }
+
+    #[test]
+    fn element_update_many_rejects_unknown_key_without_changes() {
+        let mut sessions = ProjectSessionManager::default();
+        let project_id = sessions.create_session(Project::new(
+            "Batch Update Unknown Key",
+            176,
+            166,
+            ModTarget::Forge,
+        ));
+        let session = sessions.resolve_mut(Some(&project_id)).unwrap();
+        session.project.add_element(sample_element("slot_1", 8, 18));
+        session
+            .project
+            .add_element(sample_element("slot_2", 26, 18));
+
+        let error = element_update_many_in_session(
+            &mut sessions,
+            Some(&project_id),
+            vec![
+                ElementPatch {
+                    id: "slot_1".to_string(),
+                    changes: serde_json::json!({ "visible": false }),
+                },
+                ElementPatch {
+                    id: "slot_2".to_string(),
+                    changes: serde_json::json!({ "unknown_key": true }),
+                },
+            ],
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            error,
+            "Invalid element update: unknown_key is not a valid field"
+        );
+        let project = &sessions.resolve(Some(&project_id)).unwrap().project;
+        assert!(project.find_element("slot_1").unwrap().visible);
+        assert!(project.find_element("slot_2").unwrap().visible);
+        let summary = session_summary(&sessions, &project_id).unwrap();
+        assert_eq!(summary.revision, 0);
+        assert!(!summary.can_undo);
     }
 
     #[test]
@@ -3899,8 +4027,12 @@ mod tests {
     #[test]
     fn element_update_many_noop_preserves_redo() {
         let mut sessions = ProjectSessionManager::default();
-        let project_id =
-            sessions.create_session(Project::new("Batch Update Redo", 176, 166, ModTarget::Forge));
+        let project_id = sessions.create_session(Project::new(
+            "Batch Update Redo",
+            176,
+            166,
+            ModTarget::Forge,
+        ));
         sessions
             .resolve_mut(Some(&project_id))
             .unwrap()

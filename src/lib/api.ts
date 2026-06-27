@@ -1507,15 +1507,17 @@ async function mockInvoke(cmd: string, args?: Record<string, unknown>): Promise<
     }
     case "element_update": {
       const session = mockSession(args?.project_id);
-      const el = session.project.elements.find(e => e.id === args?.id);
+      const index = session.project.elements.findIndex(e => e.id === args?.id);
+      const el = session.project.elements[index];
       if (!el) throw "Element not found";
       const next = applyMockElementChanges(el, args?.changes);
       if (JSON.stringify(next) !== JSON.stringify(el)) {
         const previous = clone(session.project);
         const refreshGroupPositions = el.x !== next.x || el.y !== next.y;
-        Object.assign(el, clone(next));
-        if (refreshGroupPositions) refreshMockGroupPositions(session, [el.id]);
+        session.project.elements[index] = clone(next);
+        if (refreshGroupPositions) refreshMockGroupPositions(session, [next.id]);
         markMockChanged(session, previous);
+        return clone(next);
       }
       return clone(el);
     }
