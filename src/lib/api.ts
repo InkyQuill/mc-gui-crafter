@@ -9,6 +9,7 @@ import type {
   EditScope,
   Element,
   EditorLayoutConfig,
+  FillDirection,
   FontAsset,
   FontRenderData,
   GlyphInfo,
@@ -17,6 +18,7 @@ import type {
   MinecraftSource,
   ModTarget,
   NineSlice,
+  NineSliceMode,
   CodegenMode,
   ExportScope,
   ProjectData,
@@ -26,10 +28,13 @@ import type {
   ProjectSummary,
   SaveProjectResult,
   SemanticGroup,
+  SlotRole,
   StateAddRequest,
   StateOverrideClearRequest,
   StateOverrideUpdateRequest,
   StateUpdateRequest,
+  TextureRenderMode,
+  UvRect,
   WindowConfig,
 } from "./types";
 
@@ -375,6 +380,211 @@ function refreshMockGroupPositions(session: MockSession, movedIds: Iterable<stri
   }
 }
 
+const I32_MIN = -2147483648;
+const I32_MAX = 2147483647;
+const U32_MAX = 4294967295;
+
+const MOCK_ELEMENT_MUTABLE_FIELDS = new Set([
+  "x",
+  "y",
+  "width",
+  "height",
+  "size",
+  "asset",
+  "icon",
+  "icon_uv",
+  "tooltip",
+  "direction",
+  "content",
+  "font",
+  "color",
+  "shadow",
+  "animation",
+  "visible",
+  "uv",
+  "render_mode",
+  "nine_slice",
+  "layer",
+  "slot_role",
+  "slot_index",
+  "inventory_group",
+  "scroll_binding",
+  "scroll_min",
+  "scroll_max",
+  "visible_rows",
+  "total_rows",
+  "columns",
+  "target_group",
+  "binding",
+  "dock",
+  "open_width",
+  "open_height",
+  "attached_region",
+]);
+
+const MOCK_SIGNED_NUMBER_FIELDS = new Set(["x", "y"]);
+const MOCK_UNSIGNED_NUMBER_FIELDS = new Set([
+  "width",
+  "height",
+  "size",
+  "color",
+  "slot_index",
+  "scroll_min",
+  "scroll_max",
+  "visible_rows",
+  "total_rows",
+  "columns",
+  "open_width",
+  "open_height",
+]);
+const MOCK_STRING_FIELDS = new Set([
+  "asset",
+  "icon",
+  "tooltip",
+  "content",
+  "font",
+  "animation",
+  "inventory_group",
+  "scroll_binding",
+  "target_group",
+  "binding",
+  "dock",
+  "attached_region",
+]);
+const MOCK_FILL_DIRECTIONS = new Set<FillDirection>([
+  "left_to_right",
+  "right_to_left",
+  "bottom_to_top",
+  "top_to_bottom",
+]);
+const MOCK_TEXTURE_RENDER_MODES = new Set<TextureRenderMode>(["plain", "nine_slice"]);
+const MOCK_NINE_SLICE_MODES = new Set<NineSliceMode>(["tile", "stretch"]);
+const MOCK_SLOT_ROLES = new Set<SlotRole>([
+  "machine",
+  "player_inventory",
+  "hotbar",
+  "scrollable_inventory",
+  "virtual_storage",
+  "upgrade",
+  "upgrade_settings",
+  "filter",
+  "ghost",
+  "offhand",
+]);
+
+function mockObject(value: unknown, label: string): Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw `${label} must be an object`;
+  }
+  return value as Record<string, unknown>;
+}
+
+function mockInteger(value: unknown, field: string, min: number, max: number): number {
+  if (typeof value !== "number" || !Number.isInteger(value) || value < min || value > max) {
+    throw `Invalid element update: ${field} must be an integer between ${min} and ${max}`;
+  }
+  return value;
+}
+
+function mockEnum<T extends string>(value: unknown, field: string, allowed: Set<T>): T {
+  if (typeof value !== "string" || !allowed.has(value as T)) {
+    throw `Invalid element update: ${field} has an invalid value`;
+  }
+  return value as T;
+}
+
+function validateMockUvRect(value: unknown, field: string): UvRect {
+  const object = mockObject(value, `Invalid element update: ${field}`);
+  const allowed = new Set(["x", "y", "width", "height"]);
+  for (const key of Object.keys(object)) {
+    if (!allowed.has(key)) throw `Invalid element update: ${field}.${key} is not a valid field`;
+  }
+  for (const key of allowed) {
+    if (!Object.prototype.hasOwnProperty.call(object, key)) {
+      throw `Invalid element update: ${field}.${key} is required`;
+    }
+  }
+  return {
+    x: mockInteger(object.x, `${field}.x`, 0, U32_MAX),
+    y: mockInteger(object.y, `${field}.y`, 0, U32_MAX),
+    width: mockInteger(object.width, `${field}.width`, 0, U32_MAX),
+    height: mockInteger(object.height, `${field}.height`, 0, U32_MAX),
+  };
+}
+
+function validateMockNineSlice(value: unknown): NineSlice {
+  const object = mockObject(value, "Invalid element update: nine_slice");
+  const allowed = new Set(["left", "right", "top", "bottom", "edge_mode", "center_mode"]);
+  for (const key of Object.keys(object)) {
+    if (!allowed.has(key)) throw `Invalid element update: nine_slice.${key} is not a valid field`;
+  }
+  for (const key of ["left", "right", "top", "bottom"]) {
+    if (!Object.prototype.hasOwnProperty.call(object, key)) {
+      throw `Invalid element update: nine_slice.${key} is required`;
+    }
+  }
+  return {
+    left: mockInteger(object.left, "nine_slice.left", 0, U32_MAX),
+    right: mockInteger(object.right, "nine_slice.right", 0, U32_MAX),
+    top: mockInteger(object.top, "nine_slice.top", 0, U32_MAX),
+    bottom: mockInteger(object.bottom, "nine_slice.bottom", 0, U32_MAX),
+    edge_mode:
+      object.edge_mode === undefined ? "tile" : mockEnum(object.edge_mode, "nine_slice.edge_mode", MOCK_NINE_SLICE_MODES),
+    center_mode:
+      object.center_mode === undefined ? "tile" : mockEnum(object.center_mode, "nine_slice.center_mode", MOCK_NINE_SLICE_MODES),
+  };
+}
+
+function validateMockElementChange(field: string, value: unknown): unknown {
+  if (!MOCK_ELEMENT_MUTABLE_FIELDS.has(field)) {
+    throw `Invalid element update: ${field} is not a valid field`;
+  }
+  if (value === null || value === undefined) {
+    if (
+      field === "visible" ||
+      field === "render_mode" ||
+      field === "layer" ||
+      MOCK_SIGNED_NUMBER_FIELDS.has(field)
+    ) {
+      throw `Invalid element update: ${field} cannot be null`;
+    }
+    return undefined;
+  }
+  if (MOCK_SIGNED_NUMBER_FIELDS.has(field)) {
+    return mockInteger(value, field, I32_MIN, I32_MAX);
+  }
+  if (MOCK_UNSIGNED_NUMBER_FIELDS.has(field)) {
+    return mockInteger(value, field, 0, U32_MAX);
+  }
+  if (MOCK_STRING_FIELDS.has(field)) {
+    if (typeof value !== "string") throw `Invalid element update: ${field} must be a string`;
+    return value;
+  }
+  if (field === "shadow" || field === "visible") {
+    if (typeof value !== "boolean") throw `Invalid element update: ${field} must be a boolean`;
+    return value;
+  }
+  if (field === "direction") {
+    return mockEnum(value, field, MOCK_FILL_DIRECTIONS);
+  }
+  if (field === "render_mode") {
+    return mockEnum(value, field, MOCK_TEXTURE_RENDER_MODES);
+  }
+  if (field === "layer") {
+    return mockEnum(value, field, MOCK_LAYERS_SET);
+  }
+  if (field === "slot_role") {
+    return mockEnum(value, field, MOCK_SLOT_ROLES);
+  }
+  if (field === "uv" || field === "icon_uv") {
+    return validateMockUvRect(value, field);
+  }
+  if (field === "nine_slice") {
+    return validateMockNineSlice(value);
+  }
+  throw `Invalid element update: ${field} is not a valid field`;
+}
+
 function applyMockElementChanges(element: Element, changes: unknown): Element {
   if (typeof changes !== "object" || changes === null || Array.isArray(changes)) {
     throw "Element changes must be an object";
@@ -388,12 +598,17 @@ function applyMockElementChanges(element: Element, changes: unknown): Element {
     throw "Element type cannot be changed";
   }
 
-  const mutableChanges: Record<string, unknown> = {};
+  const next = clone(element) as Element & Record<string, unknown>;
   for (const [key, value] of Object.entries(object)) {
     if (key === "id" || key === "type") continue;
-    mutableChanges[key] = value;
+    const nextValue = validateMockElementChange(key, value);
+    if (nextValue === undefined) {
+      delete next[key];
+      continue;
+    }
+    next[key] = clone(nextValue);
   }
-  return { ...element, ...clone(mutableChanges) };
+  return next;
 }
 
 function mockAssetsForSession(session: MockSession): Map<string, string> {
@@ -419,6 +634,7 @@ function syncMockAssetMetadataFromProject(session: MockSession): void {
 }
 
 const MOCK_LAYERS: readonly Layer[] = ["background", "overlay", "animatable"];
+const MOCK_LAYERS_SET = new Set<Layer>(MOCK_LAYERS);
 
 function valuesEqual(left: unknown, right: unknown): boolean {
   return JSON.stringify(left ?? null) === JSON.stringify(right ?? null);
@@ -1296,7 +1512,9 @@ async function mockInvoke(cmd: string, args?: Record<string, unknown>): Promise<
       const next = applyMockElementChanges(el, args?.changes);
       if (JSON.stringify(next) !== JSON.stringify(el)) {
         const previous = clone(session.project);
+        const refreshGroupPositions = el.x !== next.x || el.y !== next.y;
         Object.assign(el, clone(next));
+        if (refreshGroupPositions) refreshMockGroupPositions(session, [el.id]);
         markMockChanged(session, previous);
       }
       return clone(el);
@@ -1315,9 +1533,11 @@ async function mockInvoke(cmd: string, args?: Record<string, unknown>): Promise<
         seen.add(patch.id);
         const current = session.project.elements.find(element => element.id === patch.id);
         if (!current) throw `Element not found: ${patch.id}`;
+        const element = applyMockElementChanges(current, patch.changes);
         return {
           id: patch.id,
-          element: applyMockElementChanges(current, patch.changes),
+          coordinateChanged: current.x !== element.x || current.y !== element.y,
+          element,
         };
       });
 
@@ -1330,6 +1550,10 @@ async function mockInvoke(cmd: string, args?: Record<string, unknown>): Promise<
           const index = session.project.elements.findIndex(element => element.id === next.id);
           session.project.elements[index] = clone(next.element);
         }
+        refreshMockGroupPositions(
+          session,
+          nextElements.filter(({ coordinateChanged }) => coordinateChanged).map(({ id }) => id),
+        );
         markMockChanged(session, previous);
       }
 

@@ -1352,6 +1352,7 @@ fn update_element_in_session(
     if &updated == current {
         return Ok(current.clone());
     }
+    let refresh_group_positions = current.x != updated.x || current.y != updated.y;
 
     sessions.record_history(project_id)?;
     let session = sessions.resolve_mut(project_id)?;
@@ -1360,6 +1361,9 @@ fn update_element_in_session(
         .find_element_mut(id)
         .ok_or("Element not found")?;
     *element = updated.clone();
+    if refresh_group_positions {
+        refresh_group_positions_for_elements(&mut session.project, &[id.to_string()]);
+    }
     sessions.mark_changed(project_id)?;
     Ok(updated)
 }
@@ -1369,12 +1373,11 @@ fn element_update_many_in_session(
     project_id: Option<&str>,
     patches: Vec<ElementPatch>,
 ) -> Result<Vec<Element>, String> {
-    if patches.is_empty() {
-        return Ok(Vec::new());
-    }
-
     let updated = {
         let session = sessions.resolve(project_id)?;
+        if patches.is_empty() {
+            return Ok(Vec::new());
+        }
         let mut seen = std::collections::HashSet::new();
         let mut updated = Vec::with_capacity(patches.len());
 
@@ -1392,17 +1395,21 @@ fn element_update_many_in_session(
         updated
     };
 
-    let changed_count = {
+    let (changed_count, coordinate_changed_ids) = {
         let session = sessions.resolve(project_id)?;
-        updated
-            .iter()
-            .filter(|element| {
-                session
-                    .project
-                    .find_element(&element.id)
-                    .is_some_and(|current| current != *element)
-            })
-            .count()
+        let mut changed_count = 0;
+        let mut coordinate_changed_ids = Vec::new();
+        for element in &updated {
+            if let Some(current) = session.project.find_element(&element.id) {
+                if current != element {
+                    changed_count += 1;
+                }
+                if current.x != element.x || current.y != element.y {
+                    coordinate_changed_ids.push(element.id.clone());
+                }
+            }
+        }
+        (changed_count, coordinate_changed_ids)
     };
 
     if changed_count == 0 {
@@ -1417,6 +1424,7 @@ fn element_update_many_in_session(
             .find_element_mut(&element.id)
             .ok_or_else(|| format!("Element not found: {}", element.id))? = element.clone();
     }
+    refresh_group_positions_for_elements(&mut session.project, &coordinate_changed_ids);
     sessions.mark_changed(project_id)?;
 
     Ok(updated)
@@ -3803,6 +3811,44 @@ mod tests {
         let summary = session_summary(&sessions, &project_id).unwrap();
         assert_eq!(summary.revision, 1);
         assert!(summary.can_undo);
+    }
+
+    #[test]
+    fn element_update_many_refreshes_group_positions_after_coordinate_changes() {
+        let mut sessions = ProjectSessionManager::default();
+        let project_id = sessions.create_session(Project::new(
+            "Batch Update Group",
+            176,
+            166,
+            ModTarget::Forge,
+        ));
+        {
+            let project = &mut sessions.resolve_mut(Some(&project_id)).unwrap().project;
+            project.add_element(sample_element("slot_1", 8, 18));
+            project.add_element(sample_element("slot_2", 26, 18));
+            project.groups.push(Group {
+                id: "group_player_inventory".to_string(),
+                x: 8,
+                y: 18,
+                elements: vec!["slot_1".to_string(), "slot_2".to_string()],
+                visible: None,
+                state_owned: Vec::new(),
+            });
+        }
+
+        let result = element_update_many_in_session(
+            &mut sessions,
+            Some(&project_id),
+            vec![ElementPatch {
+                id: "slot_1".to_string(),
+                changes: serde_json::json!({ "x": 12, "y": 24 }),
+            }],
+        )
+        .unwrap();
+
+        assert_eq!((result[0].x, result[0].y), (12, 24));
+        let project = &sessions.resolve(Some(&project_id)).unwrap().project;
+        assert_eq!((project.groups[0].x, project.groups[0].y), (12, 18));
     }
 
     #[test]
