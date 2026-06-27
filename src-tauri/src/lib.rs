@@ -126,6 +126,7 @@ pub fn run() {
             commands::element_move,
             commands::element_move_many,
             commands::element_update,
+            commands::element_update_many,
             commands::element_resize,
             commands::element_reorder,
             commands::element_remove,

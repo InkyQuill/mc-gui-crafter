@@ -22,6 +22,12 @@ pub struct ElementMove {
     y: i32,
 }
 
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct ElementPatch {
+    pub id: String,
+    pub changes: serde_json::Value,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct SessionLogRequest {
     pub level: SessionLogLevel,
@@ -348,6 +354,16 @@ pub fn element_update(
 ) -> Result<Element, String> {
     let mut sessions = state.sessions.lock().unwrap();
     update_element_in_session(&mut sessions, project_id.as_deref(), &id, changes)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub fn element_update_many(
+    state: State<AppState>,
+    patches: Vec<ElementPatch>,
+    project_id: Option<String>,
+) -> Result<Vec<Element>, String> {
+    let mut sessions = state.sessions.lock().unwrap();
+    element_update_many_in_session(&mut sessions, project_id.as_deref(), patches)
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -1345,6 +1361,64 @@ fn update_element_in_session(
         .ok_or("Element not found")?;
     *element = updated.clone();
     sessions.mark_changed(project_id)?;
+    Ok(updated)
+}
+
+fn element_update_many_in_session(
+    sessions: &mut crate::project::ProjectSessionManager,
+    project_id: Option<&str>,
+    patches: Vec<ElementPatch>,
+) -> Result<Vec<Element>, String> {
+    if patches.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let updated = {
+        let session = sessions.resolve(project_id)?;
+        let mut seen = std::collections::HashSet::new();
+        let mut updated = Vec::with_capacity(patches.len());
+
+        for patch in &patches {
+            if !seen.insert(patch.id.clone()) {
+                return Err(format!("Duplicate element update: {}", patch.id));
+            }
+            let current = session
+                .project
+                .find_element(&patch.id)
+                .ok_or_else(|| format!("Element not found: {}", patch.id))?;
+            updated.push(apply_element_changes(current, patch.changes.clone())?);
+        }
+
+        updated
+    };
+
+    let changed_count = {
+        let session = sessions.resolve(project_id)?;
+        updated
+            .iter()
+            .filter(|element| {
+                session
+                    .project
+                    .find_element(&element.id)
+                    .is_some_and(|current| current != *element)
+            })
+            .count()
+    };
+
+    if changed_count == 0 {
+        return Ok(updated);
+    }
+
+    sessions.record_history(project_id)?;
+    let session = sessions.resolve_mut(project_id)?;
+    for element in &updated {
+        *session
+            .project
+            .find_element_mut(&element.id)
+            .ok_or_else(|| format!("Element not found: {}", element.id))? = element.clone();
+    }
+    sessions.mark_changed(project_id)?;
+
     Ok(updated)
 }
 
@@ -3691,6 +3765,85 @@ mod tests {
         let summary = session_summary(&sessions, &project_id).unwrap();
         assert!(!summary.can_undo);
         assert!(summary.can_redo);
+    }
+
+    #[test]
+    fn element_update_many_changes_multiple_elements_in_one_revision() {
+        let mut sessions = ProjectSessionManager::default();
+        let project_id =
+            sessions.create_session(Project::new("Batch Update", 176, 166, ModTarget::Forge));
+        let session = sessions.resolve_mut(Some(&project_id)).unwrap();
+        session.project.add_element(sample_element("slot_1", 8, 18));
+        session
+            .project
+            .add_element(sample_element("slot_2", 26, 18));
+
+        let result = element_update_many_in_session(
+            &mut sessions,
+            Some(&project_id),
+            vec![
+                ElementPatch {
+                    id: "slot_1".to_string(),
+                    changes: serde_json::json!({ "asset": "textures/slot.png", "visible": false }),
+                },
+                ElementPatch {
+                    id: "slot_2".to_string(),
+                    changes: serde_json::json!({ "asset": "textures/slot.png", "visible": false }),
+                },
+            ],
+        )
+        .unwrap();
+
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].asset.as_deref(), Some("textures/slot.png"));
+        assert!(!result[0].visible);
+        assert_eq!(result[1].asset.as_deref(), Some("textures/slot.png"));
+        assert!(!result[1].visible);
+
+        let summary = session_summary(&sessions, &project_id).unwrap();
+        assert_eq!(summary.revision, 1);
+        assert!(summary.can_undo);
+    }
+
+    #[test]
+    fn element_update_many_failure_is_atomic() {
+        let mut sessions = ProjectSessionManager::default();
+        let project_id = sessions.create_session(Project::new(
+            "Batch Update Failure",
+            176,
+            166,
+            ModTarget::Forge,
+        ));
+        let session = sessions.resolve_mut(Some(&project_id)).unwrap();
+        session.project.add_element(sample_element("slot_1", 8, 18));
+
+        let error = element_update_many_in_session(
+            &mut sessions,
+            Some(&project_id),
+            vec![
+                ElementPatch {
+                    id: "slot_1".to_string(),
+                    changes: serde_json::json!({ "visible": false }),
+                },
+                ElementPatch {
+                    id: "missing".to_string(),
+                    changes: serde_json::json!({ "visible": false }),
+                },
+            ],
+        )
+        .unwrap_err();
+
+        assert_eq!(error, "Element not found: missing");
+        let unchanged = sessions
+            .resolve(Some(&project_id))
+            .unwrap()
+            .project
+            .find_element("slot_1")
+            .unwrap();
+        assert!(unchanged.visible);
+        let summary = session_summary(&sessions, &project_id).unwrap();
+        assert_eq!(summary.revision, 0);
+        assert!(!summary.can_undo);
     }
 
     #[test]

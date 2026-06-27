@@ -190,6 +190,11 @@ export interface ElementMoveRequest {
   y: number;
 }
 
+export interface ElementPatchRequest {
+  id: string;
+  changes: Partial<Element>;
+}
+
 const mockSessions: MockSession[] = [];
 const mockAssetDataUrls = new Map<string, Map<string, string>>();
 const mockAssetMetadata = new Map<string, Map<string, AssetMetadata>>();
@@ -1273,6 +1278,37 @@ async function mockInvoke(cmd: string, args?: Record<string, unknown>): Promise<
       }
       return clone(el);
     }
+    case "element_update_many": {
+      const session = mockSession(args?.project_id);
+      const patches = ((args?.patches as ElementPatchRequest[] | undefined) ?? []).map(patch => ({
+        id: patch.id,
+        changes: clone(patch.changes),
+      }));
+      if (patches.length === 0) return [];
+
+      const seen = new Set<string>();
+      const nextElements = patches.map(patch => {
+        if (seen.has(patch.id)) throw `Duplicate element update: ${patch.id}`;
+        seen.add(patch.id);
+        const current = session.project.elements.find(element => element.id === patch.id);
+        if (!current) throw `Element not found: ${patch.id}`;
+        return { ...current, ...patch.changes };
+      });
+
+      if (nextElements.some(next => {
+        const current = session.project.elements.find(element => element.id === next.id);
+        return JSON.stringify(current) !== JSON.stringify(next);
+      })) {
+        const previous = clone(session.project);
+        for (const next of nextElements) {
+          const index = session.project.elements.findIndex(element => element.id === next.id);
+          session.project.elements[index] = clone(next);
+        }
+        markMockChanged(session, previous);
+      }
+
+      return nextElements.map(element => clone(element));
+    }
     case "element_resize": {
       const session = mockSession(args?.project_id);
       const el = session.project.elements.find(e => e.id === args?.id);
@@ -1719,6 +1755,11 @@ export async function elementMoveMany(moves: ElementMoveRequest[], projectId?: s
 export async function elementUpdate(id: string, changes: Partial<Element>, projectId?: string): Promise<Element> {
   const invoke = await getInvoke();
   return invoke("element_update", { id, changes, project_id: projectId }) as Promise<Element>;
+}
+
+export async function elementUpdateMany(patches: ElementPatchRequest[], projectId?: string): Promise<Element[]> {
+  const invoke = await getInvoke();
+  return invoke("element_update_many", { patches, project_id: projectId }) as Promise<Element[]>;
 }
 
 export async function elementResize(id: string, x: number, y: number, width: number, height: number, projectId?: string): Promise<Element> {
