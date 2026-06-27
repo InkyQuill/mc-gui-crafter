@@ -1,6 +1,6 @@
 import { Application, Assets, Container, Graphics, Rectangle, Text, TextStyle, Sprite, Texture, TilingSprite } from "pixi.js";
 import type { AttachedRegion, Element, FontRenderData, GlyphInfo, MinecraftFontProviderRenderData, Layer, NineSlice } from "../types";
-import { project } from "../stores/project.svelte";
+import { assetDimensions, project } from "../stores/project.svelte";
 import { editor } from "../stores/editor.svelte";
 import { preferences } from "../stores/preferences.svelte";
 
@@ -88,8 +88,10 @@ export class GuiRenderer {
   private glyphTextureCache = new Map<string, Texture>();
   private fontSourceTextureCache = new Map<string, Texture>();
   private textTextureCache = new Map<string, Texture>();
+  private dataUrlTextureCache = new Map<string, Texture>();
   private renderOwnedTextures = new WeakSet<Texture>();
   private loadingFontSources = new Set<string>();
+  private loadingTextureSources = new Set<string>();
   private glyphTextureCacheVersion = -1;
   private spacePanning = false;
   private isPanning = false;
@@ -151,6 +153,45 @@ export class GuiRenderer {
     if (!texture || !this.renderOwnedTextures.has(texture)) return;
     this.renderOwnedTextures.delete(texture);
     if (!texture.destroyed) texture.destroy(false);
+  }
+
+  private textureHasPositiveSize(texture: Texture): boolean {
+    return texture.frame.width > 0 && texture.frame.height > 0 && texture.source.width > 0 && texture.source.height > 0;
+  }
+
+  private ensureTextureSourceReady(dataUrl: string) {
+    if (this.loadingTextureSources.has(dataUrl)) return;
+    this.loadingTextureSources.add(dataUrl);
+    const image = new Image();
+    image.onload = () => {
+      if (this.disposed) return;
+      const texture = Texture.from(image);
+      texture.source.scaleMode = "nearest";
+      this.dataUrlTextureCache.set(dataUrl, texture);
+      this.enforceTextureCacheLimit(this.dataUrlTextureCache, "owned-source");
+      this.render();
+    };
+    image.onerror = () => undefined;
+    image.src = dataUrl;
+    const decode = typeof image.decode === "function"
+      ? image.decode().catch(() => undefined)
+      : Promise.resolve();
+    void decode.finally(() => {
+      this.loadingTextureSources.delete(dataUrl);
+    });
+  }
+
+  private textureFromDataUrl(dataUrl: string): Texture {
+    const cached = this.dataUrlTextureCache.get(dataUrl);
+    if (cached && !cached.destroyed && this.textureHasPositiveSize(cached)) return cached;
+
+    const texture = Texture.from(dataUrl);
+    texture.source.scaleMode = "nearest";
+    if (this.textureHasPositiveSize(texture)) {
+      this.dataUrlTextureCache.set(dataUrl, texture);
+      this.enforceTextureCacheLimit(this.dataUrlTextureCache, "external-source");
+    }
+    return texture;
   }
 
   private destroyRenderOwnedTexturesInTree(container: Container) {
@@ -738,35 +779,37 @@ export class GuiRenderer {
   }
 
   private drawSlot(el: Element): Container {
+    if (el.asset) {
+      const textured = this.drawTexture(el);
+      if (textured) return textured;
+    }
+
     const container = new Container();
     const g = new Graphics();
     const s = el.size ?? 18;
-    g.rect(el.x, el.y, s, s);
-    g.fill({ color: 0x8b8b8b });
-    g.stroke({ width: 1, color: 0x373737 });
-    // Inner highlight
-    g.rect(el.x + 1, el.y + 1, s - 2, s - 2);
-    g.stroke({ width: 1, color: 0xffffff, alpha: 0.3 });
+    this.drawGeneratedSlotGraphics(g, el.x, el.y, s, s);
     container.addChild(g);
     return container;
   }
 
   private drawTexture(el: Element): Container | null {
-    if (isGeneratedTexturePath(el.asset)) {
-      const container = this.drawGeneratedTextureFallback(el);
-      if (el.render_mode === "nine_slice") {
-        this.addNineSliceWarningOutline(container, el);
-      }
-      return container;
-    }
-
     // Try to render as actual texture
     if (el.asset) {
       const dataUrl = project.getAssetDataUrl(el.asset);
       if (dataUrl) {
         const container = new Container();
-        const baseTexture = Texture.from(dataUrl);
-        baseTexture.source.scaleMode = "nearest";
+        const baseTexture = this.textureFromDataUrl(dataUrl);
+        if (!this.textureHasPositiveSize(baseTexture)) {
+          this.ensureTextureSourceReady(dataUrl);
+          if (isGeneratedTexturePath(el.asset)) {
+            const fallback = this.drawGeneratedTextureFallback(el);
+            if (el.render_mode === "nine_slice") {
+              this.addNineSliceWarningOutline(fallback, el);
+            }
+            return fallback;
+          }
+          return null;
+        }
         const texture = this.textureWithUv(baseTexture, el);
         if (!texture) return null;
 
@@ -786,13 +829,21 @@ export class GuiRenderer {
         this.addPlainTextureSprite(container, el, texture);
         return container;
       }
+
+      if (isGeneratedTexturePath(el.asset)) {
+        const container = this.drawGeneratedTextureFallback(el);
+        if (el.render_mode === "nine_slice") {
+          this.addNineSliceWarningOutline(container, el);
+        }
+        return container;
+      }
     }
 
     // Fallback placeholder (checkerboard)
     const container = new Container();
     const g = new Graphics();
-    const w = el.width ?? 16;
-    const h = el.height ?? 16;
+    const w = el.width ?? el.size ?? 16;
+    const h = el.height ?? el.size ?? 16;
     const cs = 4;
     for (let px = el.x; px < el.x + w; px += cs) {
       for (let py = el.y; py < el.y + h; py += cs) {
@@ -814,8 +865,10 @@ export class GuiRenderer {
     const sprite = new Sprite(texture);
     sprite.x = el.x;
     sprite.y = el.y;
-    if (el.width) sprite.width = el.width;
-    if (el.height) sprite.height = el.height;
+    const width = el.width ?? el.size;
+    const height = el.height ?? el.size;
+    if (width) sprite.width = width;
+    if (height) sprite.height = height;
     container.addChild(sprite);
   }
 
@@ -825,8 +878,9 @@ export class GuiRenderer {
   }
 
   private renderNineSliceElement(el: Element, texture: Texture, guides: NineSlice): Container | null {
-    const sourceWidth = texture.frame.width;
-    const sourceHeight = texture.frame.height;
+    const sourceSize = this.textureSourceSize(el, texture);
+    const sourceWidth = sourceSize.width;
+    const sourceHeight = sourceSize.height;
     const targetWidth = el.width ?? el.size ?? sourceWidth;
     const targetHeight = el.height ?? el.size ?? sourceHeight;
 
@@ -874,6 +928,19 @@ export class GuiRenderer {
     }
 
     return container;
+  }
+
+  private textureSourceSize(el: Element, texture: Texture): { width: number; height: number } {
+    if (texture.frame.width > 0 && texture.frame.height > 0) {
+      return { width: texture.frame.width, height: texture.frame.height };
+    }
+    if (el.asset) {
+      const dimensions = assetDimensions.get(el.asset) ?? project.assetMetadata[el.asset];
+      if (dimensions?.width && dimensions?.height) {
+        return { width: dimensions.width, height: dimensions.height };
+      }
+    }
+    return { width: texture.source.width, height: texture.source.height };
   }
 
   private canRenderNineSlice(
@@ -978,27 +1045,9 @@ export class GuiRenderer {
     const h = el.height ?? 16;
 
     if (el.asset === "textures/generated/gui_panel.png" || el.asset === LEGACY_BACKGROUND_TEXTURE) {
-      g.rect(el.x, el.y, w, h);
-      g.fill({ color: 0xb8b8b8 });
-      g.rect(el.x, el.y, w, 1);
-      g.fill({ color: 0xffffff });
-      g.rect(el.x, el.y, 1, h);
-      g.fill({ color: 0xffffff });
-      g.rect(el.x, el.y + h - 1, w, 1);
-      g.fill({ color: 0x555555 });
-      g.rect(el.x + w - 1, el.y, 1, h);
-      g.fill({ color: 0x555555 });
+      this.drawGeneratedGuiPanelGraphics(g, el.x, el.y, w, h);
     } else if (el.asset === "textures/generated/slot.png") {
-      g.rect(el.x, el.y, w, h);
-      g.fill({ color: 0x8b8b8b });
-      g.rect(el.x, el.y, w, 1);
-      g.fill({ color: 0x373737 });
-      g.rect(el.x, el.y, 1, h);
-      g.fill({ color: 0x373737 });
-      g.rect(el.x, el.y + h - 1, w, 1);
-      g.fill({ color: 0xffffff, alpha: 0.8 });
-      g.rect(el.x + w - 1, el.y, 1, h);
-      g.fill({ color: 0xffffff, alpha: 0.8 });
+      this.drawGeneratedSlotGraphics(g, el.x, el.y, w, h);
     } else if (el.asset === "textures/generated/button.png") {
       this.drawButtonGraphics(g, el.x, el.y, w, h);
     } else if (el.asset === "textures/generated/progress_arrow.png") {
@@ -1014,6 +1063,67 @@ export class GuiRenderer {
 
     container.addChild(g);
     return container;
+  }
+
+  private drawGeneratedGuiPanelGraphics(g: Graphics, x: number, y: number, width: number, height: number) {
+    const w = Math.max(0, width);
+    const h = Math.max(0, height);
+    if (w <= 0 || h <= 0) return;
+
+    g.rect(x, y, w, h);
+    g.fill({ color: 0xc6c6c6 });
+
+    const border = Math.min(4, w, h);
+    if (border > 0) {
+      g.rect(x, y, w, border);
+      g.fill({ color: 0x555555 });
+      g.rect(x, y + h - border, w, border);
+      g.fill({ color: 0x555555 });
+      g.rect(x, y, border, h);
+      g.fill({ color: 0x555555 });
+      g.rect(x + w - border, y, border, h);
+      g.fill({ color: 0x555555 });
+    }
+
+    if (h > 8) {
+      const stripWidth = Math.min(8, w);
+      g.rect(x, y + 4, stripWidth, h - 8);
+      g.fill({ color: 0x000000 });
+    }
+    if (w > 8) {
+      const stripHeight = Math.min(8, h);
+      g.rect(x + 4, y, w - 8, stripHeight);
+      g.fill({ color: 0x000000 });
+    }
+  }
+
+  private drawGeneratedSlotGraphics(g: Graphics, x: number, y: number, width: number, height: number) {
+    const w = Math.max(0, width);
+    const h = Math.max(0, height);
+    if (w <= 0 || h <= 0) return;
+
+    g.rect(x, y, w, h);
+    g.fill({ color: 0x8b8b8b });
+
+    g.rect(x, y, w, 1);
+    g.fill({ color: 0x373737 });
+    g.rect(x, y, 1, h);
+    g.fill({ color: 0x373737 });
+    g.rect(x, y + h - 1, w, 1);
+    g.fill({ color: 0x373737 });
+    g.rect(x + w - 1, y, 1, h);
+    g.fill({ color: 0x373737 });
+
+    if (w > 2 && h > 2) {
+      g.rect(x + 1, y + 1, 1, h - 2);
+      g.fill({ color: 0xffffff, alpha: 0x4d / 0xff });
+      g.rect(x + 1, y + 1, w - 2, 1);
+      g.fill({ color: 0xffffff, alpha: 0x4d / 0xff });
+      g.rect(x + w - 2, y + 1, 1, h - 2);
+      g.fill({ color: 0x000000, alpha: 0x66 / 0xff });
+      g.rect(x + 1, y + h - 2, w - 2, 1);
+      g.fill({ color: 0x000000, alpha: 0x66 / 0xff });
+    }
   }
 
   private textureWithUv(baseTexture: Texture, el: Element): Texture | null {
@@ -1066,8 +1176,11 @@ export class GuiRenderer {
     if (!el.icon) return null;
     const dataUrl = project.getAssetDataUrl(el.icon);
     if (!dataUrl) return null;
-    const source = Texture.from(dataUrl);
-    source.source.scaleMode = "nearest";
+    const source = this.textureFromDataUrl(dataUrl);
+    if (!this.textureHasPositiveSize(source)) {
+      this.ensureTextureSourceReady(dataUrl);
+      return null;
+    }
     const texture = this.textureWithIconUv(source, el);
     if (!texture) return null;
     const sprite = new Sprite({ texture, roundPixels: true });
@@ -1629,6 +1742,7 @@ export class GuiRenderer {
     this.clearTextureCache(this.glyphTextureCache, "shared-source");
     this.clearTextureCache(this.fontSourceTextureCache, "external-source");
     this.clearTextureCache(this.textTextureCache, "owned-source");
+    this.clearTextureCache(this.dataUrlTextureCache, "owned-source");
     this.cleanupFns.forEach(fn => fn());
     this.cleanupFns = [];
     this.resizeObserver?.disconnect();

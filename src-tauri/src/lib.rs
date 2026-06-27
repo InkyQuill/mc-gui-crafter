@@ -7,6 +7,7 @@ mod format;
 #[allow(dead_code)]
 mod mcp;
 mod project;
+mod session_log;
 mod startup;
 mod templates;
 mod texture;
@@ -18,6 +19,7 @@ pub struct AppState {
     pub sessions: Mutex<project::ProjectSessionManager>,
     pub mcp_handle: Mutex<Option<mcp::McpServerHandle>>,
     pub app_handle: Mutex<Option<tauri::AppHandle>>,
+    pub session_log: Mutex<session_log::SessionLogger>,
 }
 
 pub fn configure_platform_environment() {
@@ -41,10 +43,14 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .setup(|app| {
+            let config_dir = config::config_dir().map_err(Box::<dyn std::error::Error>::from)?;
+            let session_log = session_log::SessionLogger::new(&config_dir)
+                .map_err(Box::<dyn std::error::Error>::from)?;
             app.manage(AppState {
                 sessions: Mutex::new(project::ProjectSessionManager::default()),
                 mcp_handle: Mutex::new(None),
                 app_handle: Mutex::new(Some(app.handle().clone())),
+                session_log: Mutex::new(session_log),
             });
             let state = app.state::<AppState>();
             let mut app_config = config::load().map_err(Box::<dyn std::error::Error>::from)?;
@@ -91,6 +97,8 @@ pub fn run() {
             commands::editor_layout_save,
             commands::app_window_save,
             commands::ui_layout_reset,
+            commands::session_log_append,
+            commands::session_log_paths,
             commands::project_new,
             commands::project_open,
             commands::project_save,
@@ -102,6 +110,7 @@ pub fn run() {
             commands::project_undo,
             commands::project_redo,
             commands::project_summary,
+            commands::project_resize,
             commands::project_export_settings_update,
             commands::project_semantic_groups_update,
             commands::template_list,

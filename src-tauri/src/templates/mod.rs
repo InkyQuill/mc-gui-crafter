@@ -1,6 +1,6 @@
 use crate::project::{
-    Element, ElementType, FillDirection, Group, Layer, Project, SemanticGroup, SemanticGroupKind,
-    SlotRole,
+    Element, ElementType, FillDirection, Group, Layer, NineSlice, NineSliceMode, Project,
+    SemanticGroup, SemanticGroupKind, SlotRole, TextureRenderMode,
 };
 use serde::Serialize;
 
@@ -10,6 +10,17 @@ pub const GENERATED_BUTTON: &str = "textures/generated/button.png";
 pub const GENERATED_PROGRESS_ARROW: &str = "textures/generated/progress_arrow.png";
 pub const GENERATED_FLUID_TANK: &str = "textures/generated/fluid_tank.png";
 pub const GENERATED_ENERGY_BAR: &str = "textures/generated/energy_bar.png";
+
+fn default_panel_nine_slice() -> NineSlice {
+    NineSlice {
+        left: 8,
+        right: 4,
+        top: 8,
+        bottom: 4,
+        edge_mode: NineSliceMode::Tile,
+        center_mode: NineSliceMode::Tile,
+    }
+}
 
 const SLOT_SIZE: i32 = 18;
 const SLOT_STEP: i32 = 18;
@@ -86,6 +97,12 @@ fn generated_panel_matches_size(bytes: &[u8], width: u32, height: u32) -> bool {
 
 fn add_generated_panel_asset(project: &mut Project) -> Result<(), String> {
     ensure_generated_asset_path(project, GENERATED_GUI_PANEL);
+    project
+        .asset_metadata
+        .entry(GENERATED_GUI_PANEL.to_string())
+        .or_default()
+        .nine_slice
+        .get_or_insert_with(default_panel_nine_slice);
     let should_regenerate = project
         .texture_data
         .get(GENERATED_GUI_PANEL)
@@ -185,6 +202,7 @@ fn generated_background_element(width: u32, height: u32) -> Element {
         width: Some(width),
         height: Some(height),
         asset: Some(GENERATED_GUI_PANEL.into()),
+        render_mode: TextureRenderMode::NineSlice,
         ..base_element("background", ElementType::Texture, 0, 0)
     }
 }
@@ -2869,6 +2887,26 @@ mod tests {
         assert!(project.texture_data.contains_key(GENERATED_GUI_PANEL));
         assert!(project.assets.iter().any(|asset| asset == GENERATED_BUTTON));
         assert!(project.texture_data.contains_key(GENERATED_BUTTON));
+
+        let background = project
+            .elements
+            .iter()
+            .find(|element| element.id == "background")
+            .expect("background element exists");
+        assert_eq!(background.render_mode, TextureRenderMode::NineSlice);
+        assert_eq!(background.asset.as_deref(), Some(GENERATED_GUI_PANEL));
+
+        let guides = project
+            .asset_metadata
+            .get(GENERATED_GUI_PANEL)
+            .and_then(|metadata| metadata.nine_slice.as_ref())
+            .expect("generated panel has nine-slice metadata");
+        assert_eq!(guides.left, 8);
+        assert_eq!(guides.right, 4);
+        assert_eq!(guides.top, 8);
+        assert_eq!(guides.bottom, 4);
+        assert_eq!(guides.edge_mode, NineSliceMode::Tile);
+        assert_eq!(guides.center_mode, NineSliceMode::Tile);
     }
 
     #[test]
@@ -2985,5 +3023,10 @@ mod tests {
             project.texture_data.get(GENERATED_GUI_PANEL),
             Some(&edited_bytes)
         );
+        assert!(project
+            .asset_metadata
+            .get(GENERATED_GUI_PANEL)
+            .and_then(|metadata| metadata.nine_slice.as_ref())
+            .is_some());
     }
 }

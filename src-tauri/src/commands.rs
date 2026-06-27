@@ -7,6 +7,7 @@ use crate::project::{
     Project, ProjectExportSettings, ProjectSessionSummary, ProjectState, SemanticGroup,
     StateOverrideTarget,
 };
+use crate::session_log::{SessionLogEntry, SessionLogLevel};
 use crate::templates::TemplateInfo;
 use crate::AppState;
 use serde::Deserialize;
@@ -19,6 +20,16 @@ pub struct ElementMove {
     id: String,
     x: i32,
     y: i32,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SessionLogRequest {
+    pub level: SessionLogLevel,
+    pub source: String,
+    pub category: String,
+    pub message: String,
+    #[serde(default)]
+    pub details: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -136,6 +147,32 @@ pub fn ui_layout_reset(window: tauri::Window) -> Result<AppConfig, String> {
 }
 
 #[tauri::command(rename_all = "snake_case")]
+pub fn session_log_append(state: State<AppState>, entry: SessionLogRequest) -> Result<(), String> {
+    state.session_log.lock().unwrap().append(SessionLogEntry {
+        level: entry.level,
+        source: entry.source,
+        category: entry.category,
+        message: entry.message,
+        details: entry.details,
+    })
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub fn session_log_paths(state: State<AppState>) -> Result<serde_json::Value, String> {
+    let log = state.session_log.lock().unwrap();
+    let path = log.path().to_string_lossy().to_string();
+    let dir = log
+        .path()
+        .parent()
+        .map(|path| path.to_string_lossy().to_string())
+        .unwrap_or_default();
+    Ok(serde_json::json!({
+        "current_log": path,
+        "log_dir": dir,
+    }))
+}
+
+#[tauri::command(rename_all = "snake_case")]
 pub fn project_open(state: State<AppState>, path: String) -> Result<serde_json::Value, String> {
     let project = format::load_from_mcgui(&path)?;
     let mut sessions = state.sessions.lock().unwrap();
@@ -216,6 +253,33 @@ pub fn project_summary(
         "revision": session.revision,
         "session": sessions.list_sessions().into_iter().find(|summary| summary.id == session.id),
     }))
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub fn project_resize(
+    state: State<AppState>,
+    width: u32,
+    height: u32,
+    project_id: Option<String>,
+) -> Result<ProjectSessionSummary, String> {
+    if width == 0 || height == 0 {
+        return Err("Project dimensions must be greater than zero".to_string());
+    }
+
+    let mut sessions = state.sessions.lock().unwrap();
+    let session = sessions.resolve(project_id.as_deref())?;
+    let old_size = session.project.gui_size.clone();
+    let new_size = crate::project::Size { width, height };
+    if old_size == new_size {
+        return session_summary(&sessions, &session.id);
+    }
+
+    sessions.record_history(project_id.as_deref())?;
+    sessions
+        .resolve_mut(project_id.as_deref())?
+        .project
+        .gui_size = new_size;
+    sessions.mark_changed(project_id.as_deref())
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -697,6 +761,7 @@ pub fn project_export_preview(
     generate_runtime_helpers: Option<bool>,
     generate_semantic_registry: Option<bool>,
     overwrite: Option<bool>,
+    export_scope: Option<String>,
 ) -> Result<crate::export::ExportPreview, String> {
     let sessions = state.sessions.lock().unwrap();
     let project = &sessions.resolve(project_id.as_deref())?.project;
@@ -714,6 +779,7 @@ pub fn project_export_preview(
         output_dir,
         settings_override,
         overwrite: overwrite.unwrap_or(false),
+        scope: crate::export::ExportScope::parse(export_scope.as_deref())?,
     };
 
     crate::export::preview_export(project, &config, &target)
@@ -732,6 +798,7 @@ pub fn project_export(
     generate_runtime_helpers: Option<bool>,
     generate_semantic_registry: Option<bool>,
     overwrite: Option<bool>,
+    export_scope: Option<String>,
 ) -> Result<Vec<String>, String> {
     let sessions = state.sessions.lock().unwrap();
     let project = &sessions.resolve(project_id.as_deref())?.project;
@@ -749,6 +816,7 @@ pub fn project_export(
         output_dir,
         settings_override,
         overwrite: overwrite.unwrap_or(false),
+        scope: crate::export::ExportScope::parse(export_scope.as_deref())?,
     };
 
     crate::export::export_project(project, &config, &target)

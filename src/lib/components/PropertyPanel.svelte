@@ -1,6 +1,8 @@
 <script lang="ts">
   import { project } from "../stores/project.svelte";
   import { editor } from "../stores/editor.svelte";
+  import { appendSessionLog } from "../api";
+  import { readableError, status } from "../stores/status.svelte";
   import UvEditorDialog from "./UvEditorDialog.svelte";
   import type { AttachedRegion, AttachedRegionAnchor, AttachedRegionState, CodegenMode, Element, NineSlice, Size, SlotRole, TextureRenderMode, UvRect } from "../types";
 
@@ -8,11 +10,21 @@
 
   let uvEditorTarget = $state<UvTarget | null>(null);
   let editingNineSlice = $state(false);
+  let lastLoggedSizeMismatch = "";
   let selectedElementId = $derived.by(() => {
     void editor.selectionRevision;
     return editor.selectedElementId;
   });
   let selectedEl = $derived(selectedElementId ? project.effectiveElementById(selectedElementId) : null);
+  let selectedSlotIds = $derived.by(() => {
+    void editor.selectionRevision;
+    const ids = [...editor.selectedIds]
+      .map(id => project.elementById(id))
+      .filter((element): element is Element => element?.type === "slot" || element?.type === "virtual_slot_cell")
+      .map(element => element.id);
+    if (ids.length > 0) return ids;
+    return selectedEl && (selectedEl.type === "slot" || selectedEl.type === "virtual_slot_cell") ? [selectedEl.id] : [];
+  });
   let selectedTargetSize = $derived.by((): Size | null => {
     if (!selectedEl) return null;
     if (selectedEl.width === undefined || selectedEl.height === undefined) return null;
@@ -27,12 +39,44 @@
     const id = editor.selectedAttachedRegionId;
     return id ? project.effectiveAttachedRegionById(id) : null;
   });
+  let visibleContentSizeMismatch = $derived.by(() => {
+    const bounds = project.visibleContentBounds;
+    if (!project.isOpen || !bounds) return null;
+    const sizeMismatch = bounds.width !== project.guiSize.width || bounds.height !== project.guiSize.height;
+    const originMismatch = bounds.x !== 0 || bounds.y !== 0;
+    if (!sizeMismatch && !originMismatch) return null;
+    return {
+      bounds,
+      canResizeOnly: bounds.x === 0 && bounds.y === 0,
+    };
+  });
   let fontOptions = $derived.by(() => {
     const options = project.fonts.filter((font, index, fonts) => fonts.findIndex(candidate => candidate.id === font.id) === index);
     if (!options.some(font => font.id === "minecraft:default")) {
       options.unshift({ id: "minecraft:default", source: { type: "minecraft" } });
     }
     return options;
+  });
+
+  $effect(() => {
+    const mismatch = visibleContentSizeMismatch;
+    const key = mismatch
+      ? `${project.activeProjectId}:${project.revision}:${mismatch.bounds.x}:${mismatch.bounds.y}:${mismatch.bounds.width}:${mismatch.bounds.height}:${project.guiSize.width}:${project.guiSize.height}`
+      : "";
+    if (!mismatch || key === lastLoggedSizeMismatch) return;
+    lastLoggedSizeMismatch = key;
+    void appendSessionLog({
+      level: "warning",
+      source: "ui",
+      category: "validation",
+      message: "Project size differs from visible content bounds",
+      details: {
+        project_id: project.activeProjectId,
+        project_size: project.guiSize,
+        visible_content_bounds: mismatch.bounds,
+        can_resize_only: mismatch.canResizeOnly,
+      },
+    });
   });
   const slotRoleOptions: SlotRole[] = [
     "machine",
@@ -54,9 +98,39 @@
     project.updateElement(editor.selectedElementId, { [key]: value });
   }
 
+  function updateTextureProp(key: "asset" | "uv", value: unknown) {
+    if (selectedEl?.type === "slot" || selectedEl?.type === "virtual_slot_cell") {
+      updateElementsSequentially(selectedSlotIds, { [key]: value });
+      return;
+    }
+    updateProp(key, value);
+  }
+
   function updateSelectedElement(changes: Partial<Element>) {
     if (!selectedEl) return;
     project.updateElement(selectedEl.id, changes);
+  }
+
+  function applySlotBackgroundToAllSlots() {
+    if (!selectedEl || (selectedEl.type !== "slot" && selectedEl.type !== "virtual_slot_cell")) return;
+    const changes: Partial<Element> = {
+      asset: selectedEl.asset,
+      uv: selectedEl.uv ?? null,
+    };
+    updateElementsSequentially(
+      project.elements
+        .filter(element => element.type === "slot" || element.type === "virtual_slot_cell")
+        .map(element => element.id),
+      changes,
+    );
+  }
+
+  function updateElementsSequentially(ids: string[], changes: Partial<Element>) {
+    void (async () => {
+      for (const id of ids) {
+        await project.updateElement(id, changes);
+      }
+    })();
   }
 
   function updateRegion(id: string, changes: Partial<AttachedRegion>) {
@@ -81,11 +155,11 @@
     const next = {
       x: selectedEl.uv?.x ?? 0,
       y: selectedEl.uv?.y ?? 0,
-      width: selectedEl.uv?.width ?? selectedEl.width ?? 16,
-      height: selectedEl.uv?.height ?? selectedEl.height ?? 16,
+      width: selectedEl.uv?.width ?? selectedEl.width ?? selectedEl.size ?? 16,
+      height: selectedEl.uv?.height ?? selectedEl.height ?? selectedEl.size ?? 16,
       [key]: Math.max(key === "width" || key === "height" ? 1 : 0, numberValue(value)),
     };
-    updateProp("uv", next);
+    updateTextureProp("uv", next);
   }
 
   function updateIconUv(key: "x" | "y" | "width" | "height", value: string) {
@@ -128,7 +202,11 @@
     if (uvEditorTarget === "icon_uv") {
       updateSelectedElement({ icon: asset, icon_uv: uv });
     } else {
-      updateSelectedElement({ asset, uv });
+      if (selectedEl?.type === "slot" || selectedEl?.type === "virtual_slot_cell") {
+        updateElementsSequentially(selectedSlotIds, { asset, uv });
+      } else {
+        updateSelectedElement({ asset, uv });
+      }
     }
     uvEditorTarget = null;
   }
@@ -138,7 +216,7 @@
     if (uvEditorTarget === "icon_uv") {
       updateSelectedElement({ icon_uv: null });
     } else {
-      updateSelectedElement({ uv: null });
+      updateTextureProp("uv", null);
     }
     uvEditorTarget = null;
   }
@@ -167,6 +245,17 @@
   function useAssetGuides() {
     updateSelectedElement({ nine_slice: null });
   }
+
+  async function resizeProjectToVisibleContent() {
+    const mismatch = visibleContentSizeMismatch;
+    if (!mismatch?.canResizeOnly) return;
+    try {
+      await project.resizeProject(mismatch.bounds.width, mismatch.bounds.height);
+      status.success(`Project resized to ${mismatch.bounds.width}x${mismatch.bounds.height}.`);
+    } catch (error) {
+      status.error(`Resize failed: ${readableError(error)}`);
+    }
+  }
 </script>
 
 <aside class="properties">
@@ -194,9 +283,33 @@
           onchange={(event) => project.updateExportSettings({ generate_runtime_helpers: event.currentTarget.checked })}
         />
       </div>
-    </div>
+      </div>
 
-    <hr class="divider" />
+      {#if visibleContentSizeMismatch}
+        <div class="project-warning">
+          <div class="warning-title">Project size mismatch</div>
+          <p>
+            Visible content is {visibleContentSizeMismatch.bounds.width}x{visibleContentSizeMismatch.bounds.height}
+            at {visibleContentSizeMismatch.bounds.x},{visibleContentSizeMismatch.bounds.y};
+            project size is {project.guiSize.width}x{project.guiSize.height}.
+          </p>
+          <p>
+            Exported textures use visible bounds, while generated screen code keeps the project size.
+          </p>
+          {#if visibleContentSizeMismatch.canResizeOnly}
+            <button class="secondary-btn" onclick={resizeProjectToVisibleContent}>
+              Resize project to {visibleContentSizeMismatch.bounds.width}x{visibleContentSizeMismatch.bounds.height}
+            </button>
+          {:else}
+            <p>
+              Move visible content by {-visibleContentSizeMismatch.bounds.x},{-visibleContentSizeMismatch.bounds.y}, then resize to
+              {visibleContentSizeMismatch.bounds.width}x{visibleContentSizeMismatch.bounds.height}.
+            </p>
+          {/if}
+        </div>
+      {/if}
+
+      <hr class="divider" />
   {/if}
 
   {#if selectedEl}
@@ -424,13 +537,13 @@
         </div>
       {/if}
 
-      {#if selectedEl.type === "texture" || selectedEl.type === "progress"}
+      {#if selectedEl.type === "texture" || selectedEl.type === "progress" || selectedEl.type === "slot" || selectedEl.type === "virtual_slot_cell"}
         <div class="prop-row">
-          <label for="prop-asset">{selectedEl.type === "progress" ? "Source" : "Texture"}</label>
+          <label for="prop-asset">{selectedEl.type === "progress" ? "Source" : selectedEl.type === "slot" || selectedEl.type === "virtual_slot_cell" ? "Background" : "Texture"}</label>
           <select
             id="prop-asset"
             value={selectedEl.asset ?? ""}
-            onchange={(e) => updateProp("asset", e.currentTarget.value || undefined)}
+            onchange={(e) => updateTextureProp("asset", e.currentTarget.value || undefined)}
           >
             <option value="">(none)</option>
             {#each project.assets as a (a)}
@@ -462,7 +575,7 @@
               id="prop-uv-width"
               type="number"
               min="1"
-              value={selectedEl.uv?.width ?? selectedEl.width ?? 16}
+              value={selectedEl.uv?.width ?? selectedEl.width ?? selectedEl.size ?? 16}
               oninput={(e) => updateUv("width", e.currentTarget.value)}
             />
             <label for="prop-uv-height">H</label>
@@ -470,16 +583,21 @@
               id="prop-uv-height"
               type="number"
               min="1"
-              value={selectedEl.uv?.height ?? selectedEl.height ?? 16}
+              value={selectedEl.uv?.height ?? selectedEl.height ?? selectedEl.size ?? 16}
               oninput={(e) => updateUv("height", e.currentTarget.value)}
             />
           </div>
-          <button class="secondary-btn" onclick={() => updateProp("uv", null)}>
+          <button class="secondary-btn" onclick={() => updateTextureProp("uv", null)}>
             Clear UV
           </button>
           <button class="secondary-btn" onclick={() => openUvEditor("uv")} disabled={project.assets.length === 0}>
             Pick Region...
           </button>
+          {#if selectedEl.type === "slot" || selectedEl.type === "virtual_slot_cell"}
+            <button class="secondary-btn" onclick={applySlotBackgroundToAllSlots}>
+              Apply to all slots
+            </button>
+          {/if}
         </div>
       {/if}
 
@@ -829,6 +947,30 @@
 
   .project-form {
     margin-bottom: 8px;
+  }
+
+  .project-warning {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin: 8px 0;
+    padding: 8px;
+    border: 1px solid color-mix(in srgb, var(--accent) 60%, var(--border));
+    border-radius: 4px;
+    background: color-mix(in srgb, var(--accent) 10%, transparent);
+  }
+
+  .project-warning p {
+    margin: 0;
+    color: var(--muted-text);
+    font-size: 11px;
+    line-height: 1.35;
+  }
+
+  .warning-title {
+    color: var(--text);
+    font-size: 11px;
+    font-weight: 600;
   }
 
   .prop-row {

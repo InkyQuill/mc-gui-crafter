@@ -1,5 +1,7 @@
 export type StatusType = "success" | "warning" | "error" | "info";
 
+import { appendSessionLog } from "../api";
+
 export interface StatusMessage {
   id: number;
   type: StatusType;
@@ -18,6 +20,13 @@ class StatusStore {
       type,
       text,
     };
+    void appendSessionLog({
+      level: type === "error" ? "error" : type === "warning" ? "warning" : "info",
+      source: "ui",
+      category: "status",
+      message: text,
+      details: { status_type: type },
+    });
 
     if (timeoutMs > 0) {
       this.timeout = setTimeout(() => {

@@ -2,7 +2,7 @@
   import { project } from "../stores/project.svelte";
   import { status, readableError } from "../stores/status.svelte";
   import * as api from "../api";
-  import type { CodegenMode, ModTarget } from "../types";
+  import type { CodegenMode, ExportScope, ModTarget } from "../types";
 
   let { onclose }: { onclose: () => void } = $props();
 
@@ -10,6 +10,7 @@
   let modId = $state("mymod");
   let packageName = $state("com.example.mymod");
   let className = $state(project.name.replace(/[^a-zA-Z0-9]/g, ""));
+  let exportScope = $state<ExportScope>("full_mod");
   let codegenMode = $state<CodegenMode>(project.exportSettings.codegen_mode);
   let generateRuntimeHelpers = $state(project.exportSettings.generate_runtime_helpers);
   let generateSemanticRegistry = $derived(codegenMode === "modular");
@@ -44,6 +45,7 @@
       generateRuntimeHelpers,
       generateSemanticRegistry,
       overwriteExisting,
+      exportScope,
     };
 
     resultFiles = [];
@@ -71,6 +73,7 @@
             codegen_mode: request.codegenMode,
             generate_runtime_helpers: request.generateRuntimeHelpers,
             generate_semantic_registry: request.generateSemanticRegistry,
+            export_scope: request.exportScope,
             overwrite: request.overwriteExisting,
           },
         );
@@ -126,6 +129,7 @@
           codegen_mode: codegenMode,
           generate_runtime_helpers: generateRuntimeHelpers,
           generate_semantic_registry: generateSemanticRegistry,
+          export_scope: exportScope,
           overwrite: overwriteExisting,
         },
       );
@@ -175,6 +179,14 @@
       </div>
 
       <div class="form-row">
+        <label for="exp-scope">Scope</label>
+        <select id="exp-scope" bind:value={exportScope}>
+          <option value="full_mod">Full mod scaffold</option>
+          <option value="textures_only">Texture assets only</option>
+        </select>
+      </div>
+
+      <div class="form-row">
         <label for="exp-modid">Mod ID</label>
         <input id="exp-modid" type="text" bind:value={modId} />
       </div>
@@ -189,25 +201,27 @@
         <input id="exp-class" type="text" bind:value={className} />
       </div>
 
-      <div class="form-row">
-        <label for="exp-codegen">Code Generation</label>
-        <select id="exp-codegen" bind:value={codegenMode}>
-          <option value="simple">Simple</option>
-          <option value="modular">Modular</option>
-        </select>
-      </div>
+      {#if exportScope === "full_mod"}
+        <div class="form-row">
+          <label for="exp-codegen">Code Generation</label>
+          <select id="exp-codegen" bind:value={codegenMode}>
+            <option value="simple">Simple</option>
+            <option value="modular">Modular</option>
+          </select>
+        </div>
 
-      <label class="check-row">
-        <input type="checkbox" bind:checked={generateRuntimeHelpers} />
-        <span>Generate runtime helpers</span>
-      </label>
+        <label class="check-row">
+          <input type="checkbox" bind:checked={generateRuntimeHelpers} />
+          <span>Generate runtime helpers</span>
+        </label>
+      {/if}
 
       <label class="check-row">
         <input type="checkbox" bind:checked={overwriteExisting} />
         <span>Overwrite existing files</span>
       </label>
 
-      {#if codegenMode === "modular" && project.semanticGroups.length === 0}
+      {#if exportScope === "full_mod" && codegenMode === "modular" && project.semanticGroups.length === 0}
         <div class="warning">Modular export has no semantic groups.</div>
       {/if}
 

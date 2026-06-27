@@ -122,6 +122,25 @@ MCGUI Crafter starts a localhost MCP endpoint from the running app instance. It 
 
 The selected URL is shown in the start panel and available through the Tauri `mcp_status` command. See `docs/mcp.md` for client setup, the current tool list, and protocol notes.
 
+## Feedback and Logs
+
+Each app launch writes a JSONL session log under:
+
+```text
+~/.config/mc-gui-crafter/logs/session-*.jsonl
+```
+
+Logs capture UI actions, MCP tool calls, export preview warnings/errors, visible-size validation warnings, and user/AI feedback reports. When reporting a problem, attach:
+
+- the latest `session-*.jsonl` file from the logs directory
+- the `.mcgui` project file if it is safe to share
+- any generated export directory or relevant `project_export_preview` output
+- screenshots or `project_render` PNGs when the problem is visual
+
+AI agents connected through MCP should call `session_report` with a short summary, severity, and reproduction details before asking the user to file an issue. After logging the report, ask the user to attach the latest session log to the issue.
+
+See `docs/feedback.md` for the recommended issue format and privacy notes.
+
 ## License
 
 MIT

@@ -18,6 +18,7 @@ import type {
   ModTarget,
   NineSlice,
   CodegenMode,
+  ExportScope,
   ProjectData,
   ProjectExportSettings,
   ProjectState,
@@ -33,6 +34,7 @@ import type {
 } from "./types";
 
 let tauriInvoke: ((cmd: string, args?: Record<string, unknown>) => Promise<unknown>) | null = null;
+let rawTauriInvoke: ((cmd: string, args?: Record<string, unknown>) => Promise<unknown>) | null = null;
 
 function hasTauriRuntime(): boolean {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -47,12 +49,121 @@ async function getInvoke() {
 
   try {
     const tauri = await import("@tauri-apps/api/core");
-    tauriInvoke = tauri.invoke;
+    rawTauriInvoke = tauri.invoke;
+    tauriInvoke = loggedInvoke;
     return tauriInvoke;
   } catch {
     tauriInvoke = mockInvoke;
     return tauriInvoke;
   }
+}
+
+async function loggedInvoke(cmd: string, args?: Record<string, unknown>): Promise<unknown> {
+  if (!rawTauriInvoke) throw new Error("Tauri invoke is not initialized");
+  if (cmd === "session_log_append" || cmd === "session_log_paths") {
+    return rawTauriInvoke(cmd, args);
+  }
+  const started = Date.now();
+  try {
+    const result = await rawTauriInvoke(cmd, args);
+    void appendSessionLog({
+      level: actionLogLevel(result),
+      source: "ui",
+      category: "action",
+      message: `${cmd} completed`,
+      details: {
+        command: cmd,
+        duration_ms: Date.now() - started,
+        args: compactForLog(args ?? {}),
+        result: compactActionResult(result),
+      },
+    });
+    return result;
+  } catch (error) {
+    void appendSessionLog({
+      level: "error",
+      source: "ui",
+      category: "action",
+      message: `${cmd} failed`,
+      details: {
+        command: cmd,
+        duration_ms: Date.now() - started,
+        args: compactForLog(args ?? {}),
+        error: String(error || "Unknown error"),
+      },
+    });
+    throw error;
+  }
+}
+
+type SessionLogLevel = "debug" | "info" | "warning" | "error";
+
+interface SessionLogEntryRequest {
+  level: SessionLogLevel;
+  source: string;
+  category: string;
+  message: string;
+  details?: unknown;
+}
+
+export interface SessionLogPaths {
+  current_log: string;
+  log_dir: string;
+}
+
+export async function appendSessionLog(entry: SessionLogEntryRequest): Promise<void> {
+  if (!rawTauriInvoke && !hasTauriRuntime()) return;
+  try {
+    const invoke = rawTauriInvoke ?? (await import("@tauri-apps/api/core")).invoke;
+    rawTauriInvoke = invoke;
+    await invoke("session_log_append", {
+      entry: {
+        ...entry,
+        details: compactForLog(entry.details ?? null),
+      },
+    });
+  } catch {
+    // Logging must never break the workflow being logged.
+  }
+}
+
+export async function sessionLogPaths(): Promise<SessionLogPaths> {
+  const invoke = await getInvoke();
+  return invoke("session_log_paths") as Promise<SessionLogPaths>;
+}
+
+function actionLogLevel(result: unknown): SessionLogLevel {
+  const value = result as { warnings?: unknown[]; errors?: unknown[] } | null;
+  if (Array.isArray(value?.errors) && value.errors.length > 0) return "error";
+  if (Array.isArray(value?.warnings) && value.warnings.length > 0) return "warning";
+  return "info";
+}
+
+function compactActionResult(result: unknown): unknown {
+  const value = result as { warnings?: unknown[]; errors?: unknown[]; files?: unknown[] } | null;
+  if (Array.isArray(value?.warnings) || Array.isArray(value?.errors)) {
+    return {
+      warnings: value?.warnings ?? [],
+      errors: value?.errors ?? [],
+      files: Array.isArray(value?.files) ? value.files.length : undefined,
+    };
+  }
+  return undefined;
+}
+
+function compactForLog(value: unknown, depth = 0): unknown {
+  if (depth > 4) return "[depth limit]";
+  if (typeof value === "string") {
+    if (value.startsWith("data:image/")) return `[data url ${value.length} chars]`;
+    return value.length > 1000 ? `${value.slice(0, 1000)}...` : value;
+  }
+  if (typeof value !== "object" || value === null) return value;
+  if (Array.isArray(value)) return value.slice(0, 25).map(item => compactForLog(item, depth + 1));
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .slice(0, 80)
+      .map(([key, item]) => [key, compactForLog(item, depth + 1)]),
+  );
 }
 
 interface MockSession {
@@ -672,6 +783,7 @@ function joinMockPath(...parts: string[]): string {
 function mockExportPreview(args?: Record<string, unknown>): ExportPreview {
   const target = String(args?.target ?? "forge").trim().toLowerCase();
   if (!["forge", "fabric", "neoforge"].includes(target)) throw `Unsupported export target: ${target}`;
+  const exportScope = args?.export_scope === "textures_only" ? "textures_only" : "full_mod";
   const outputDir = String(args?.output_dir ?? "").trim();
   if (!outputDir) throw "Export output directory cannot be empty";
 
@@ -701,23 +813,26 @@ function mockExportPreview(args?: Record<string, unknown>): ExportPreview {
     .filter(asset => !assets.has(asset))
     .map(asset => `Texture asset referenced by project is missing: ${asset}`);
 
-  const files = [
-    joinMockPath(outputDir, "settings.gradle"),
-    joinMockPath(outputDir, "build.gradle"),
-    joinMockPath(outputDir, "gradle.properties"),
-    joinMockPath(assetBase, `textures/gui/${resourceName}_gui.png`),
-    ...[...referencedAssets].filter(asset => assets.has(asset)).map(asset => joinMockPath(assetBase, asset)),
-    joinMockPath(assetBase, `gui/${resourceName}_layout.json`),
-    joinMockPath(javaBase, "GuiLayout.java"),
-    ...(settings.generate_runtime_helpers ? [joinMockPath(javaBase, "GuiRuntime.java")] : []),
-    ...(settings.codegen_mode === "modular" && settings.generate_semantic_registry
-      ? [joinMockPath(javaBase, "SemanticRegistry.java")]
-      : []),
-    joinMockPath(javaBase, `${className}Screen.java`),
-    joinMockPath(javaBase, `${className}Client.java`),
-    joinMockPath(outputDir, metadata),
-    joinMockPath(outputDir, "README.txt"),
-  ];
+  const textureFiles = [joinMockPath(assetBase, `textures/gui/${resourceName}_gui.png`)];
+  const files = exportScope === "textures_only"
+    ? textureFiles
+    : [
+      joinMockPath(outputDir, "settings.gradle"),
+      joinMockPath(outputDir, "build.gradle"),
+      joinMockPath(outputDir, "gradle.properties"),
+      ...textureFiles,
+      ...[...referencedAssets].filter(asset => assets.has(asset)).map(asset => joinMockPath(assetBase, asset)),
+      joinMockPath(assetBase, `gui/${resourceName}_layout.json`),
+      joinMockPath(javaBase, "GuiLayout.java"),
+      ...(settings.generate_runtime_helpers ? [joinMockPath(javaBase, "GuiRuntime.java")] : []),
+      ...(settings.codegen_mode === "modular" && settings.generate_semantic_registry
+        ? [joinMockPath(javaBase, "SemanticRegistry.java")]
+        : []),
+      joinMockPath(javaBase, `${className}Screen.java`),
+      joinMockPath(javaBase, `${className}Client.java`),
+      joinMockPath(outputDir, metadata),
+      joinMockPath(outputDir, "README.txt"),
+    ];
 
   return {
     target: target as ModTarget,
@@ -862,6 +977,20 @@ async function mockInvoke(cmd: string, args?: Record<string, unknown>): Promise<
     case "project_summary": {
       const session = mockSession(args?.project_id);
       return mockProjectResult(session);
+    }
+    case "project_resize": {
+      const session = mockSession(args?.project_id);
+      const width = Number(args?.width);
+      const height = Number(args?.height);
+      if (!Number.isSafeInteger(width) || !Number.isSafeInteger(height) || width <= 0 || height <= 0) {
+        throw "Project dimensions must be greater than zero";
+      }
+      if (session.project.gui_size.width !== width || session.project.gui_size.height !== height) {
+        const previous = clone(session.project);
+        session.project.gui_size = { width, height };
+        markMockChanged(session, previous);
+      }
+      return mockSummary(session);
     }
     case "project_undo": {
       const session = mockSession(args?.project_id);
@@ -1483,6 +1612,11 @@ export async function projectSummary(projectId?: string): Promise<ProjectSummary
   return invoke("project_summary", { project_id: projectId }) as Promise<ProjectSummary>;
 }
 
+export async function projectResize(width: number, height: number, projectId?: string): Promise<ProjectSessionSummary> {
+  const invoke = await getInvoke();
+  return invoke("project_resize", { width, height, project_id: projectId }) as Promise<ProjectSessionSummary>;
+}
+
 export async function projectUndo(projectId?: string): Promise<ProjectSessionSummary> {
   const invoke = await getInvoke();
   return invoke("project_undo", { project_id: projectId }) as Promise<ProjectSessionSummary>;
@@ -1694,6 +1828,7 @@ export interface ExportSettingsOverride {
   codegen_mode: CodegenMode;
   generate_runtime_helpers: boolean;
   generate_semantic_registry: boolean;
+  export_scope?: ExportScope;
   overwrite?: boolean;
 }
 

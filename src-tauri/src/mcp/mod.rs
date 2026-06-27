@@ -16,6 +16,7 @@ use crate::project::{
     ProjectSessionManager, ProjectState, SemanticGroup, SemanticGroupKind, SlotRole,
     StateOverrideTarget, TextureRenderMode,
 };
+use crate::session_log::{SessionLogEntry, SessionLogLevel};
 use crate::{templates, AppState};
 
 const MCP_PATH: &str = "/mcp";
@@ -406,8 +407,10 @@ fn handle_mcp_method(request: JsonRpcRequest, state: &AppState) -> JsonRpcRespon
                 None
             };
 
+            let started = crate::session_log::timestamp_millis();
             match execute_tool(tool_name, &arguments, state) {
                 Ok(content) => {
+                    log_mcp_tool_success(state, tool_name, &arguments, &content, started);
                     if should_emit_project_changed(tool_name, state, &arguments, snapshot_before) {
                         emit_project_changed(state, tool_name);
                     }
@@ -421,7 +424,10 @@ fn handle_mcp_method(request: JsonRpcRequest, state: &AppState) -> JsonRpcRespon
                         }),
                     )
                 }
-                Err(message) => json_rpc_error(request.id, -32000, message),
+                Err(message) => {
+                    log_mcp_tool_error(state, tool_name, &arguments, &message, started);
+                    json_rpc_error(request.id, -32000, message)
+                }
             }
         }
         _ => json_rpc_error(
@@ -528,6 +534,7 @@ fn is_mutating_tool(tool_name: &str) -> bool {
     !matches!(
         tool_name,
         "project_summary"
+            | "session_report"
             | "project_list_sessions"
             | "project_get_active"
             | "project_export_preview"
@@ -544,6 +551,86 @@ fn is_mutating_tool(tool_name: &str) -> bool {
             | "gui_template_list"
             | "schema_discover"
     )
+}
+
+fn log_mcp_tool_success(
+    state: &AppState,
+    tool_name: &str,
+    arguments: &serde_json::Value,
+    content: &serde_json::Value,
+    started: u128,
+) {
+    let level = if content
+        .get("errors")
+        .and_then(|value| value.as_array())
+        .is_some_and(|errors| !errors.is_empty())
+    {
+        SessionLogLevel::Error
+    } else if content
+        .get("warnings")
+        .and_then(|value| value.as_array())
+        .is_some_and(|warnings| !warnings.is_empty())
+    {
+        SessionLogLevel::Warning
+    } else {
+        SessionLogLevel::Info
+    };
+    let _ = state.session_log.lock().unwrap().append(SessionLogEntry {
+        level,
+        source: "mcp".to_string(),
+        category: "tool_call".to_string(),
+        message: format!("{tool_name} completed"),
+        details: Some(serde_json::json!({
+            "tool": tool_name,
+            "duration_ms": crate::session_log::timestamp_millis().saturating_sub(started),
+            "arguments": compact_log_value(arguments.clone()),
+            "warnings": content.get("warnings").cloned().unwrap_or(serde_json::Value::Null),
+            "errors": content.get("errors").cloned().unwrap_or(serde_json::Value::Null),
+        })),
+    });
+}
+
+fn log_mcp_tool_error(
+    state: &AppState,
+    tool_name: &str,
+    arguments: &serde_json::Value,
+    message: &str,
+    started: u128,
+) {
+    let _ = state.session_log.lock().unwrap().append(SessionLogEntry {
+        level: SessionLogLevel::Error,
+        source: "mcp".to_string(),
+        category: "tool_call".to_string(),
+        message: format!("{tool_name} failed"),
+        details: Some(serde_json::json!({
+            "tool": tool_name,
+            "duration_ms": crate::session_log::timestamp_millis().saturating_sub(started),
+            "arguments": compact_log_value(arguments.clone()),
+            "error": message,
+        })),
+    });
+}
+
+fn compact_log_value(value: serde_json::Value) -> serde_json::Value {
+    match value {
+        serde_json::Value::String(text) if text.starts_with("data:image/") => {
+            serde_json::Value::String(format!("[data url {} chars]", text.len()))
+        }
+        serde_json::Value::String(text) if text.len() > 1_000 => serde_json::Value::String(
+            format!("{}...", text.chars().take(1_000).collect::<String>()),
+        ),
+        serde_json::Value::Array(items) => {
+            serde_json::Value::Array(items.into_iter().take(25).map(compact_log_value).collect())
+        }
+        serde_json::Value::Object(object) => serde_json::Value::Object(
+            object
+                .into_iter()
+                .take(80)
+                .map(|(key, value)| (key, compact_log_value(value)))
+                .collect(),
+        ),
+        other => other,
+    }
 }
 
 fn get_tool_definitions() -> Vec<serde_json::Value> {
@@ -618,6 +705,36 @@ fn get_tool_definitions() -> Vec<serde_json::Value> {
                     "state_id",
                     "string",
                     "Optional editable state ID to render as an effective layout",
+                    false,
+                ),
+            ]),
+        ),
+        td(
+            "session_report",
+            "Append an AI/user feedback report to the active app session log",
+            object_schema(vec![
+                (
+                    "summary",
+                    string_schema("Short report summary for issue triage"),
+                    true,
+                ),
+                (
+                    "severity",
+                    serde_json::json!({
+                        "type": "string",
+                        "enum": ["info", "warning", "error"],
+                        "description": "Report severity"
+                    }),
+                    false,
+                ),
+                (
+                    "details",
+                    json_schema("Detailed report, reproduction notes, observed warnings, or suggested fix"),
+                    false,
+                ),
+                (
+                    "project_id",
+                    string_schema("Optional project session ID related to this report"),
                     false,
                 ),
             ]),
@@ -1100,6 +1217,12 @@ fn string_schema(description: impl Into<String>) -> serde_json::Value {
     string_type_schema("string", description)
 }
 
+fn json_schema(description: impl Into<String>) -> serde_json::Value {
+    serde_json::json!({
+        "description": description.into()
+    })
+}
+
 fn string_type_schema(typ: &str, description: impl Into<String>) -> serde_json::Value {
     serde_json::json!({ "type": typ, "description": description.into() })
 }
@@ -1132,6 +1255,15 @@ fn export_props() -> serde_json::Value {
         (
             "generate_semantic_registry",
             string_type_schema("boolean", "Generate semantic registry in modular mode"),
+            false,
+        ),
+        (
+            "export_scope",
+            serde_json::json!({
+                "type": "string",
+                "enum": ["full_mod", "textures_only"],
+                "description": "Export a full mod scaffold or only generated texture assets"
+            }),
             false,
         ),
         (
@@ -1675,11 +1807,53 @@ fn schema_default_attached_region() -> AttachedRegion {
     }
 }
 
+fn session_report(state: &AppState, args: &serde_json::Value) -> Result<serde_json::Value, String> {
+    let summary = required_str(args, "summary")?.trim();
+    if summary.is_empty() {
+        return Err("Report summary cannot be empty".to_string());
+    }
+    let severity = optional_string(args, "severity").unwrap_or_else(|| "info".to_string());
+    let level = match severity.as_str() {
+        "info" => SessionLogLevel::Info,
+        "warning" => SessionLogLevel::Warning,
+        "error" => SessionLogLevel::Error,
+        other => return Err(format!("Unknown report severity: {other}")),
+    };
+    let details = args.get("details").cloned();
+    let project_id = optional_string(args, "project_id");
+
+    let log_path = {
+        let mut log = state.session_log.lock().unwrap();
+        log.append(SessionLogEntry {
+            level,
+            source: "mcp".to_string(),
+            category: "feedback_report".to_string(),
+            message: summary.to_string(),
+            details: Some(serde_json::json!({
+                "severity": severity,
+                "details": details,
+                "project_id": project_id,
+            })),
+        })?;
+        log.path().to_string_lossy().to_string()
+    };
+
+    Ok(serde_json::json!({
+        "status": "logged",
+        "log_path": log_path,
+        "next_step": "Ask the user to attach this session log when filing an issue."
+    }))
+}
+
 fn execute_tool(
     name: &str,
     args: &serde_json::Value,
     state: &AppState,
 ) -> Result<serde_json::Value, String> {
+    if name == "session_report" {
+        return session_report(state, args);
+    }
+
     let mut sessions = state.sessions.lock().unwrap();
     let project_id = optional_string(args, "project_id");
     let project_id = project_id.as_deref();
@@ -1889,6 +2063,7 @@ fn export_request<'a>(
         output_dir: required_str(args, "output_dir")?.to_string(),
         settings_override: export_settings_override(project, args)?,
         overwrite: optional_bool(args, "overwrite")?.unwrap_or(false),
+        scope: crate::export::ExportScope::parse(optional_string(args, "export_scope").as_deref())?,
     };
     Ok((project, config, target))
 }
@@ -4380,10 +4555,15 @@ mod tests {
     use std::sync::Mutex;
 
     fn test_state() -> AppState {
+        let log_dir = std::env::temp_dir().join(format!(
+            "mc-gui-crafter-mcp-test-log-{}",
+            crate::session_log::timestamp_millis()
+        ));
         AppState {
             sessions: Mutex::new(ProjectSessionManager::default()),
             mcp_handle: Mutex::new(None),
             app_handle: Mutex::new(None),
+            session_log: Mutex::new(crate::session_log::SessionLogger::new(&log_dir).unwrap()),
         }
     }
 
@@ -4832,6 +5012,50 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert!(names.contains(&"project_resize"));
+    }
+
+    #[test]
+    fn tools_list_exposes_session_report() {
+        let tools = get_tool_definitions();
+        let names = tools
+            .iter()
+            .filter_map(|tool| tool["name"].as_str())
+            .collect::<Vec<_>>();
+
+        assert!(names.contains(&"session_report"));
+    }
+
+    #[test]
+    fn session_report_writes_feedback_log_entry() {
+        let state = test_state();
+        let response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "report",
+                "method": "tools/call",
+                "params": {
+                    "name": "session_report",
+                    "arguments": {
+                        "summary": "Export warning confusing",
+                        "severity": "warning",
+                        "details": {
+                            "reproduction": "Preview warning should explain resize options.",
+                            "expected": "Actionable resize guidance"
+                        }
+                    }
+                }
+            }),
+            &state,
+        );
+
+        assert!(response["error"].is_null(), "{response:#}");
+        let log_path = {
+            let log = state.session_log.lock().unwrap();
+            log.path().to_path_buf()
+        };
+        let content = std::fs::read_to_string(log_path).unwrap();
+        assert!(content.contains("feedback_report"));
+        assert!(content.contains("Export warning confusing"));
     }
 
     #[test]

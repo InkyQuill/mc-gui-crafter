@@ -107,6 +107,29 @@ export class ProjectStore {
     let maxX = this.guiSize.width;
     let maxY = this.guiSize.height;
 
+    const content = this.visibleContentBounds;
+    if (content) {
+      minX = Math.min(minX, content.x);
+      minY = Math.min(minY, content.y);
+      maxX = Math.max(maxX, content.x + content.width);
+      maxY = Math.max(maxY, content.y + content.height);
+    }
+
+    return {
+      x: minX,
+      y: minY,
+      width: Math.max(1, maxX - minX),
+      height: Math.max(1, maxY - minY),
+    };
+  }
+
+  get visibleContentBounds(): VisualBounds | null {
+    let minX = Number.POSITIVE_INFINITY;
+    let minY = Number.POSITIVE_INFINITY;
+    let maxX = Number.NEGATIVE_INFINITY;
+    let maxY = Number.NEGATIVE_INFINITY;
+    let hasContent = false;
+
     for (const el of this.effectiveElements) {
       if (el.visible === false) continue;
       const size = this.elementVisualSize(el);
@@ -114,6 +137,7 @@ export class ProjectStore {
       minY = Math.min(minY, el.y);
       maxX = Math.max(maxX, el.x + size.width);
       maxY = Math.max(maxY, el.y + size.height);
+      hasContent = true;
     }
 
     for (const region of this.effectiveAttachedRegions) {
@@ -122,7 +146,10 @@ export class ProjectStore {
       minY = Math.min(minY, region.y);
       maxX = Math.max(maxX, region.x + region.width);
       maxY = Math.max(maxY, region.y + region.height);
+      hasContent = true;
     }
+
+    if (!hasContent) return null;
 
     return {
       x: minX,
@@ -227,6 +254,14 @@ export class ProjectStore {
     nextId = this.elements.length + 1;
     ProjectStore.addRecentProject(path);
     this.startAutoSave();
+  }
+
+  async resizeProject(width: number, height: number) {
+    const nextWidth = Math.max(1, Math.round(width));
+    const nextHeight = Math.max(1, Math.round(height));
+    await api.projectResize(nextWidth, nextHeight, this.activeProjectId ?? undefined);
+    await this.refreshSessions();
+    await this.hydrateActiveProject();
   }
 
   async saveProject() {
