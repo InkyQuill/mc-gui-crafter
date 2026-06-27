@@ -313,8 +313,9 @@ export class GuiRenderer {
         cursor = "grab";
       } else if (editor.isResizing) {
         cursor = "nwse-resize";
-      } else if (editor.tool === "select" && editor.selectedElementId) {
-        const selEl = project.effectiveElementById(editor.selectedElementId);
+      } else {
+        const resizableSelectionId = editor.tool === "select" ? this.singleResizableSelectionId() : null;
+        const selEl = resizableSelectionId ? project.effectiveElementById(resizableSelectionId) : null;
         if (selEl && this.hitTestHandle(selEl, gui.x, gui.y)) {
           cursor = "nwse-resize";
         }
@@ -449,13 +450,14 @@ export class GuiRenderer {
       const shiftHeld = e.shiftKey;
 
       // Check resize handles on selected element first
-      if (editor.tool === "select" && editor.selectedElementId && !shiftHeld) {
-        const selEl = project.effectiveElementById(editor.selectedElementId);
+      const resizableSelectionId = this.singleResizableSelectionId();
+      if (editor.tool === "select" && resizableSelectionId && !shiftHeld) {
+        const selEl = project.effectiveElementById(resizableSelectionId);
         if (selEl && (selEl.visible ?? true)) {
           const corner = this.hitTestHandle(selEl, gui.x, gui.y);
           if (corner) {
-            const bounds = project.getElementBounds(editor.selectedElementId)!;
-            editor.startResize(editor.selectedElementId, corner, pointer.x, pointer.y, bounds.x, bounds.y, bounds.w, bounds.h);
+            const bounds = project.getElementBounds(resizableSelectionId)!;
+            editor.startResize(resizableSelectionId, corner, pointer.x, pointer.y, bounds.x, bounds.y, bounds.w, bounds.h);
             return;
           }
         }
@@ -612,6 +614,12 @@ export class GuiRenderer {
       }
     }
     return null;
+  }
+
+  private singleResizableSelectionId(): string | null {
+    if (!editor.selectedElementId) return null;
+    if (editor.selectedIds.size !== 1) return null;
+    return editor.selectedIds.has(editor.selectedElementId) ? editor.selectedElementId : null;
   }
 
   private elementBounds(el: Element): { x: number; y: number; w: number; h: number } {
@@ -1699,8 +1707,8 @@ export class GuiRenderer {
       g.rect(bounds.x - 1, bounds.y - 1, w + 2, h + 2);
       g.stroke({ width: 1, color: tint });
 
-      // Corner handles only on primary selection
-      if (isPrimary) {
+      // Corner handles only on the single primary selection.
+      if (isPrimary && editor.selectedIds.size === 1) {
         const hs = Math.max(3, Math.round(8 / editor.zoom));
         const corners: [number, number][] = [
           [bounds.x - 1, bounds.y - 1],
