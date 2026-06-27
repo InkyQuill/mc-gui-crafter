@@ -23,9 +23,6 @@
       .filter((element): element is Element => Boolean(element));
   });
   let hasMultiSelection = $derived(selectedElements.length > 1);
-  let selectedTypes = $derived(new Set(selectedElements.map(element => element.type)));
-  let isSameTypeMultiSelection = $derived(hasMultiSelection && selectedTypes.size === 1);
-  let isMixedTypeMultiSelection = $derived(hasMultiSelection && selectedTypes.size > 1);
   let selectedSlots = $derived(selectedElements.filter(element => element.type === "slot" || element.type === "virtual_slot_cell"));
   let selectedTargetSize = $derived.by((): Size | null => {
     if (!selectedEl) return null;
@@ -106,28 +103,12 @@
     const changes: api.ElementChanges = key === "asset"
       ? { asset: value as string | null }
       : { uv: value as UvRect | null };
-    if (selectedEl?.type === "slot" || selectedEl?.type === "virtual_slot_cell") {
-      updateSelectedSlots(changes);
-      return;
-    }
     updateProp(key, changes[key]);
   }
 
   function updateSelectedElement(changes: Partial<Element>) {
     if (!selectedEl) return;
     project.updateElement(selectedEl.id, changes);
-  }
-
-  function applySlotBackgroundToAllSlots() {
-    if (!selectedEl || (selectedEl.type !== "slot" && selectedEl.type !== "virtual_slot_cell")) return;
-    const changes: api.ElementChanges = {
-      asset: selectedEl.asset,
-      uv: selectedEl.uv ?? null,
-    };
-    const patches = project.elements
-      .filter(element => element.type === "slot" || element.type === "virtual_slot_cell")
-      .map(element => ({ id: element.id, changes }));
-    void project.updateElements(patches);
   }
 
   function updateRegion(id: string, changes: Partial<AttachedRegion>) {
@@ -179,36 +160,13 @@
     void project.updateElements(patches);
   }
 
-  function updateSelectedSlots(changes: api.ElementChanges) {
-    const selectedSlotIds = selectedSlots.map(element => element.id);
-    const patches = selectedSlotIds.map(id => ({ id, changes }));
-    void project.updateElements(patches);
-  }
-
   let multiLayer = $derived(mixedValue(selectedElements, element => element.layer ?? "background"));
   let multiVisible = $derived(mixedValue(selectedElements, element => element.visible ?? true));
   let multiAttachedRegion = $derived(mixedValue(selectedElements, element => element.attached_region ?? ""));
   let multiSlotAsset = $derived(mixedValue(selectedSlots, element => element.asset ?? ""));
-  let multiSlotUv = $derived(mixedValue(selectedSlots, element => element.uv ?? null));
   let multiSlotRole = $derived(mixedValue(selectedSlots, element => element.slot_role ?? ""));
   let multiInventoryGroup = $derived(mixedValue(selectedSlots, element => element.inventory_group ?? ""));
   let multiScrollBinding = $derived(mixedValue(selectedSlots, element => element.scroll_binding ?? ""));
-
-  function retainTask6MultiSelectionModel() {
-    void isSameTypeMultiSelection;
-    void isMixedTypeMultiSelection;
-    void mixedSelectValue(multiLayer);
-    void multiVisible;
-    void mixedSelectValue(multiAttachedRegion);
-    void mixedSelectValue(multiSlotAsset);
-    void multiSlotUv;
-    void mixedSelectValue(multiSlotRole);
-    void mixedSelectValue(multiInventoryGroup);
-    void mixedSelectValue(multiScrollBinding);
-    void updateSelectedElements;
-  }
-
-  retainTask6MultiSelectionModel();
 
   function updateUv(key: "x" | "y" | "width" | "height", value: string) {
     if (!selectedEl) return;
@@ -262,11 +220,7 @@
     if (uvEditorTarget === "icon_uv") {
       updateSelectedElement({ icon: asset, icon_uv: uv });
     } else {
-      if (selectedEl?.type === "slot" || selectedEl?.type === "virtual_slot_cell") {
-        updateSelectedSlots({ asset, uv });
-      } else {
-        updateSelectedElement({ asset, uv });
-      }
+      updateSelectedElement({ asset, uv });
     }
     uvEditorTarget = null;
   }
@@ -372,7 +326,116 @@
       <hr class="divider" />
   {/if}
 
-  {#if selectedEl}
+  {#if hasMultiSelection}
+    <div class="props-form">
+      <div class="prop-row">
+        <span class="prop-label">Selection</span>
+        <span class="prop-value">{selectedElements.length} objects</span>
+      </div>
+      <div class="prop-row">
+        <label for="multi-prop-layer">Layer</label>
+        <select
+          id="multi-prop-layer"
+          value={mixedSelectValue(multiLayer)}
+          onchange={(e) => updateSelectedElements({ layer: e.currentTarget.value as api.ElementChanges["layer"] })}
+        >
+          {#if multiLayer.mixed}
+            <option value="__mixed__" disabled>Mixed</option>
+          {/if}
+          <option value="background">Background</option>
+          <option value="overlay">Overlay</option>
+          <option value="animatable">Animatable</option>
+        </select>
+      </div>
+      <div class="prop-row">
+        <label for="multi-prop-attached-region">Region</label>
+        <select
+          id="multi-prop-attached-region"
+          value={mixedSelectValue(multiAttachedRegion)}
+          onchange={(e) => updateSelectedElements({ attached_region: e.currentTarget.value || null })}
+        >
+          {#if multiAttachedRegion.mixed}
+            <option value="__mixed__" disabled>Mixed</option>
+          {/if}
+          <option value="">(none)</option>
+          {#each project.effectiveAttachedRegions as region (region.id)}
+            <option value={region.id}>{region.id}</option>
+          {/each}
+        </select>
+      </div>
+      <div class="prop-row">
+        <label for="multi-prop-visible">Visible</label>
+        <input
+          id="multi-prop-visible"
+          type="checkbox"
+          checked={!multiVisible.mixed && multiVisible.value === true}
+          indeterminate={multiVisible.mixed}
+          onchange={(e) => updateSelectedElements({ visible: e.currentTarget.checked })}
+        />
+      </div>
+
+      {#if selectedSlots.length === selectedElements.length}
+        <div class="prop-section">
+          <div class="section-title">Slot</div>
+          <div class="prop-row">
+            <label for="multi-prop-slot-asset">Background</label>
+            <select
+              id="multi-prop-slot-asset"
+              value={mixedSelectValue(multiSlotAsset)}
+              onchange={(e) => updateSelectedElements({ asset: e.currentTarget.value || null })}
+            >
+              {#if multiSlotAsset.mixed}
+                <option value="__mixed__" disabled>Mixed</option>
+              {/if}
+              <option value="">(none)</option>
+              {#each project.assets as a (a)}
+                <option value={a}>{a.replace("textures/", "").replace(".png", "")}</option>
+              {/each}
+            </select>
+          </div>
+          <div class="prop-row">
+            <label for="multi-prop-slot-role">Role</label>
+            <select
+              id="multi-prop-slot-role"
+              value={mixedSelectValue(multiSlotRole)}
+              onchange={(e) => updateSelectedElements({ slot_role: (e.currentTarget.value || null) as SlotRole | null })}
+            >
+              {#if multiSlotRole.mixed}
+                <option value="__mixed__" disabled>Mixed</option>
+              {/if}
+              <option value="">(none)</option>
+              {#each slotRoleOptions as role (role)}
+                <option value={role}>{role}</option>
+              {/each}
+            </select>
+          </div>
+          <div class="prop-row">
+            <label for="multi-prop-inventory-group">Group</label>
+            <input
+              id="multi-prop-inventory-group"
+              type="text"
+              value={multiInventoryGroup.mixed ? "" : multiInventoryGroup.value ?? ""}
+              placeholder={multiInventoryGroup.mixed ? "Mixed" : ""}
+              oninput={(e) => updateSelectedElements({ inventory_group: optionalText(e.currentTarget.value) })}
+            />
+          </div>
+          <div class="prop-row">
+            <label for="multi-prop-scroll-binding">Scroll</label>
+            <input
+              id="multi-prop-scroll-binding"
+              type="text"
+              value={multiScrollBinding.mixed ? "" : multiScrollBinding.value ?? ""}
+              placeholder={multiScrollBinding.mixed ? "Mixed" : ""}
+              oninput={(e) => updateSelectedElements({ scroll_binding: optionalText(e.currentTarget.value) })}
+            />
+          </div>
+          <button class="secondary-btn" onclick={() => updateSelectedElements({ uv: null })}>
+            Clear UV
+          </button>
+        </div>
+      {/if}
+    </div>
+  {:else if selectedEl}
     <div class="props-form">
       <div class="prop-row">
         <span class="prop-label">ID</span>
@@ -653,11 +716,6 @@
           <button class="secondary-btn" onclick={() => openUvEditor("uv")} disabled={project.assets.length === 0}>
             Pick Region...
           </button>
-          {#if selectedEl.type === "slot" || selectedEl.type === "virtual_slot_cell"}
-            <button class="secondary-btn" onclick={applySlotBackgroundToAllSlots}>
-              Apply to all slots
-            </button>
-          {/if}
         </div>
       {/if}
 
