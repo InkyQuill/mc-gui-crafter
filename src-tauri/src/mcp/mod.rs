@@ -2926,9 +2926,54 @@ fn apply_element_changes(
         if key == "id" || key == "type" {
             continue;
         }
+        if !is_mutable_element_field(key) {
+            return Err(format!(
+                "Invalid element update: {key} is not a valid field"
+            ));
+        }
         target.insert(key.clone(), value.clone());
     }
     serde_json::from_value(value).map_err(|error| format!("Invalid element update: {error}"))
+}
+
+fn is_mutable_element_field(field: &str) -> bool {
+    matches!(
+        field,
+        "x" | "y"
+            | "width"
+            | "height"
+            | "size"
+            | "asset"
+            | "icon"
+            | "icon_uv"
+            | "tooltip"
+            | "direction"
+            | "content"
+            | "font"
+            | "color"
+            | "shadow"
+            | "animation"
+            | "visible"
+            | "uv"
+            | "render_mode"
+            | "nine_slice"
+            | "layer"
+            | "slot_role"
+            | "slot_index"
+            | "inventory_group"
+            | "scroll_binding"
+            | "scroll_min"
+            | "scroll_max"
+            | "visible_rows"
+            | "total_rows"
+            | "columns"
+            | "target_group"
+            | "binding"
+            | "dock"
+            | "open_width"
+            | "open_height"
+            | "attached_region"
+    )
 }
 
 fn parse_edit_scope(args: &serde_json::Value) -> Result<Option<EditScope>, String> {
@@ -7622,6 +7667,67 @@ mod tests {
         let sessions = state.sessions.lock().unwrap();
         let session = sessions.resolve(Some(&project_id)).unwrap();
         assert_eq!(session.project.find_element("a").unwrap().x, 8);
+        assert_eq!(session.revision, 0);
+    }
+
+    #[test]
+    fn element_update_many_rejects_unknown_top_level_field_without_mutation() {
+        let state = test_state();
+        let project_id = {
+            let mut sessions = state.sessions.lock().unwrap();
+            let mut project = Project::new("Update Many Unknown Field", 176, 166, ModTarget::Forge);
+            project.elements.push(
+                parse_element_arg(&serde_json::json!({
+                    "id": "a",
+                    "type": "slot",
+                    "x": 8,
+                    "y": 18,
+                    "size": 18
+                }))
+                .unwrap(),
+            );
+            project.elements.push(
+                parse_element_arg(&serde_json::json!({
+                    "id": "b",
+                    "type": "slot",
+                    "x": 26,
+                    "y": 18,
+                    "size": 18
+                }))
+                .unwrap(),
+            );
+            sessions.create_session(project)
+        };
+        let before = mutation_snapshot_for(&state, &project_id);
+
+        let response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "update-many-unknown-field",
+                "method": "tools/call",
+                "params": {
+                    "name": "element_update_many",
+                    "arguments": {
+                        "project_id": project_id,
+                        "updates": [
+                            { "id": "a", "changes": { "x": 10 } },
+                            { "id": "b", "changes": { "unknown_key": true } }
+                        ]
+                    }
+                }
+            }),
+            &state,
+        );
+
+        assert_eq!(
+            response["error"]["message"].as_str().unwrap(),
+            "Invalid element update: unknown_key is not a valid field"
+        );
+        assert_eq!(mutation_snapshot_for(&state, &project_id), before);
+        let sessions = state.sessions.lock().unwrap();
+        let session = sessions.resolve(Some(&project_id)).unwrap();
+        assert_eq!(session.project.find_element("a").unwrap().x, 8);
+        assert_eq!(session.project.find_element("b").unwrap().x, 26);
         assert_eq!(session.revision, 0);
     }
 
