@@ -3,6 +3,7 @@ import type { AttachedRegion, Element, FontRenderData, GlyphInfo, MinecraftFontP
 import { assetDimensions, project } from "../stores/project.svelte";
 import { editor } from "../stores/editor.svelte";
 import { preferences } from "../stores/preferences.svelte";
+import { appendSessionLog } from "../api";
 
 const SELECTED_TINT = 0xffff00;
 const LEGACY_BACKGROUND_TEXTURE = "textures/background.png";
@@ -164,34 +165,50 @@ export class GuiRenderer {
     this.loadingTextureSources.add(dataUrl);
     const image = new Image();
     image.onload = () => {
-      if (this.disposed) return;
-      const texture = Texture.from(image);
-      texture.source.scaleMode = "nearest";
-      this.dataUrlTextureCache.set(dataUrl, texture);
-      this.enforceTextureCacheLimit(this.dataUrlTextureCache, "owned-source");
-      this.render();
-    };
-    image.onerror = () => undefined;
-    image.src = dataUrl;
-    const decode = typeof image.decode === "function"
-      ? image.decode().catch(() => undefined)
-      : Promise.resolve();
-    void decode.finally(() => {
       this.loadingTextureSources.delete(dataUrl);
-    });
+      if (this.disposed) return;
+      try {
+        const texture = Texture.from(image);
+        texture.source.scaleMode = "nearest";
+        this.dataUrlTextureCache.set(dataUrl, texture);
+        this.enforceTextureCacheLimit(this.dataUrlTextureCache, "owned-source");
+        this.render();
+      } catch (error) {
+        this.logRendererError("Failed to create texture from asset image", error, {
+          data_url_length: dataUrl.length,
+        });
+      }
+    };
+    image.onerror = () => {
+      this.loadingTextureSources.delete(dataUrl);
+      this.logRendererError("Failed to decode asset image", undefined, {
+        data_url_length: dataUrl.length,
+      });
+    };
+    image.src = dataUrl;
   }
 
-  private textureFromDataUrl(dataUrl: string): Texture {
+  private textureFromDataUrl(dataUrl: string): Texture | null {
     const cached = this.dataUrlTextureCache.get(dataUrl);
     if (cached && !cached.destroyed && this.textureHasPositiveSize(cached)) return cached;
-
-    const texture = Texture.from(dataUrl);
-    texture.source.scaleMode = "nearest";
-    if (this.textureHasPositiveSize(texture)) {
-      this.dataUrlTextureCache.set(dataUrl, texture);
-      this.enforceTextureCacheLimit(this.dataUrlTextureCache, "external-source");
+    if (cached?.destroyed) {
+      this.dataUrlTextureCache.delete(dataUrl);
     }
-    return texture;
+    return null;
+  }
+
+  private logRendererError(message: string, error: unknown, details: Record<string, unknown> = {}) {
+    console.error(message, error);
+    void appendSessionLog({
+      level: "error",
+      source: "ui",
+      category: "renderer",
+      message,
+      details: {
+        ...details,
+        error: error instanceof Error ? error.message : String(error || "Unknown error"),
+      },
+    });
   }
 
   private destroyRenderOwnedTexturesInTree(container: Container) {
@@ -735,7 +752,12 @@ export class GuiRenderer {
       try {
         g = this.drawElement(el);
       } catch (error) {
-        console.error("Failed to draw element", el, error);
+        this.logRendererError("Failed to draw element", error, {
+          element_id: el.id,
+          element_type: el.type,
+          asset: el.asset,
+          render_mode: el.render_mode,
+        });
       }
       if (g) this.elementsContainer.addChild(g);
     }
@@ -799,7 +821,7 @@ export class GuiRenderer {
       if (dataUrl) {
         const container = new Container();
         const baseTexture = this.textureFromDataUrl(dataUrl);
-        if (!this.textureHasPositiveSize(baseTexture)) {
+        if (!baseTexture || !this.textureHasPositiveSize(baseTexture)) {
           this.ensureTextureSourceReady(dataUrl);
           if (isGeneratedTexturePath(el.asset)) {
             const fallback = this.drawGeneratedTextureFallback(el);
@@ -1177,7 +1199,7 @@ export class GuiRenderer {
     const dataUrl = project.getAssetDataUrl(el.icon);
     if (!dataUrl) return null;
     const source = this.textureFromDataUrl(dataUrl);
-    if (!this.textureHasPositiveSize(source)) {
+    if (!source || !this.textureHasPositiveSize(source)) {
       this.ensureTextureSourceReady(dataUrl);
       return null;
     }
