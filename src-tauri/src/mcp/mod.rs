@@ -2849,6 +2849,13 @@ fn parse_element_patches(args: &serde_json::Value) -> Result<Vec<ElementPatch>, 
     let top_level_state_id = optional_state_id(args, "state_id")?;
     for update in updates {
         let object = update.as_object().ok_or("Each update must be an object")?;
+        for key in object.keys() {
+            if !matches!(key.as_str(), "id" | "changes" | "state_id" | "edit_scope") {
+                return Err(format!(
+                    "Invalid element update request: {key} is not a valid field"
+                ));
+            }
+        }
         let id = object
             .get("id")
             .and_then(|value| value.as_str())
@@ -2924,7 +2931,9 @@ fn apply_element_changes(
         .ok_or("Element payload must be an object")?;
     for (key, value) in changes {
         if key == "id" || key == "type" {
-            continue;
+            return Err(format!(
+                "Invalid element update: {key} is not a mutable field"
+            ));
         }
         if !is_mutable_element_field(key) {
             return Err(format!(
@@ -7728,6 +7737,109 @@ mod tests {
         let session = sessions.resolve(Some(&project_id)).unwrap();
         assert_eq!(session.project.find_element("a").unwrap().x, 8);
         assert_eq!(session.project.find_element("b").unwrap().x, 26);
+        assert_eq!(session.revision, 0);
+    }
+
+    #[test]
+    fn element_update_many_rejects_unknown_update_request_field_without_mutation() {
+        let state = test_state();
+        let project_id = {
+            let mut sessions = state.sessions.lock().unwrap();
+            let mut project = Project::new(
+                "Update Many Unknown Request Field",
+                176,
+                166,
+                ModTarget::Forge,
+            );
+            project.elements.push(
+                parse_element_arg(&serde_json::json!({
+                    "id": "a",
+                    "type": "slot",
+                    "x": 8,
+                    "y": 18,
+                    "size": 18
+                }))
+                .unwrap(),
+            );
+            sessions.create_session(project)
+        };
+        let before = mutation_snapshot_for(&state, &project_id);
+
+        let response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "update-many-unknown-request-field",
+                "method": "tools/call",
+                "params": {
+                    "name": "element_update_many",
+                    "arguments": {
+                        "project_id": project_id,
+                        "updates": [
+                            { "id": "a", "stateId": "expanded", "changes": { "x": 10 } }
+                        ]
+                    }
+                }
+            }),
+            &state,
+        );
+
+        assert_eq!(
+            response["error"]["message"].as_str().unwrap(),
+            "Invalid element update request: stateId is not a valid field"
+        );
+        assert_eq!(mutation_snapshot_for(&state, &project_id), before);
+        let sessions = state.sessions.lock().unwrap();
+        let session = sessions.resolve(Some(&project_id)).unwrap();
+        assert_eq!(session.project.find_element("a").unwrap().x, 8);
+        assert_eq!(session.revision, 0);
+    }
+
+    #[test]
+    fn element_update_rejects_identity_fields_without_mutation() {
+        let state = test_state();
+        let project_id = {
+            let mut sessions = state.sessions.lock().unwrap();
+            let mut project =
+                Project::new("Update Reject Identity Fields", 176, 166, ModTarget::Forge);
+            project.elements.push(
+                parse_element_arg(&serde_json::json!({
+                    "id": "a",
+                    "type": "slot",
+                    "x": 8,
+                    "y": 18,
+                    "size": 18
+                }))
+                .unwrap(),
+            );
+            sessions.create_session(project)
+        };
+        let before = mutation_snapshot_for(&state, &project_id);
+
+        let response = response_for(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "update-identity-field",
+                "method": "tools/call",
+                "params": {
+                    "name": "element_update",
+                    "arguments": {
+                        "project_id": project_id,
+                        "id": "a",
+                        "changes": { "id": "b" }
+                    }
+                }
+            }),
+            &state,
+        );
+
+        assert_eq!(
+            response["error"]["message"].as_str().unwrap(),
+            "Invalid element update: id is not a mutable field"
+        );
+        assert_eq!(mutation_snapshot_for(&state, &project_id), before);
+        let sessions = state.sessions.lock().unwrap();
+        let session = sessions.resolve(Some(&project_id)).unwrap();
+        assert_eq!(session.project.find_element("a").unwrap().x, 8);
         assert_eq!(session.revision, 0);
     }
 
