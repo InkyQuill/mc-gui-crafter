@@ -574,6 +574,9 @@ function validateMockNineSlice(value: unknown): NineSlice {
 }
 
 function validateMockElementChange(field: string, value: unknown): unknown {
+  if (field === "id" || field === "type") {
+    throw `Invalid element update: ${field} is not a mutable field`;
+  }
   if (!MOCK_ELEMENT_MUTABLE_FIELDS.has(field)) {
     throw `Invalid element update: ${field} is not a valid field`;
   }
@@ -1082,7 +1085,10 @@ function joinMockPath(...parts: string[]): string {
 function mockExportPreview(args?: Record<string, unknown>): ExportPreview {
   const target = String(args?.target ?? "forge").trim().toLowerCase();
   if (!["forge", "fabric", "neoforge"].includes(target)) throw `Unsupported export target: ${target}`;
-  const exportScope = args?.export_scope === "textures_only" ? "textures_only" : "full_mod";
+  const exportScope = String(args?.export_scope ?? "full_mod");
+  if (exportScope !== "textures_only" && exportScope !== "full_mod") {
+    throw `Invalid export scope: ${exportScope}`;
+  }
   const outputDir = String(args?.output_dir ?? "").trim();
   if (!outputDir) throw "Export output directory cannot be empty";
 
@@ -1112,7 +1118,13 @@ function mockExportPreview(args?: Record<string, unknown>): ExportPreview {
     .filter(asset => !assets.has(asset))
     .map(asset => `Texture asset referenced by project is missing: ${asset}`);
 
-  const textureFiles = [joinMockPath(assetBase, `textures/gui/${resourceName}_gui.png`)];
+  const referencedTextureFiles = [...referencedAssets]
+    .filter(asset => assets.has(asset))
+    .map(asset => joinMockPath(assetBase, asset));
+  const textureFiles = [
+    joinMockPath(assetBase, `textures/gui/${resourceName}_gui.png`),
+    ...referencedTextureFiles,
+  ];
   const files = exportScope === "textures_only"
     ? textureFiles
     : [
@@ -1120,7 +1132,6 @@ function mockExportPreview(args?: Record<string, unknown>): ExportPreview {
       joinMockPath(outputDir, "build.gradle"),
       joinMockPath(outputDir, "gradle.properties"),
       ...textureFiles,
-      ...[...referencedAssets].filter(asset => assets.has(asset)).map(asset => joinMockPath(assetBase, asset)),
       joinMockPath(assetBase, `gui/${resourceName}_layout.json`),
       joinMockPath(javaBase, "GuiLayout.java"),
       ...(settings.generate_runtime_helpers ? [joinMockPath(javaBase, "GuiRuntime.java")] : []),

@@ -111,9 +111,9 @@ Prefer these closed-alpha MCP tools:
      a likely bug, or user feedback that should reach maintainers, call
      `session_report` with a concise `summary`, `severity`, and useful
      structured `details`.
-   - After calling `session_report`, ask the user to attach the latest session
-     log from the app logs directory when filing an issue. The log includes the
-     report plus recent warnings, errors, and actions needed for reproduction.
+   - After calling `session_report`, ask the user to attach the exact file
+     returned as `log_path` when filing an issue. The log includes the report
+     plus recent warnings, errors, and actions needed for reproduction.
 
 ## Visual Authoring
 
@@ -212,7 +212,7 @@ Complex modular GUI:
   reconnect or restart the MCP client session. Some clients cache tool metadata.
 - If you diagnose a product issue or limitation while helping a user, call
   `session_report` before ending the session, then ask the user to attach the
-  latest session log to their issue.
+  exact file returned as `log_path` to their issue.
 - If save fails with no project path, use `project_save_as`.
 - If export preview warns about missing textures or existing files, resolve the
   warning before reporting success unless the user explicitly accepts it.

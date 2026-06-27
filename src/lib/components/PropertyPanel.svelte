@@ -60,9 +60,13 @@
   $effect(() => {
     const mismatch = visibleContentSizeMismatch;
     const key = mismatch
-      ? `${project.activeProjectId}:${project.revision}:${mismatch.bounds.x}:${mismatch.bounds.y}:${mismatch.bounds.width}:${mismatch.bounds.height}:${project.guiSize.width}:${project.guiSize.height}`
+      ? `${project.activeProjectId}:${mismatch.bounds.x}:${mismatch.bounds.y}:${mismatch.bounds.width}:${mismatch.bounds.height}:${project.guiSize.width}:${project.guiSize.height}`
       : "";
-    if (!mismatch || key === lastLoggedSizeMismatch) return;
+    if (!mismatch) {
+      lastLoggedSizeMismatch = "";
+      return;
+    }
+    if (key === lastLoggedSizeMismatch) return;
     lastLoggedSizeMismatch = key;
     void api.appendSessionLog({
       level: "warning",

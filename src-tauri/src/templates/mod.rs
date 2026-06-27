@@ -22,6 +22,11 @@ fn default_panel_nine_slice() -> NineSlice {
     }
 }
 
+fn panel_supports_nine_slice(width: u32, height: u32, nine_slice: &NineSlice) -> bool {
+    width > nine_slice.left.saturating_add(nine_slice.right)
+        && height > nine_slice.top.saturating_add(nine_slice.bottom)
+}
+
 const SLOT_SIZE: i32 = 18;
 const SLOT_STEP: i32 = 18;
 const PLAYER_INVENTORY_ID: &str = "player_inventory";
@@ -97,12 +102,20 @@ fn generated_panel_matches_size(bytes: &[u8], width: u32, height: u32) -> bool {
 
 fn add_generated_panel_asset(project: &mut Project) -> Result<(), String> {
     ensure_generated_asset_path(project, GENERATED_GUI_PANEL);
-    project
+    let default_nine_slice = default_panel_nine_slice();
+    let metadata = project
         .asset_metadata
         .entry(GENERATED_GUI_PANEL.to_string())
-        .or_default()
-        .nine_slice
-        .get_or_insert_with(default_panel_nine_slice);
+        .or_default();
+    if panel_supports_nine_slice(
+        project.gui_size.width,
+        project.gui_size.height,
+        &default_nine_slice,
+    ) {
+        metadata.nine_slice.get_or_insert(default_nine_slice);
+    } else if metadata.nine_slice.as_ref() == Some(&default_nine_slice) {
+        metadata.nine_slice = None;
+    }
     let should_regenerate = project
         .texture_data
         .get(GENERATED_GUI_PANEL)
@@ -202,7 +215,11 @@ fn generated_background_element(width: u32, height: u32) -> Element {
         width: Some(width),
         height: Some(height),
         asset: Some(GENERATED_GUI_PANEL.into()),
-        render_mode: TextureRenderMode::NineSlice,
+        render_mode: if panel_supports_nine_slice(width, height, &default_panel_nine_slice()) {
+            TextureRenderMode::NineSlice
+        } else {
+            TextureRenderMode::Plain
+        },
         ..base_element("background", ElementType::Texture, 0, 0)
     }
 }
@@ -2907,6 +2924,25 @@ mod tests {
         assert_eq!(guides.bottom, 4);
         assert_eq!(guides.edge_mode, NineSliceMode::Tile);
         assert_eq!(guides.center_mode, NineSliceMode::Tile);
+    }
+
+    #[test]
+    fn generated_panel_metadata_omits_nine_slice_for_unsupported_sizes() {
+        let mut project = Project::new("Tiny Generated", 1, 1, ModTarget::Forge);
+
+        apply_generated_defaults(&mut project).expect("defaults apply");
+
+        let background = project
+            .elements
+            .iter()
+            .find(|element| element.id == "background")
+            .expect("background element exists");
+        assert_eq!(background.render_mode, TextureRenderMode::Plain);
+        assert!(project
+            .asset_metadata
+            .get(GENERATED_GUI_PANEL)
+            .and_then(|metadata| metadata.nine_slice.as_ref())
+            .is_none());
     }
 
     #[test]

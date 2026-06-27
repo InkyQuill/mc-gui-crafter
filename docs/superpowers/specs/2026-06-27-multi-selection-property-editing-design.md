@@ -102,24 +102,28 @@ asked to reason about partial application for a visible control.
 ## Batch Update Flow
 
 The property panel should call explicit multi-update helpers rather than looping
-ad hoc in component event handlers. The helper should:
+ad hoc in component event handlers. The multi-update helper should:
 
 - Accept selected object IDs and a patch.
-- Filter to objects that support the edited field set.
+- Validate selected IDs and the patch up front.
+- Reject missing IDs, duplicate IDs, and unsupported fields before any history or
+  change is recorded.
+- Apply updates only if the full batch is valid.
 - Preserve undo/history behavior consistently with existing single-object
   updates.
 - Produce one user-visible action for one property-panel edit.
 - Log the action through the existing session logging path.
 
 This keeps the property panel focused on UI state and keeps batch semantics
-centralized.
+centralized. If the UI needs skip/continue behavior, it should pre-filter the
+selection before invoking the helper so the helper remains atomic.
 
 ## Error Handling
 
-If a selected object disappears during an edit, the batch update skips it and
-continues with the remaining selected objects. If no selected object supports the
-field being changed, the edit is ignored and a warning is written to the session
-log.
+If a selected object disappears during an edit, the frontend should either
+pre-filter it before calling the helper or surface the helper's rejection. If no
+selected object supports the field being changed, the edit is ignored and a
+warning is written to the session log.
 
 If a backend update fails, the status bar should report the failure using the
 existing status mechanism, which also records the error in the session log.

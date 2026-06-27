@@ -252,7 +252,7 @@ In `src/lib/api.ts`, below `ElementMoveRequest`, add:
 ```ts
 export interface ElementPatchRequest {
   id: string;
-  changes: Partial<Element>;
+  changes: ElementChanges;
 }
 ```
 
@@ -368,12 +368,13 @@ selectElement(id: string | null, additive = false) {
     const next = new Set(this.selectedIds);
     if (next.has(id)) {
       next.delete(id);
+      this.selectedElementId = next.size > 0 ? [...next][0] : null;
     } else {
       next.add(id);
+      this.selectedElementId = id;
     }
     this.selectedIds = next;
-    this.selectedElementId = id;
-    this.selectionAnchorId = id;
+    this.selectionAnchorId = this.selectedElementId;
   } else {
     this.selectedElementId = id;
     this.selectedIds = id ? new Set([id]) : new Set();

@@ -7,7 +7,6 @@ use image::{GenericImageView, Rgba, RgbaImage};
 const MAX_COMPOSITE_DIMENSION: u32 = 4096;
 const MAX_COMPOSITE_PIXELS: u64 = 16_777_216;
 const GENERATED_GUI_PANEL: &str = "textures/generated/gui_panel.png";
-const LEGACY_BACKGROUND_TEXTURE: &str = "textures/background.png";
 
 pub fn composite_atlas_for_layer(project: &Project, layer: Layer) -> Result<Vec<u8>, String> {
     let has_elements = project
@@ -269,7 +268,7 @@ fn overlay_asset(
     let Some(data) = project.texture_data.get(asset_name) else {
         if element.element_type == ElementType::Texture
             && element.render_mode != TextureRenderMode::NineSlice
-            && is_generated_gui_panel_asset(asset_name)
+            && asset_name == GENERATED_GUI_PANEL
         {
             let (width, height) = generated_panel_target_size(project, element);
             let data = generated_gui_panel(width, height)?;
@@ -282,7 +281,7 @@ fn overlay_asset(
 
     if element.element_type == ElementType::Texture
         && element.render_mode != TextureRenderMode::NineSlice
-        && is_generated_gui_panel_asset(asset_name)
+        && asset_name == GENERATED_GUI_PANEL
         && generated_panel_asset_is_stale(data, project, element)
     {
         let (width, height) = generated_panel_target_size(project, element);
@@ -291,10 +290,6 @@ fn overlay_asset(
     }
 
     overlay_texture_data(img, project, element, data, asset_name, offset_x, offset_y)
-}
-
-fn is_generated_gui_panel_asset(asset_name: &str) -> bool {
-    matches!(asset_name, GENERATED_GUI_PANEL | LEGACY_BACKGROUND_TEXTURE)
 }
 
 fn generated_panel_target_size(project: &Project, element: &Element) -> (u32, u32) {

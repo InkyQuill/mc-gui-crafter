@@ -97,7 +97,7 @@ describe("mock elementUpdateMany", () => {
     const before = await projectSummary(project.project_id);
     await expect(elementUpdateMany([
       { id: "a", changes: { id: "b" } as never },
-    ], project.project_id)).rejects.toBe("Invalid element update: id is not a valid field");
+    ], project.project_id)).rejects.toBe("Invalid element update: id is not a mutable field");
 
     expect((await projectSummary(project.project_id)).revision).toBe(before.revision);
     await expect(elementUpdateMany([

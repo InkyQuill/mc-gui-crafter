@@ -535,10 +535,11 @@ export class ProjectStore {
     if (patches.length === 0) return [];
 
     const basePatches: api.ElementPatchRequest[] = [];
+    const statePatches: Array<{ id: string; fields: StateOverrideFields }> = [];
     if (this.isEditingStateOverrides) {
       for (const patch of patches) {
         const element = this.elements.find(item => item.id === patch.id);
-        if (!element) continue;
+        if (!element) throw new Error(`Element not found: ${patch.id}`);
 
         const stateFields = this.pickElementStateOverrideFields(patch.changes);
         const baseChanges = this.omitElementStateOverrideFields(patch.changes);
@@ -548,9 +549,7 @@ export class ProjectStore {
           delete baseChanges.size;
         }
 
-        if (Object.keys(stateFields).length > 0) {
-          await this.commitElementStateOverride(patch.id, stateFields, false);
-        }
+        if (Object.keys(stateFields).length > 0) statePatches.push({ id: patch.id, fields: stateFields });
         if (Object.keys(baseChanges).length > 0) {
           basePatches.push({ id: patch.id, changes: baseChanges });
         }
@@ -562,6 +561,9 @@ export class ProjectStore {
     const updated = basePatches.length > 0
       ? await api.elementUpdateMany(basePatches, this.activeProjectId ?? undefined)
       : [];
+    for (const patch of statePatches) {
+      await this.commitElementStateOverride(patch.id, patch.fields, false);
+    }
     await this.refreshSessions();
     await this.hydrateActiveProject();
     return updated;

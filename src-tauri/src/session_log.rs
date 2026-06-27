@@ -85,9 +85,7 @@ fn sanitize_label(value: &str) -> String {
 
 fn compact_value(value: serde_json::Value) -> serde_json::Value {
     match value {
-        serde_json::Value::String(text) => {
-            serde_json::Value::String(truncate(text, MAX_DETAIL_STRING))
-        }
+        serde_json::Value::String(text) => serde_json::Value::String(compact_string(text)),
         serde_json::Value::Array(items) => serde_json::Value::Array(
             items
                 .into_iter()
@@ -104,6 +102,17 @@ fn compact_value(value: serde_json::Value) -> serde_json::Value {
         ),
         other => other,
     }
+}
+
+fn compact_string(text: String) -> String {
+    if text.starts_with("data:image/") {
+        let media_type = text
+            .split_once(';')
+            .map(|(prefix, _)| prefix)
+            .unwrap_or("data:image");
+        return format!("[redacted {media_type} data url, {} chars]", text.len());
+    }
+    truncate(text, MAX_DETAIL_STRING)
 }
 
 fn truncate(mut value: String, max_chars: usize) -> String {
@@ -139,6 +148,30 @@ mod tests {
         let content = fs::read_to_string(logger.path()).unwrap();
         assert!(content.contains("\"level\":\"warning\""));
         assert!(content.contains("warning text"));
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn session_logger_redacts_image_data_urls() {
+        let dir = std::env::temp_dir().join(format!(
+            "mc-gui-crafter-session-log-redaction-test-{}",
+            timestamp_millis()
+        ));
+        let mut logger = SessionLogger::new(&dir).unwrap();
+        logger
+            .append(SessionLogEntry {
+                level: SessionLogLevel::Info,
+                source: "test".to_string(),
+                category: "feedback".to_string(),
+                message: "image payload".to_string(),
+                details: Some(json!({ "image": "data:image/png;base64,abcdef" })),
+            })
+            .unwrap();
+
+        let content = fs::read_to_string(logger.path()).unwrap();
+        assert!(content.contains("[redacted data:image/png data url"));
+        assert!(!content.contains("abcdef"));
 
         let _ = fs::remove_dir_all(dir);
     }

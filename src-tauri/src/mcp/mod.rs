@@ -909,7 +909,11 @@ fn get_tool_definitions() -> Vec<serde_json::Value> {
                     true,
                 ),
                 ("target_id", string_schema("Target ID"), true),
-                ("fields", object_schema(Vec::new()), true),
+                (
+                    "fields",
+                    free_form_object_schema("Override fields for the selected target"),
+                    true,
+                ),
             ]),
         ),
         td(
@@ -1584,6 +1588,14 @@ fn object_schema(items: Vec<(&str, serde_json::Value, bool)>) -> serde_json::Val
         }
     }
     serde_json::json!({ "type": "object", "properties": properties, "required": required, "additionalProperties": false })
+}
+
+fn free_form_object_schema(description: &str) -> serde_json::Value {
+    serde_json::json!({
+        "type": "object",
+        "description": description,
+        "additionalProperties": true
+    })
 }
 
 fn serde_values<T: Serialize>(values: impl IntoIterator<Item = T>) -> serde_json::Value {
@@ -5198,6 +5210,20 @@ mod tests {
             .as_object()
             .unwrap()
             .contains_key("state_id"));
+    }
+
+    #[test]
+    fn state_override_update_schema_allows_free_form_fields() {
+        let tools = get_tool_definitions();
+        let tool = tools
+            .iter()
+            .find(|tool| tool["name"] == "state_override_update")
+            .expect("state_override_update should be listed");
+
+        assert_eq!(
+            tool["inputSchema"]["properties"]["fields"]["additionalProperties"],
+            serde_json::json!(true)
+        );
     }
 
     #[test]

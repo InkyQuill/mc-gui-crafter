@@ -88,15 +88,17 @@ class EditorStore {
     }
     if (additive && id) {
       const next = new Set(this.selectedIds);
+      let primary: string | null;
       if (next.has(id)) {
         next.delete(id);
-        this.selectedElementId = next.size > 0 ? [...next][0] : null;
+        primary = next.size > 0 ? [...next][0] : null;
       } else {
         next.add(id);
-        this.selectedElementId = id;
+        primary = id;
       }
       this.selectedIds = next;
-      this.selectionAnchorId = id;
+      this.selectedElementId = primary;
+      this.selectionAnchorId = primary;
     } else {
       this.selectedElementId = id;
       this.selectedIds = id ? new Set([id]) : new Set();

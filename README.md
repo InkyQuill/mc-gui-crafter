@@ -124,20 +124,19 @@ The selected URL is shown in the start panel and available through the Tauri `mc
 
 ## Feedback and Logs
 
-Each app launch writes a JSONL session log under:
-
-```text
-~/.config/mc-gui-crafter/logs/session-*.jsonl
-```
+Each app launch writes a JSONL session log in the app's platform-specific config
+directory, under `mc-gui-crafter/logs/session-*.jsonl`. For AI/MCP reports,
+`session_report` returns the exact current `log_path`; attach that file rather
+than guessing from older logs.
 
 Logs capture UI actions, MCP tool calls, export preview warnings/errors, visible-size validation warnings, and user/AI feedback reports. When reporting a problem, attach:
 
-- the latest `session-*.jsonl` file from the logs directory
+- the current `session-*.jsonl` file for your platform, preferably the exact `log_path` returned by `session_report`
 - the `.mcgui` project file if it is safe to share
 - any generated export directory or relevant `project_export_preview` output
 - screenshots or `project_render` PNGs when the problem is visual
 
-AI agents connected through MCP should call `session_report` with a short summary, severity, and reproduction details before asking the user to file an issue. After logging the report, ask the user to attach the latest session log to the issue.
+AI agents connected through MCP should call `session_report` with a short summary, severity, and reproduction details before asking the user to file an issue. After logging the report, ask the user to attach the exact `log_path` returned by `session_report`.
 
 See `docs/feedback.md` for the recommended issue format and privacy notes.
 

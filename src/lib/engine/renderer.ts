@@ -1071,8 +1071,8 @@ export class GuiRenderer {
   private drawGeneratedTextureFallback(el: Element): Container {
     const container = new Container();
     const g = new Graphics();
-    const w = el.width ?? 16;
-    const h = el.height ?? 16;
+    const w = el.width ?? el.size ?? 16;
+    const h = el.height ?? el.size ?? 16;
 
     if (el.asset === "textures/generated/gui_panel.png" || el.asset === LEGACY_BACKGROUND_TEXTURE) {
       this.drawGeneratedGuiPanelGraphics(g, el.x, el.y, w, h);
