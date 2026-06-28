@@ -1,7 +1,9 @@
+#[allow(dead_code)]
 pub mod generator;
 use crate::project::{
     Element, ElementType, Layer, NineSlice, NineSliceMode, Project, TextureRenderMode,
 };
+use crate::texture_pack;
 use image::{GenericImageView, Rgba, RgbaImage};
 
 const MAX_COMPOSITE_DIMENSION: u32 = 4096;
@@ -162,8 +164,14 @@ fn overlay_slot(
     if let Some(asset_name) = element.asset.as_deref().or_else(|| {
         project
             .texture_data
-            .contains_key("textures/generated/slot.png")
-            .then_some("textures/generated/slot.png")
+            .contains_key(texture_pack::MINECRAFT_SLOT)
+            .then_some(texture_pack::MINECRAFT_SLOT)
+            .or_else(|| {
+                project
+                    .texture_data
+                    .contains_key("textures/generated/slot.png")
+                    .then_some("textures/generated/slot.png")
+            })
     }) {
         return overlay_asset(img, project, element, asset_name, offset_x, offset_y);
     }
@@ -190,8 +198,14 @@ fn overlay_button(
     if let Some(asset_name) = element.asset.as_deref().or_else(|| {
         project
             .texture_data
-            .contains_key("textures/generated/button.png")
-            .then_some("textures/generated/button.png")
+            .contains_key(texture_pack::MINECRAFT_BUTTON)
+            .then_some(texture_pack::MINECRAFT_BUTTON)
+            .or_else(|| {
+                project
+                    .texture_data
+                    .contains_key("textures/generated/button.png")
+                    .then_some("textures/generated/button.png")
+            })
     }) {
         overlay_asset(img, project, element, asset_name, offset_x, offset_y)?;
     } else {
@@ -657,14 +671,17 @@ pub fn generated_button() -> Result<Vec<u8>, String> {
     encode_png(img)
 }
 
+#[allow(dead_code)]
 pub fn generated_progress_arrow() -> Result<Vec<u8>, String> {
     encode_png(generator::generate_progress_arrow())
 }
 
+#[allow(dead_code)]
 pub fn generated_fluid_tank() -> Result<Vec<u8>, String> {
     encode_png(generator::generate_fluid_frame())
 }
 
+#[allow(dead_code)]
 pub fn generated_energy_bar() -> Result<Vec<u8>, String> {
     encode_png(generator::generate_energy_frame())
 }

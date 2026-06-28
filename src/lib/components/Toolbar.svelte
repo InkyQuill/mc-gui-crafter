@@ -65,6 +65,7 @@
   async function handleUndo() { await project.undo(); }
   async function handleRedo() { await project.redo(); }
   function toggleGrid() { editor.showGrid = !editor.showGrid; }
+  function toggleCenterAxes() { editor.showCenterAxes = !editor.showCenterAxes; }
 
   async function handleSwitchProject(projectId: string) {
     await project.switchProject(projectId);
@@ -150,6 +151,9 @@
     <div class="toolbar-group">
       <button onclick={toggleGrid} class:active={editor.showGrid} title="Toggle grid">
         Grid
+      </button>
+      <button onclick={toggleCenterAxes} class:active={editor.showCenterAxes} title="Toggle center axes">
+        Axes
       </button>
       <button class="icon-button" onclick={() => editor.zoomOut()} title="Zoom out" aria-label="Zoom out">−</button>
       <span class="zoom-label">{editor.zoom}×</span>

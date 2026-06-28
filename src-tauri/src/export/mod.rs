@@ -499,6 +499,7 @@ fn layout_json_value_for_state(
 
     let mut layout = serde_json::json!({
         "gui_size": project.gui_size,
+        "main_gui_center": project.main_gui_center,
         "visual_bounds": visual_bounds,
         "textures": textures_json,
         "elements": elements_json,
@@ -625,6 +626,8 @@ fn visual_authoring_validation(project: &Project) -> VisualAuthoringValidation {
     let mut warnings = Vec::new();
     let mut invalid_nine_slice_elements = HashSet::new();
 
+    warnings.extend(main_gui_center_warnings(project));
+
     for element in project.elements.iter().filter(|element| element.visible) {
         if let Some(asset) = element.asset.as_deref() {
             if let Some(uv) = element.uv.as_ref() {
@@ -696,6 +699,41 @@ fn visual_authoring_validation(project: &Project) -> VisualAuthoringValidation {
         warnings,
         invalid_nine_slice_elements,
     }
+}
+
+fn main_gui_center_warnings(project: &Project) -> Vec<String> {
+    let mut warnings = Vec::new();
+    let center = project.main_gui_center;
+
+    if center.x < 0
+        || center.y < 0
+        || center.x > project.gui_size.width as i32
+        || center.y > project.gui_size.height as i32
+    {
+        warnings.push(format!(
+            "Main GUI center axes are at {},{} outside the declared project size {}x{}. Export will center the screen on these axes; move the axes inside the main GUI canvas unless this is intentional.",
+            center.x, center.y, project.gui_size.width, project.gui_size.height
+        ));
+    }
+
+    if let Some(bounds) = project.visible_content_bounds() {
+        let max_x = i64::from(bounds.x) + i64::from(bounds.width);
+        let max_y = i64::from(bounds.y) + i64::from(bounds.height);
+        let center_x = i64::from(center.x);
+        let center_y = i64::from(center.y);
+        if center_x < i64::from(bounds.x)
+            || center_y < i64::from(bounds.y)
+            || center_x > max_x
+            || center_y > max_y
+        {
+            warnings.push(format!(
+                "Main GUI center axes are at {},{} outside visible content bounds {}x{} at {},{}. Export will still use these axes; adjust them if the in-game GUI appears offset.",
+                center.x, center.y, bounds.width, bounds.height, bounds.x, bounds.y
+            ));
+        }
+    }
+
+    warnings
 }
 
 fn resolved_nine_slice<'a>(
@@ -1752,6 +1790,8 @@ public final class GuiLayout {{
     private static final class LayoutData {{
         @SerializedName("visual_bounds")
         VisualBounds visualBounds;
+        @SerializedName("main_gui_center")
+        MainGuiCenter mainGuiCenter;
         TexturesData textures;
         List<Element> elements;
         List<Animation> animations;
@@ -1774,6 +1814,11 @@ public final class GuiLayout {{
         int y;
         int width;
         int height;
+    }}
+
+    private static final class MainGuiCenter {{
+        int x = WIDTH / 2;
+        int y = HEIGHT / 2;
     }}
 
     private static final class Element {{
@@ -2027,6 +2072,8 @@ public final class GuiLayout {{
     private static final class LayoutData {{
         @SerializedName("visual_bounds")
         VisualBounds visualBounds;
+        @SerializedName("main_gui_center")
+        MainGuiCenter mainGuiCenter;
         TexturesData textures;
         List<Element> elements;
         List<Animation> animations;
@@ -2049,6 +2096,11 @@ public final class GuiLayout {{
         int y;
         int width;
         int height;
+    }}
+
+    private static final class MainGuiCenter {{
+        int x = WIDTH / 2;
+        int y = HEIGHT / 2;
     }}
 
     private static final class Element {{
@@ -2136,6 +2188,8 @@ public class {screen_class_name} extends AbstractContainerScreen<AbstractContain
     @Override
     protected void init() {{
         super.init();
+        this.leftPos = (this.width / 2) - {center_x};
+        this.topPos = (this.height / 2) - {center_y};
         this.layout = GuiLayout.load("{mod_id}", "gui/{resource_name}_layout.json", "textures/gui/{resource_name}_gui.png");
     }}
 
@@ -2159,6 +2213,8 @@ public class {screen_class_name} extends AbstractContainerScreen<AbstractContain
         screen_class_name = export.screen_class_name,
         width = project.gui_size.width,
         height = project.gui_size.height,
+        center_x = project.main_gui_center.x,
+        center_y = project.main_gui_center.y,
         mod_id = export.mod_id,
         resource_name = export.resource_name,
         animation_hooks =
@@ -2188,6 +2244,8 @@ public class {screen_class_name} extends AbstractContainerScreen<AbstractContain
     @Override
     protected void init() {{
         super.init();
+        this.leftPos = (this.width / 2) - {center_x};
+        this.topPos = (this.height / 2) - {center_y};
         this.layout = GuiLayout.load("{mod_id}", "gui/{resource_name}_layout.json", "textures/gui/{resource_name}_gui.png");
     }}
 
@@ -2211,6 +2269,8 @@ public class {screen_class_name} extends AbstractContainerScreen<AbstractContain
         screen_class_name = export.screen_class_name,
         width = project.gui_size.width,
         height = project.gui_size.height,
+        center_x = project.main_gui_center.x,
+        center_y = project.main_gui_center.y,
         mod_id = export.mod_id,
         resource_name = export.resource_name,
         animation_hooks =
@@ -2240,6 +2300,8 @@ public class {screen_class_name} extends HandledScreen<ScreenHandler> {{
     @Override
     protected void init() {{
         super.init();
+        this.x = (this.width / 2) - {center_x};
+        this.y = (this.height / 2) - {center_y};
         this.layout = GuiLayout.load("{mod_id}", "gui/{resource_name}_layout.json", "textures/gui/{resource_name}_gui.png");
     }}
 
@@ -2263,6 +2325,8 @@ public class {screen_class_name} extends HandledScreen<ScreenHandler> {{
         screen_class_name = export.screen_class_name,
         width = project.gui_size.width,
         height = project.gui_size.height,
+        center_x = project.main_gui_center.x,
+        center_y = project.main_gui_center.y,
         mod_id = export.mod_id,
         resource_name = export.resource_name,
         animation_hooks = generate_animation_hooks(&project.animations, "context", "x", "y")
@@ -2518,6 +2582,7 @@ mod tests {
                 width: 187,
                 height: 173,
             },
+            main_gui_center: crate::project::MainGuiCenter { x: 93, y: 86 },
             mod_target: target,
             elements: vec![
                 Element {
@@ -3001,6 +3066,17 @@ mod tests {
             layout["attached_regions"][0]["semantic_group"],
             "food_returns"
         );
+    }
+
+    #[test]
+    fn layout_json_includes_main_gui_center() {
+        let mut project = Project::new("Centered", 176, 166, ModTarget::Forge);
+        project.main_gui_center = crate::project::MainGuiCenter { x: 120, y: 80 };
+
+        let layout = layout_json_value(&project, textures_json_for_test());
+
+        assert_eq!(layout["main_gui_center"]["x"], 120);
+        assert_eq!(layout["main_gui_center"]["y"], 80);
     }
 
     #[test]
@@ -3972,6 +4048,53 @@ mod tests {
         assert!(layout.contains("top + visualOffsetY"));
         assert!(layout.contains("backgroundWidth"));
         assert!(layout.contains("backgroundHeight"));
+    }
+
+    #[test]
+    fn generated_runtime_uses_main_gui_center_for_screen_position() {
+        let output_dir = TempExportDir::new("main-gui-center-runtime");
+        let mut project = Project::new("Centered", 100, 80, ModTarget::Forge);
+        project.main_gui_center = crate::project::MainGuiCenter { x: 70, y: 30 };
+
+        export_project(
+            &project,
+            &ExportConfig {
+                mod_id: "testmod".into(),
+                package: "com.example.test".into(),
+                class_name: "CenteredGui".into(),
+                output_dir: output_dir.path().to_string_lossy().to_string(),
+                settings_override: Some(ProjectExportSettings {
+                    codegen_mode: CodegenMode::Modular,
+                    generate_runtime_helpers: true,
+                    generate_semantic_registry: false,
+                }),
+                overwrite: true,
+                scope: ExportScope::FullMod,
+            },
+            "forge",
+        )
+        .unwrap();
+
+        let screen = read(
+            &output_dir
+                .path()
+                .join("src/main/java/com/example/test/CenteredGuiScreen.java"),
+        );
+        let layout = read(
+            &output_dir
+                .path()
+                .join("src/main/java/com/example/test/GuiLayout.java"),
+        );
+        let layout_json = read(
+            &output_dir
+                .path()
+                .join("src/main/resources/assets/testmod/gui/centeredgui_layout.json"),
+        );
+
+        assert!(screen.contains("this.leftPos = (this.width / 2) - 70;"));
+        assert!(screen.contains("this.topPos = (this.height / 2) - 30;"));
+        assert!(layout.contains("MainGuiCenter mainGuiCenter;"));
+        assert!(layout_json.contains(r#""main_gui_center""#));
     }
 
     #[test]
@@ -5318,6 +5441,62 @@ mod tests {
                     && warning.contains("project size is 100x80")
             }),
             "shrink opportunity should warn: {:?}",
+            preview.warnings
+        );
+    }
+
+    #[test]
+    fn preview_warns_when_main_gui_center_is_outside_visual_bounds() {
+        let output_dir = TempExportDir::new("center-outside-visible-preview");
+        let mut project = Project::new("Center Visible", 100, 80, ModTarget::Forge);
+        project.main_gui_center = crate::project::MainGuiCenter { x: 10, y: 10 };
+        let mut panel = button_element("panel", ElementType::Texture, 40, 20, None);
+        panel.width = Some(30);
+        panel.height = Some(20);
+        panel.asset = Some("textures/widgets/panel.png".into());
+        project.elements.push(panel);
+        project.texture_data.insert(
+            "textures/widgets/panel.png".into(),
+            png_bytes_with_size(30, 20, [180, 180, 180, 255]),
+        );
+        let config = export_config(output_dir.path(), "CenterVisibleGui");
+
+        let preview = preview_export(&project, &config, "forge").unwrap();
+
+        assert!(
+            preview.warnings.iter().any(|warning| {
+                warning.contains("Main GUI center axes are at 10,10")
+                    && warning.contains("outside visible content bounds 30x20 at 40,20")
+            }),
+            "center outside visible content should warn: {:?}",
+            preview.warnings
+        );
+    }
+
+    #[test]
+    fn preview_warns_when_main_gui_center_is_outside_declared_gui_size() {
+        let output_dir = TempExportDir::new("center-outside-size-preview");
+        let mut project = Project::new("Center Size", 100, 80, ModTarget::Forge);
+        project.main_gui_center = crate::project::MainGuiCenter { x: 120, y: 40 };
+        let mut panel = button_element("panel", ElementType::Texture, 0, 0, None);
+        panel.width = Some(100);
+        panel.height = Some(80);
+        panel.asset = Some("textures/widgets/panel.png".into());
+        project.elements.push(panel);
+        project.texture_data.insert(
+            "textures/widgets/panel.png".into(),
+            png_bytes_with_size(100, 80, [180, 180, 180, 255]),
+        );
+        let config = export_config(output_dir.path(), "CenterSizeGui");
+
+        let preview = preview_export(&project, &config, "forge").unwrap();
+
+        assert!(
+            preview.warnings.iter().any(|warning| {
+                warning.contains("Main GUI center axes are at 120,40")
+                    && warning.contains("outside the declared project size 100x80")
+            }),
+            "center outside declared project size should warn: {:?}",
             preview.warnings
         );
     }

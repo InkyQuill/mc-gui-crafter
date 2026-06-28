@@ -1,4 +1,23 @@
 <script lang="ts">
+  import {
+    ArrowDown,
+    ArrowRight,
+    ArrowUp,
+    BringToFront,
+    Droplets,
+    Eye,
+    EyeOff,
+    Image,
+    Layers,
+    MousePointerClick,
+    PanelTop,
+    SendToBack,
+    Square,
+    ToggleLeft,
+    Type,
+    X,
+    Zap,
+  } from "@lucide/svelte";
   import { project } from "../stores/project.svelte";
   import { editor } from "../stores/editor.svelte";
   import type { AttachedRegion, Element, Group, SemanticGroup } from "../types";
@@ -9,6 +28,7 @@
     | { kind: "element"; element: Element; meta: string };
 
   let collapsedGroups = $state<Set<string>>(new Set());
+  let contextMenu = $state<{ element: Element; x: number; y: number } | null>(null);
 
   function displayId(id: string): string {
     return id.length > 26 ? `${id.slice(0, 23)}...` : id;
@@ -37,17 +57,19 @@
     return `${region.anchor} · ${region.state} · ${count} elements`;
   }
 
-  function iconForElement(el: Element): string {
+  function iconForElement(el: Element) {
     switch (el.type) {
-      case "slot": return "◻";
-      case "texture": return "▣";
-      case "progress": return "→";
-      case "text": return "T";
-      case "fluid_tank": return "▥";
-      case "energy_bar": return "⚡";
-      case "button": return "▭";
-      case "toggle_button": return "◉";
-      default: return "•";
+      case "slot":
+      case "virtual_slot_cell": return Square;
+      case "texture": return Image;
+      case "progress": return ArrowRight;
+      case "text": return Type;
+      case "fluid_tank": return Droplets;
+      case "energy_bar": return Zap;
+      case "button": return MousePointerClick;
+      case "toggle_button": return ToggleLeft;
+      case "panel": return PanelTop;
+      default: return Layers;
     }
   }
 
@@ -147,6 +169,21 @@
     selectElementFromList(id, event);
   }
 
+  function openElementContextMenu(el: Element, event: MouseEvent) {
+    event.preventDefault();
+    editor.selectElement(el.id, event.ctrlKey || event.metaKey);
+    contextMenu = { element: el, x: event.clientX, y: event.clientY };
+  }
+
+  function closeContextMenu() {
+    contextMenu = null;
+  }
+
+  function runContextAction(action: () => void | Promise<void>) {
+    void action();
+    closeContextMenu();
+  }
+
   let selectedGroupIds = $derived.by(() => {
     void editor.selectionRevision;
     const ids = new Set<string>();
@@ -186,6 +223,10 @@
   });
 </script>
 
+<svelte:window onclick={closeContextMenu} onkeydown={(event) => {
+  if (event.key === "Escape") closeContextMenu();
+}} />
+
 <aside class="layers">
   <h3>Layers ({project.effectiveElements.length})</h3>
   <div class="group-actions">
@@ -214,6 +255,7 @@
       {@const isFrontmost = idx === project.elements.length - 1}
       {@const stateBadge = stateBadgeForElement(el)}
       {@const isSelected = selectedElementIds.has(el.id)}
+      {@const ElementIcon = iconForElement(el)}
       <div class="layer-row" class:nested>
         <button
           class="layer-item"
@@ -221,8 +263,9 @@
           class:hidden-el={!(el.visible ?? true)}
           onclick={(event) => selectElementFromList(el.id, event)}
           onkeydown={(event) => selectElementFromKeyboard(el.id, event)}
+          oncontextmenu={(event) => openElementContextMenu(el, event)}
         >
-          <span class="layer-icon">{iconForElement(el)}</span>
+          <span class="layer-icon"><ElementIcon size={14} strokeWidth={1.75} /></span>
           <span class="layer-text">
             <span class="layer-title">{displayId(el.id)}</span>
             <span class="layer-meta">
@@ -239,26 +282,34 @@
               class="clear-btn"
               onclick={() => project.clearElementOverride(el.id)}
               title="Clear state overrides"
-            >×</button>
+              aria-label={`Clear state overrides for ${el.id}`}
+            ><X size={13} strokeWidth={1.75} /></button>
           {/if}
           <button
             class="reorder-btn"
             disabled={isBackmost}
             onclick={() => project.moveElementDown(el.id)}
             title="Move down (send backward)"
-          >↓</button>
+            aria-label={`Move ${el.id} backward`}
+          ><ArrowDown size={13} strokeWidth={1.75} /></button>
           <button
             class="reorder-btn"
             disabled={isFrontmost}
             onclick={() => project.moveElementUp(el.id)}
             title="Move up (bring forward)"
-          >↑</button>
+            aria-label={`Move ${el.id} forward`}
+          ><ArrowUp size={13} strokeWidth={1.75} /></button>
           <button
             class="visibility-btn"
             onclick={() => toggleVisibility(el)}
             title={el.visible === false ? "Show" : "Hide"}
+            aria-label={el.visible === false ? `Show ${el.id}` : `Hide ${el.id}`}
           >
-            {el.visible === false ? "◌" : "●"}
+            {#if el.visible === false}
+              <EyeOff size={13} strokeWidth={1.75} />
+            {:else}
+              <Eye size={13} strokeWidth={1.75} />
+            {/if}
           </button>
         </div>
       </div>
@@ -320,6 +371,42 @@
           {@render elementRow(row.element)}
         {/if}
       {/each}
+    </div>
+  {/if}
+
+  {#if contextMenu}
+    {@const idx = project.elements.findIndex(element => element.id === contextMenu!.element.id)}
+    <div
+      class="context-menu"
+      style={`left: ${contextMenu.x}px; top: ${contextMenu.y}px;`}
+      role="menu"
+      tabindex="-1"
+      oncontextmenu={(event) => event.preventDefault()}
+    >
+      <button
+        role="menuitem"
+        disabled={idx === project.elements.length - 1}
+        onclick={() => runContextAction(() => project.bringElementToFront(contextMenu!.element.id))}
+      >
+        <BringToFront size={14} strokeWidth={1.75} /> Bring to front
+      </button>
+      <button
+        role="menuitem"
+        disabled={idx === 0}
+        onclick={() => runContextAction(() => project.sendElementToBack(contextMenu!.element.id))}
+      >
+        <SendToBack size={14} strokeWidth={1.75} /> Send to back
+      </button>
+      <button
+        role="menuitem"
+        onclick={() => runContextAction(() => toggleVisibility(contextMenu!.element))}
+      >
+        {#if contextMenu.element.visible === false}
+          <Eye size={14} strokeWidth={1.75} /> Show
+        {:else}
+          <EyeOff size={14} strokeWidth={1.75} /> Hide
+        {/if}
+      </button>
     </div>
   {/if}
 </aside>
@@ -388,6 +475,12 @@
   .group-main,
   .layer-item {
     min-width: 0;
+  }
+
+  .group-row {
+    display: flex;
+    align-items: stretch;
+    gap: 1px;
   }
 
   .group-main {
@@ -476,7 +569,11 @@
   .layer-icon {
     font-size: 12px;
     width: 18px;
+    height: 18px;
     text-align: center;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
   }
 
   .layer-text {
@@ -499,12 +596,16 @@
     background: transparent;
     border: 1px solid transparent;
     color: var(--muted-text);
-    padding: 0 5px;
+    padding: 0;
     font-size: 10px;
     cursor: pointer;
     border-radius: 2px;
     font-family: monospace;
-    min-width: 22px;
+    min-width: 24px;
+    min-height: 24px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
   }
 
   .reorder-btn:hover:not(:disabled), .visibility-btn:hover, .clear-btn:hover {
@@ -527,5 +628,42 @@
 
   .group-clear {
     align-self: stretch;
+  }
+
+  .context-menu {
+    position: fixed;
+    z-index: 1200;
+    min-width: 160px;
+    padding: 4px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  }
+
+  .context-menu button {
+    width: 100%;
+    min-height: 30px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 8px;
+    background: transparent;
+    border: 0;
+    border-radius: 3px;
+    color: var(--text);
+    cursor: pointer;
+    font: inherit;
+    font-size: 11px;
+    text-align: left;
+  }
+
+  .context-menu button:hover:not(:disabled) {
+    background: var(--surface-raised);
+  }
+
+  .context-menu button:disabled {
+    opacity: 0.4;
+    cursor: default;
   }
 </style>

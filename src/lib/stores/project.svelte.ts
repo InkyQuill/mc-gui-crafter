@@ -11,6 +11,7 @@ import type {
   FontAsset,
   FontRenderData,
   Group,
+  MainGuiCenter,
   ModTarget,
   ProjectExportSettings,
   ProjectSessionSummary,
@@ -42,6 +43,13 @@ const DEFAULT_EXPORT_SETTINGS: ProjectExportSettings = {
   generate_semantic_registry: false,
 };
 
+function defaultMainGuiCenter(size: Size): MainGuiCenter {
+  return {
+    x: Math.floor(size.width / 2),
+    y: Math.floor(size.height / 2),
+  };
+}
+
 const ELEMENT_STATE_OVERRIDE_FIELDS = new Set(["visible", "x", "y", "width", "height", "attached_region", "layer"]);
 const ATTACHED_REGION_STATE_OVERRIDE_FIELDS = new Set(["visible", "x", "y", "width", "height"]);
 
@@ -52,6 +60,7 @@ export class ProjectStore {
   activeProjectId = $state<string | null>(null);
   name = $state("Untitled GUI");
   guiSize = $state<Size>({ width: 176, height: 166 });
+  mainGuiCenter = $state<MainGuiCenter>({ x: 88, y: 83 });
   modTarget = $state<ModTarget>("forge");
   elements = $state<Element[]>([]);
   groups = $state<Group[]>([]);
@@ -264,6 +273,16 @@ export class ProjectStore {
     await this.hydrateActiveProject();
   }
 
+  async updateMainGuiCenter(center: MainGuiCenter) {
+    const next = {
+      x: Math.round(center.x),
+      y: Math.round(center.y),
+    };
+    await api.projectMainGuiCenterUpdate(next, this.activeProjectId ?? undefined);
+    await this.refreshSessions();
+    await this.hydrateActiveProject();
+  }
+
   async saveProject() {
     if (!this.activeProjectId) return;
     const result = await api.projectSave(this.activeProjectId);
@@ -322,17 +341,33 @@ export class ProjectStore {
     }
 
     if (type === "progress") {
-      element.width ??= 22;
-      element.height ??= 15;
-      element.asset ??= "textures/generated/progress_arrow.png";
+      element.width ??= 24;
+      element.height ??= 16;
+      element.asset ??= "textures/minecraft/burn_progress.png";
       element.layer ??= "animatable";
       element.direction ??= "left_to_right";
+    }
+
+    if (type === "fluid_tank") {
+      element.width ??= 18;
+      element.height ??= 52;
+      element.asset ??= "textures/generated/fluid_tank.png";
+      element.layer ??= "animatable";
+      element.direction ??= "bottom_to_top";
+    }
+
+    if (type === "energy_bar") {
+      element.width ??= 14;
+      element.height ??= 52;
+      element.asset ??= "textures/generated/energy_bar.png";
+      element.layer ??= "animatable";
+      element.direction ??= "bottom_to_top";
     }
 
     if (type === "button") {
       element.width ??= 52;
       element.height ??= 20;
-      element.asset ??= "textures/generated/button.png";
+      element.asset ??= "textures/minecraft/button.png";
       element.layer ??= "background";
       element.content ??= "Button";
     }
@@ -340,7 +375,7 @@ export class ProjectStore {
     if (type === "toggle_button") {
       element.width ??= 20;
       element.height ??= 20;
-      element.asset ??= "textures/generated/button.png";
+      element.asset ??= "textures/minecraft/button.png";
       element.layer ??= "background";
       element.content ??= "Toggle";
     }
@@ -769,6 +804,54 @@ export class ProjectStore {
     }
   }
 
+  async bringElementToFront(id: string) {
+    const idx = this.elements.findIndex(e => e.id === id);
+    if (idx >= 0 && idx < this.elements.length - 1) {
+      await api.elementReorder(id, this.elements.length - 1, this.activeProjectId ?? undefined);
+      await this.refreshSessions();
+      await this.hydrateActiveProject();
+    }
+  }
+
+  async sendElementToBack(id: string) {
+    const idx = this.elements.findIndex(e => e.id === id);
+    if (idx > 0) {
+      await api.elementReorder(id, 0, this.activeProjectId ?? undefined);
+      await this.refreshSessions();
+      await this.hydrateActiveProject();
+    }
+  }
+
+  async bringElementsToFront(ids: Iterable<string>) {
+    const idSet = new Set(ids);
+    const ordered = this.elements
+      .filter(element => idSet.has(element.id))
+      .map(element => element.id);
+    for (const id of ordered) {
+      await api.elementReorder(id, this.elements.length - 1, this.activeProjectId ?? undefined);
+      const moved = this.elements.find(element => element.id === id);
+      this.elements = this.elements.filter(element => element.id !== id);
+      if (moved) this.elements = [...this.elements, moved];
+    }
+    await this.refreshSessions();
+    await this.hydrateActiveProject();
+  }
+
+  async sendElementsToBack(ids: Iterable<string>) {
+    const idSet = new Set(ids);
+    const ordered = this.elements
+      .filter(element => idSet.has(element.id))
+      .map(element => element.id);
+    for (const [index, id] of ordered.entries()) {
+      await api.elementReorder(id, index, this.activeProjectId ?? undefined);
+      const moved = this.elements.find(element => element.id === id);
+      this.elements = this.elements.filter(element => element.id !== id);
+      if (moved) this.elements = [...this.elements.slice(0, index), moved, ...this.elements.slice(index)];
+    }
+    await this.refreshSessions();
+    await this.hydrateActiveProject();
+  }
+
   getElementBounds(id: string): { x: number; y: number; w: number; h: number } | null {
     const el = this.effectiveElementById(id);
     if (!el) return null;
@@ -1137,6 +1220,7 @@ export class ProjectStore {
   private applyProjectData(project: ActiveProjectPayload["project"]) {
     this.name = project.name;
     this.guiSize = project.gui_size;
+    this.mainGuiCenter = project.main_gui_center ?? defaultMainGuiCenter(project.gui_size);
     this.modTarget = project.mod_target;
     this.elements = project.elements;
     this.groups = project.groups;
@@ -1183,6 +1267,7 @@ export class ProjectStore {
       }
       this.assetMetadata = nextMetadata;
       this.assetDataUrlsProjectId = this.activeProjectId;
+      await Promise.all(this.assets.map(name => this.ensureAssetDataUrl(name)));
       this.bumpRenderVersion();
     } catch { /* assets may not be available */ }
   }
@@ -1231,6 +1316,13 @@ export class ProjectStore {
     await this.hydrateActiveProject();
     this.bumpRenderVersion();
     return updated;
+  }
+
+  async loadTexturePack(packId: string, assetNames: string[]) {
+    const loaded = await api.texturePackLoad(packId, assetNames, this.activeProjectId ?? undefined);
+    await this.refreshSessions();
+    await this.syncFromBackend();
+    return loaded;
   }
 
   private async syncFontRenderData(fontIds: string[], projectId: string | null, requestId: number) {
@@ -1288,6 +1380,7 @@ export class ProjectStore {
     this.activeProjectId = null;
     this.name = "Untitled GUI";
     this.guiSize = { width: 176, height: 166 };
+    this.mainGuiCenter = { x: 88, y: 83 };
     this.modTarget = "forge";
     this.elements = [];
     this.groups = [];

@@ -8,6 +8,11 @@
 
   let editingAsset = $state<string | null>(null);
   let editingGuidesAsset = $state<string | null>(null);
+  let showingTexturePackPicker = $state(false);
+  let selectedTexturePackAssets = $state<string[]>([]);
+  let texturePackPointerStarted = false;
+
+  const minecraftPackAssets = api.MINECRAFT_TEXTURE_PACK_ASSETS;
 
   async function handleImport() {
     let path: string | null = null;
@@ -166,6 +171,48 @@
       status.error(`Failed to clear guides for ${displayName(name)}: ${readableError(error)}`);
     }
   }
+
+  function openTexturePackPicker() {
+    selectedTexturePackAssets = [];
+    showingTexturePackPicker = true;
+  }
+
+  function selectableTexturePackAssets(): string[] {
+    return minecraftPackAssets
+      .map(asset => asset.name)
+      .filter(name => !project.assets.includes(name));
+  }
+
+  function selectAllTexturePackAssets() {
+    selectedTexturePackAssets = selectableTexturePackAssets();
+  }
+
+  function toggleTexturePackAsset(name: string) {
+    selectedTexturePackAssets = selectedTexturePackAssets.includes(name)
+      ? selectedTexturePackAssets.filter(asset => asset !== name)
+      : [...selectedTexturePackAssets, name];
+  }
+
+  async function loadSelectedTexturePackAssets() {
+    try {
+      const loaded = await project.loadTexturePack("minecraft", selectedTexturePackAssets);
+      showingTexturePackPicker = false;
+      status.success(`Loaded ${loaded.length} texture${loaded.length === 1 ? "" : "s"} from Minecraft style.`);
+    } catch (error) {
+      status.error(`Failed to load texture pack: ${readableError(error)}`);
+    }
+  }
+
+  function handleTexturePackBackdropPointerDown(event: PointerEvent) {
+    texturePackPointerStarted = event.target === event.currentTarget;
+  }
+
+  function closeTexturePackPickerOnBackdrop(event: MouseEvent) {
+    if (texturePackPointerStarted && event.target === event.currentTarget) {
+      showingTexturePackPicker = false;
+    }
+    texturePackPointerStarted = false;
+  }
 </script>
 
 <aside class="assets">
@@ -173,6 +220,10 @@
 
   <button class="import-btn" onclick={handleImport}>
     + Import PNG
+  </button>
+
+  <button class="import-btn" onclick={openTexturePackPicker} disabled={!project.isOpen}>
+    + Load Texture Pack
   </button>
 
   {#if project.fonts.length > 0}
@@ -228,7 +279,7 @@
               {#if dataUrl}
                 <img src={dataUrl} alt={name} />
               {:else}
-                <span class="no-preview">?</span>
+                <span class="no-preview">Loading</span>
               {/if}
               <span class="asset-label">{displayName(name)}</span>
             </button>
@@ -242,6 +293,45 @@
     {/if}
   {/if}
 </aside>
+
+{#if showingTexturePackPicker}
+  <div class="modal-backdrop" role="presentation" onpointerdown={handleTexturePackBackdropPointerDown} onclick={closeTexturePackPickerOnBackdrop}>
+    <div class="texture-pack-dialog" role="dialog" aria-modal="true" aria-labelledby="texture-pack-title">
+      <header>
+        <h2 id="texture-pack-title">Minecraft Style</h2>
+        <button type="button" class="close-btn" aria-label="Close texture pack picker" onclick={() => showingTexturePackPicker = false}>×</button>
+      </header>
+
+      <div class="texture-pack-tools" role="group" aria-label="Texture pack selection">
+        <button type="button" class="secondary-btn" onclick={selectAllTexturePackAssets}>Select all</button>
+        <button type="button" class="secondary-btn" onclick={() => selectedTexturePackAssets = []}>Clear</button>
+      </div>
+
+      <div class="texture-pack-list">
+        {#each minecraftPackAssets as asset (asset.name)}
+          {@const present = project.assets.includes(asset.name)}
+          <label class:present>
+            <input
+              type="checkbox"
+              checked={selectedTexturePackAssets.includes(asset.name)}
+              disabled={present}
+              onchange={() => toggleTexturePackAsset(asset.name)}
+            />
+            <span>{displayName(asset.name)}</span>
+            <small>{asset.metadata.width}x{asset.metadata.height}{present ? " · already in project" : ""}</small>
+          </label>
+        {/each}
+      </div>
+
+      <footer>
+        <button type="button" class="secondary-btn" onclick={() => showingTexturePackPicker = false}>Cancel</button>
+        <button type="button" class="import-btn" onclick={loadSelectedTexturePackAssets} disabled={selectedTexturePackAssets.length === 0}>
+          Load {selectedTexturePackAssets.length}
+        </button>
+      </footer>
+    </div>
+  </div>
+{/if}
 
 {#if editingGuidesAsset}
   <UvEditorDialog
@@ -292,6 +382,124 @@
   .import-btn:hover {
     background: var(--accent-2);
     color: var(--text);
+  }
+
+  .import-btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+
+  .modal-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 50;
+    background: rgba(0, 0, 0, 0.42);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+  }
+
+  .texture-pack-dialog {
+    width: min(420px, 100%);
+    max-height: min(640px, 90vh);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    display: grid;
+    grid-template-rows: auto auto minmax(0, 1fr) auto;
+    box-shadow: 0 18px 50px rgba(0, 0, 0, 0.35);
+  }
+
+  .texture-pack-dialog header,
+  .texture-pack-dialog footer {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .texture-pack-dialog footer {
+    justify-content: flex-end;
+    border-top: 1px solid var(--border);
+    border-bottom: 0;
+  }
+
+  .texture-pack-dialog footer .import-btn {
+    width: auto;
+    margin-bottom: 0;
+  }
+
+  .texture-pack-dialog h2 {
+    margin: 0;
+    font-size: 13px;
+    flex: 1;
+  }
+
+  .texture-pack-tools {
+    display: flex;
+    gap: 6px;
+    padding: 8px 10px 0;
+  }
+
+  .close-btn,
+  .secondary-btn {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--muted-text);
+    border-radius: 3px;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 11px;
+    padding: 4px 8px;
+  }
+
+  .close-btn {
+    width: 24px;
+    height: 24px;
+    padding: 0;
+  }
+
+  .close-btn:hover,
+  .secondary-btn:hover {
+    color: var(--text);
+    background: var(--surface-raised);
+  }
+
+  .texture-pack-list {
+    overflow: auto;
+    padding: 8px;
+    display: grid;
+    gap: 4px;
+  }
+
+  .texture-pack-list label {
+    display: grid;
+    grid-template-columns: 18px minmax(0, 1fr) auto;
+    gap: 8px;
+    align-items: center;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 6px;
+    font-size: 11px;
+  }
+
+  .texture-pack-list label.present {
+    opacity: 0.62;
+  }
+
+  .texture-pack-list span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: monospace;
+  }
+
+  .texture-pack-list small {
+    color: var(--muted-text);
+    font-size: 10px;
+    white-space: nowrap;
   }
 
   .asset-grid {
