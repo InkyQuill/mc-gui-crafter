@@ -3,8 +3,8 @@ use crate::config::{AppConfig, EditorLayoutConfig, WindowConfig};
 use crate::format;
 use crate::project::{
     AssetMetadata, AttachedRegion, AttachedRegionStateOverridePatch, CodegenMode, EditScope,
-    Element, ElementAttachedRegionStateOverride, ElementStateOverridePatch, Group, ModTarget,
-    Project, ProjectExportSettings, ProjectSessionSummary, ProjectState, SemanticGroup,
+    Element, ElementAttachedRegionStateOverride, ElementStateOverridePatch, Group, MainGuiCenter,
+    ModTarget, Project, ProjectExportSettings, ProjectSessionSummary, ProjectState, SemanticGroup,
     StateOverrideTarget,
 };
 use crate::session_log::{SessionLogEntry, SessionLogLevel};
@@ -286,6 +286,16 @@ pub fn project_resize(
         .project
         .gui_size = new_size;
     sessions.mark_changed(project_id.as_deref())
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub fn project_main_gui_center_update(
+    state: State<AppState>,
+    center: MainGuiCenter,
+    project_id: Option<String>,
+) -> Result<ProjectSessionSummary, String> {
+    let mut sessions = state.sessions.lock().unwrap();
+    update_main_gui_center_in_session(&mut sessions, project_id.as_deref(), center)
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -2830,6 +2840,24 @@ fn save_session_as(
     }))
 }
 
+fn update_main_gui_center_in_session(
+    sessions: &mut crate::project::ProjectSessionManager,
+    project_id: Option<&str>,
+    center: MainGuiCenter,
+) -> Result<ProjectSessionSummary, String> {
+    {
+        let session = sessions.resolve(project_id)?;
+        if session.project.main_gui_center == center {
+            let id = session.id.clone();
+            return session_summary(sessions, &id);
+        }
+    }
+
+    sessions.record_history(project_id)?;
+    sessions.resolve_mut(project_id)?.project.main_gui_center = center;
+    sessions.mark_changed(project_id)
+}
+
 fn session_summary(
     sessions: &crate::project::ProjectSessionManager,
     project_id: &str,
@@ -3202,6 +3230,47 @@ mod tests {
         assert_eq!(after.revision, before.revision);
         assert_eq!(after.can_undo, before.can_undo);
         assert_eq!(after.can_redo, before.can_redo);
+    }
+
+    #[test]
+    fn project_main_gui_center_update_records_history() {
+        let mut sessions = ProjectSessionManager::default();
+        let project_id =
+            sessions.create_session(Project::new("Center", 176, 166, ModTarget::Forge));
+
+        let summary = update_main_gui_center_in_session(
+            &mut sessions,
+            Some(&project_id),
+            crate::project::MainGuiCenter { x: 112, y: 64 },
+        )
+        .unwrap();
+
+        let project = &sessions.resolve(Some(&project_id)).unwrap().project;
+        assert_eq!(project.main_gui_center.x, 112);
+        assert_eq!(project.main_gui_center.y, 64);
+        assert_eq!(summary.revision, 1);
+        assert!(summary.can_undo);
+    }
+
+    #[test]
+    fn project_main_gui_center_update_noop_preserves_redo() {
+        let mut sessions = ProjectSessionManager::default();
+        let project_id =
+            sessions.create_session(Project::new("Center", 176, 166, ModTarget::Forge));
+        sessions.record_history(Some(&project_id)).unwrap();
+        sessions.mark_changed(Some(&project_id)).unwrap();
+        sessions.undo(Some(&project_id)).unwrap();
+
+        let result = update_main_gui_center_in_session(
+            &mut sessions,
+            Some(&project_id),
+            crate::project::MainGuiCenter { x: 88, y: 83 },
+        )
+        .unwrap();
+
+        assert_eq!(result.revision, 2);
+        assert!(!result.can_undo);
+        assert!(result.can_redo);
     }
 
     fn png_data_url(color: [u8; 4]) -> String {

@@ -119,6 +119,7 @@ pub fn run() {
             commands::project_redo,
             commands::project_summary,
             commands::project_resize,
+            commands::project_main_gui_center_update,
             commands::project_export_settings_update,
             commands::project_semantic_groups_update,
             commands::template_list,
