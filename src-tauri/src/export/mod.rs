@@ -2518,6 +2518,7 @@ mod tests {
                 width: 187,
                 height: 173,
             },
+            main_gui_center: crate::project::MainGuiCenter { x: 93, y: 86 },
             mod_target: target,
             elements: vec![
                 Element {
