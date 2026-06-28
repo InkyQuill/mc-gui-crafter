@@ -499,6 +499,7 @@ fn layout_json_value_for_state(
 
     let mut layout = serde_json::json!({
         "gui_size": project.gui_size,
+        "main_gui_center": project.main_gui_center,
         "visual_bounds": visual_bounds,
         "textures": textures_json,
         "elements": elements_json,
@@ -1752,6 +1753,8 @@ public final class GuiLayout {{
     private static final class LayoutData {{
         @SerializedName("visual_bounds")
         VisualBounds visualBounds;
+        @SerializedName("main_gui_center")
+        MainGuiCenter mainGuiCenter;
         TexturesData textures;
         List<Element> elements;
         List<Animation> animations;
@@ -1774,6 +1777,11 @@ public final class GuiLayout {{
         int y;
         int width;
         int height;
+    }}
+
+    private static final class MainGuiCenter {{
+        int x = WIDTH / 2;
+        int y = HEIGHT / 2;
     }}
 
     private static final class Element {{
@@ -2027,6 +2035,8 @@ public final class GuiLayout {{
     private static final class LayoutData {{
         @SerializedName("visual_bounds")
         VisualBounds visualBounds;
+        @SerializedName("main_gui_center")
+        MainGuiCenter mainGuiCenter;
         TexturesData textures;
         List<Element> elements;
         List<Animation> animations;
@@ -2049,6 +2059,11 @@ public final class GuiLayout {{
         int y;
         int width;
         int height;
+    }}
+
+    private static final class MainGuiCenter {{
+        int x = WIDTH / 2;
+        int y = HEIGHT / 2;
     }}
 
     private static final class Element {{
@@ -2136,6 +2151,8 @@ public class {screen_class_name} extends AbstractContainerScreen<AbstractContain
     @Override
     protected void init() {{
         super.init();
+        this.leftPos = (this.width / 2) - {center_x};
+        this.topPos = (this.height / 2) - {center_y};
         this.layout = GuiLayout.load("{mod_id}", "gui/{resource_name}_layout.json", "textures/gui/{resource_name}_gui.png");
     }}
 
@@ -2159,6 +2176,8 @@ public class {screen_class_name} extends AbstractContainerScreen<AbstractContain
         screen_class_name = export.screen_class_name,
         width = project.gui_size.width,
         height = project.gui_size.height,
+        center_x = project.main_gui_center.x,
+        center_y = project.main_gui_center.y,
         mod_id = export.mod_id,
         resource_name = export.resource_name,
         animation_hooks =
@@ -2188,6 +2207,8 @@ public class {screen_class_name} extends AbstractContainerScreen<AbstractContain
     @Override
     protected void init() {{
         super.init();
+        this.leftPos = (this.width / 2) - {center_x};
+        this.topPos = (this.height / 2) - {center_y};
         this.layout = GuiLayout.load("{mod_id}", "gui/{resource_name}_layout.json", "textures/gui/{resource_name}_gui.png");
     }}
 
@@ -2211,6 +2232,8 @@ public class {screen_class_name} extends AbstractContainerScreen<AbstractContain
         screen_class_name = export.screen_class_name,
         width = project.gui_size.width,
         height = project.gui_size.height,
+        center_x = project.main_gui_center.x,
+        center_y = project.main_gui_center.y,
         mod_id = export.mod_id,
         resource_name = export.resource_name,
         animation_hooks =
@@ -2240,6 +2263,8 @@ public class {screen_class_name} extends HandledScreen<ScreenHandler> {{
     @Override
     protected void init() {{
         super.init();
+        this.x = (this.width / 2) - {center_x};
+        this.y = (this.height / 2) - {center_y};
         this.layout = GuiLayout.load("{mod_id}", "gui/{resource_name}_layout.json", "textures/gui/{resource_name}_gui.png");
     }}
 
@@ -2263,6 +2288,8 @@ public class {screen_class_name} extends HandledScreen<ScreenHandler> {{
         screen_class_name = export.screen_class_name,
         width = project.gui_size.width,
         height = project.gui_size.height,
+        center_x = project.main_gui_center.x,
+        center_y = project.main_gui_center.y,
         mod_id = export.mod_id,
         resource_name = export.resource_name,
         animation_hooks = generate_animation_hooks(&project.animations, "context", "x", "y")
@@ -3002,6 +3029,17 @@ mod tests {
             layout["attached_regions"][0]["semantic_group"],
             "food_returns"
         );
+    }
+
+    #[test]
+    fn layout_json_includes_main_gui_center() {
+        let mut project = Project::new("Centered", 176, 166, ModTarget::Forge);
+        project.main_gui_center = crate::project::MainGuiCenter { x: 120, y: 80 };
+
+        let layout = layout_json_value(&project, textures_json_for_test());
+
+        assert_eq!(layout["main_gui_center"]["x"], 120);
+        assert_eq!(layout["main_gui_center"]["y"], 80);
     }
 
     #[test]
@@ -3973,6 +4011,53 @@ mod tests {
         assert!(layout.contains("top + visualOffsetY"));
         assert!(layout.contains("backgroundWidth"));
         assert!(layout.contains("backgroundHeight"));
+    }
+
+    #[test]
+    fn generated_runtime_uses_main_gui_center_for_screen_position() {
+        let output_dir = TempExportDir::new("main-gui-center-runtime");
+        let mut project = Project::new("Centered", 100, 80, ModTarget::Forge);
+        project.main_gui_center = crate::project::MainGuiCenter { x: 70, y: 30 };
+
+        export_project(
+            &project,
+            &ExportConfig {
+                mod_id: "testmod".into(),
+                package: "com.example.test".into(),
+                class_name: "CenteredGui".into(),
+                output_dir: output_dir.path().to_string_lossy().to_string(),
+                settings_override: Some(ProjectExportSettings {
+                    codegen_mode: CodegenMode::Modular,
+                    generate_runtime_helpers: true,
+                    generate_semantic_registry: false,
+                }),
+                overwrite: true,
+                scope: ExportScope::FullMod,
+            },
+            "forge",
+        )
+        .unwrap();
+
+        let screen = read(
+            &output_dir
+                .path()
+                .join("src/main/java/com/example/test/CenteredGuiScreen.java"),
+        );
+        let layout = read(
+            &output_dir
+                .path()
+                .join("src/main/java/com/example/test/GuiLayout.java"),
+        );
+        let layout_json = read(
+            &output_dir
+                .path()
+                .join("src/main/resources/assets/testmod/gui/centeredgui_layout.json"),
+        );
+
+        assert!(screen.contains("this.leftPos = (this.width / 2) - 70;"));
+        assert!(screen.contains("this.topPos = (this.height / 2) - 30;"));
+        assert!(layout.contains("MainGuiCenter mainGuiCenter;"));
+        assert!(layout_json.contains(r#""main_gui_center""#));
     }
 
     #[test]
