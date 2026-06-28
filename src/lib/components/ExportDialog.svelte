@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { Copy } from "@lucide/svelte";
   import { project } from "../stores/project.svelte";
   import { status, readableError } from "../stores/status.svelte";
   import * as api from "../api";
@@ -23,6 +24,10 @@
   let previewLoading = $state(false);
   let previewError = $state("");
   let previewRequestId = 0;
+  let overlayPointerStarted = false;
+  let overwriteWarnings = $derived(preview?.warnings.filter(warning => warning.startsWith("Target file already exists")) ?? []);
+  let nonOverwriteWarnings = $derived(preview?.warnings.filter(warning => !warning.startsWith("Target file already exists")) ?? []);
+  let overwritePaths = $derived(new Set(overwriteWarnings.map(warning => warning.replace("Target file already exists and will be overwritten: ", ""))));
   let canExport = $derived(
     Boolean(outputDir)
       && !exporting
@@ -151,10 +156,15 @@
     }
   }
 
+  function handleOverlayPointerDown(event: PointerEvent) {
+    overlayPointerStarted = event.target === event.currentTarget;
+  }
+
   function handleOverlayClick(event: MouseEvent) {
-    if (event.target === event.currentTarget) {
+    if (overlayPointerStarted && event.target === event.currentTarget) {
       onclose();
     }
+    overlayPointerStarted = false;
   }
 
   function handleOverlayKeydown(event: KeyboardEvent) {
@@ -164,7 +174,7 @@
   }
 </script>
 
-<div class="dialog-overlay" role="presentation" onclick={handleOverlayClick} onkeydown={handleOverlayKeydown}>
+<div class="dialog-overlay" role="presentation" onpointerdown={handleOverlayPointerDown} onclick={handleOverlayClick} onkeydown={handleOverlayKeydown}>
   <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="export-project-title">
     <h2 id="export-project-title">Export Project</h2>
 
@@ -245,11 +255,18 @@
         {#if previewError}
           <div class="error">{previewError}</div>
         {:else if preview}
-          {#if preview.warnings.length > 0}
+          {#if overwriteWarnings.length > 0}
+            <div class="warning overwrite-summary">
+              {overwriteWarnings.length} existing {overwriteWarnings.length === 1 ? "file" : "files"} will be overwritten.
+              Review highlighted rows in Planned files.
+            </div>
+          {/if}
+
+          {#if nonOverwriteWarnings.length > 0}
             <div class="warning-list">
               <h3>Warnings</h3>
               <ul>
-                {#each preview.warnings as warning (warning)}
+                {#each nonOverwriteWarnings as warning (warning)}
                   <li>{warning}</li>
                 {/each}
               </ul>
@@ -267,33 +284,45 @@
             </div>
           {/if}
 
-          <div class="planned-files">
-            <h3>Planned Files</h3>
+          <details class="planned-files">
+            <summary>
+              <span>Planned files</span>
+              <span>{preview.files.length} {preview.files.length === 1 ? "file" : "files"}</span>
+            </summary>
             <ul>
               {#each preview.files as f (f)}
-                <li>
+                <li class:overwrite={overwritePaths.has(f)}>
+                  <span class="file-status">{overwritePaths.has(f) ? "Overwrite" : "Write"}</span>
                   <code>{f}</code>
-                  <button class="copy-btn" onclick={() => copyToClipboard(f)} title="Copy path" aria-label={`Copy ${f}`}>⎘</button>
+                  <button class="copy-btn" onclick={() => copyToClipboard(f)} title="Copy path" aria-label={`Copy ${f}`}>
+                    <Copy size={13} strokeWidth={1.75} />
+                  </button>
                 </li>
               {/each}
             </ul>
-          </div>
+          </details>
         {/if}
       </div>
     {/if}
 
     {#if resultFiles.length > 0}
-      <div class="result">
-        <h3>Generated Files</h3>
+      <details class="file-list result">
+        <summary>
+          <span>Generated files</span>
+          <span>{resultFiles.length} {resultFiles.length === 1 ? "file" : "files"}</span>
+        </summary>
         <ul>
           {#each resultFiles as f (f)}
             <li>
+              <span class="file-status written">Written</span>
               <code>{f}</code>
-              <button class="copy-btn" onclick={() => copyToClipboard(f)} title="Copy path" aria-label={`Copy ${f}`}>⎘</button>
+              <button class="copy-btn" onclick={() => copyToClipboard(f)} title="Copy path" aria-label={`Copy ${f}`}>
+                <Copy size={13} strokeWidth={1.75} />
+              </button>
             </li>
           {/each}
         </ul>
-      </div>
+      </details>
     {/if}
 
     {#if errorMsg}
@@ -321,7 +350,7 @@
     width: min(560px, calc(100vw - 32px));
     background: var(--surface);
     border: 1px solid var(--border);
-    border-radius: 8px; padding: 16px;
+    border-radius: 8px; padding: 16px 16px 0;
     max-height: calc(100vh - 32px);
     overflow: auto;
     box-shadow: 0 8px 32px rgba(0,0,0,0.5);
@@ -355,16 +384,76 @@
     display: flex; align-items: center; justify-content: space-between; gap: 8px;
   }
   .preview-header span { color: var(--muted-text); font-size: 11px; }
+  .file-list,
+  .planned-files {
+    margin-top: 10px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: color-mix(in srgb, var(--surface-raised) 55%, transparent);
+  }
+  .file-list summary,
+  .planned-files summary {
+    cursor: pointer;
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    padding: 7px 9px;
+    color: var(--muted-text);
+    font-size: 11px;
+    user-select: none;
+  }
+  .file-list summary:hover,
+  .planned-files summary:hover { color: var(--text); }
+  .file-list summary span:first-child,
+  .planned-files summary span:first-child {
+    color: var(--text);
+    font-weight: 600;
+  }
+  .file-list[open] summary,
+  .planned-files[open] summary {
+    border-bottom: 1px solid var(--border);
+  }
   .planned-files ul, .result ul, .warning-list ul, .error-list ul {
     list-style: none; padding: 0; margin: 0;
+  }
+  .file-list ul,
+  .planned-files ul {
+    max-height: 180px;
+    overflow: auto;
+    padding: 6px 8px;
   }
   .planned-files li, .result li {
     display: flex; align-items: center; gap: 4px;
     padding: 3px 0; font-size: 11px; color: var(--muted-text);
   }
+  .planned-files li.overwrite {
+    color: var(--warning);
+  }
+  .file-status {
+    flex: 0 0 auto;
+    min-width: 58px;
+    padding: 1px 5px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    color: var(--muted-text);
+    font-size: 9px;
+    text-align: center;
+    text-transform: uppercase;
+  }
+  .planned-files li.overwrite .file-status {
+    border-color: color-mix(in srgb, var(--warning) 55%, transparent);
+    color: var(--warning);
+    background: color-mix(in srgb, var(--warning) 10%, transparent);
+  }
+  .file-status.written {
+    color: var(--accent);
+    border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+  }
   .planned-files code, .result code {
+    flex: 1;
     font-family: monospace; font-size: 11px; color: var(--warning);
     overflow-wrap: anywhere;
+  }
+  .planned-files li:not(.overwrite) code {
+    color: var(--muted-text);
   }
   .warning-list li, .error-list li {
     padding: 3px 0; font-size: 11px; line-height: 1.4;
@@ -387,7 +476,14 @@
   }
   .copy-btn:hover { color: var(--text); }
   .error { color: var(--danger); font-size: 12px; margin-top: 8px; }
-  .actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+  .actions {
+    position: sticky; bottom: 0;
+    display: flex; justify-content: flex-end; gap: 8px;
+    margin: 16px -16px 0;
+    padding: 12px 16px 16px;
+    background: var(--surface);
+    border-top: 1px solid var(--border);
+  }
   .cancel-btn, .export-btn {
     padding: 6px 16px; font-size: 12px; border-radius: 4px;
     cursor: pointer; font-family: inherit;

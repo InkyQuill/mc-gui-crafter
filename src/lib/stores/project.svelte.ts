@@ -348,6 +348,22 @@ export class ProjectStore {
       element.direction ??= "left_to_right";
     }
 
+    if (type === "fluid_tank") {
+      element.width ??= 18;
+      element.height ??= 52;
+      element.asset ??= "textures/generated/fluid_tank.png";
+      element.layer ??= "animatable";
+      element.direction ??= "bottom_to_top";
+    }
+
+    if (type === "energy_bar") {
+      element.width ??= 14;
+      element.height ??= 52;
+      element.asset ??= "textures/generated/energy_bar.png";
+      element.layer ??= "animatable";
+      element.direction ??= "bottom_to_top";
+    }
+
     if (type === "button") {
       element.width ??= 52;
       element.height ??= 20;
@@ -788,6 +804,54 @@ export class ProjectStore {
     }
   }
 
+  async bringElementToFront(id: string) {
+    const idx = this.elements.findIndex(e => e.id === id);
+    if (idx >= 0 && idx < this.elements.length - 1) {
+      await api.elementReorder(id, this.elements.length - 1, this.activeProjectId ?? undefined);
+      await this.refreshSessions();
+      await this.hydrateActiveProject();
+    }
+  }
+
+  async sendElementToBack(id: string) {
+    const idx = this.elements.findIndex(e => e.id === id);
+    if (idx > 0) {
+      await api.elementReorder(id, 0, this.activeProjectId ?? undefined);
+      await this.refreshSessions();
+      await this.hydrateActiveProject();
+    }
+  }
+
+  async bringElementsToFront(ids: Iterable<string>) {
+    const idSet = new Set(ids);
+    const ordered = this.elements
+      .filter(element => idSet.has(element.id))
+      .map(element => element.id);
+    for (const id of ordered) {
+      await api.elementReorder(id, this.elements.length - 1, this.activeProjectId ?? undefined);
+      const moved = this.elements.find(element => element.id === id);
+      this.elements = this.elements.filter(element => element.id !== id);
+      if (moved) this.elements = [...this.elements, moved];
+    }
+    await this.refreshSessions();
+    await this.hydrateActiveProject();
+  }
+
+  async sendElementsToBack(ids: Iterable<string>) {
+    const idSet = new Set(ids);
+    const ordered = this.elements
+      .filter(element => idSet.has(element.id))
+      .map(element => element.id);
+    for (const [index, id] of ordered.entries()) {
+      await api.elementReorder(id, index, this.activeProjectId ?? undefined);
+      const moved = this.elements.find(element => element.id === id);
+      this.elements = this.elements.filter(element => element.id !== id);
+      if (moved) this.elements = [...this.elements.slice(0, index), moved, ...this.elements.slice(index)];
+    }
+    await this.refreshSessions();
+    await this.hydrateActiveProject();
+  }
+
   getElementBounds(id: string): { x: number; y: number; w: number; h: number } | null {
     const el = this.effectiveElementById(id);
     if (!el) return null;
@@ -1203,6 +1267,7 @@ export class ProjectStore {
       }
       this.assetMetadata = nextMetadata;
       this.assetDataUrlsProjectId = this.activeProjectId;
+      await Promise.all(this.assets.map(name => this.ensureAssetDataUrl(name)));
       this.bumpRenderVersion();
     } catch { /* assets may not be available */ }
   }

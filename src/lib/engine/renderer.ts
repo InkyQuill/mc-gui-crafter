@@ -82,6 +82,7 @@ type CanvasPointerEvent = PointerEvent & {
 };
 
 type TextureCacheOwnership = "owned-source" | "shared-source" | "external-source";
+type CenterAxisDragMode = "x" | "y" | "both";
 
 export class GuiRenderer {
   app: Application;
@@ -89,6 +90,7 @@ export class GuiRenderer {
   private elementsContainer: Container;
   private overlayContainer: Container;
   private attachedRegionGraphics: Graphics;
+  private centerAxisGraphics: Graphics;
   private selectionGraphics: Graphics;
   private cursorLabel: Text;
 
@@ -106,6 +108,8 @@ export class GuiRenderer {
   private glyphTextureCacheVersion = -1;
   private spacePanning = false;
   private isPanning = false;
+  private centerAxisDragMode: CenterAxisDragMode | null = null;
+  private centerAxisDragOriginal: { x: number; y: number } | null = null;
   private panStartX = 0;
   private panStartY = 0;
   private panOrigX = 0;
@@ -125,6 +129,7 @@ export class GuiRenderer {
     this.elementsContainer = new Container();
     this.overlayContainer = new Container();
     this.attachedRegionGraphics = new Graphics();
+    this.centerAxisGraphics = new Graphics();
     this.selectionGraphics = new Graphics();
     this.cursorLabel = new Text({
       text: "",
@@ -275,6 +280,7 @@ export class GuiRenderer {
     this.app.stage.addChild(this.elementsContainer);
     this.app.stage.addChild(this.overlayContainer);
     this.overlayContainer.addChild(this.attachedRegionGraphics);
+    this.overlayContainer.addChild(this.centerAxisGraphics);
     this.overlayContainer.addChild(this.selectionGraphics);
     this.overlayContainer.addChild(this.cursorLabel);
 
@@ -314,15 +320,20 @@ export class GuiRenderer {
       editor.mouseGuiX = gui.x;
       editor.mouseGuiY = gui.y;
       this.updateCursorLabel(gui.x, gui.y);
+      const axisHit = editor.showCenterAxes && editor.tool === "select" && !isPanMode() ? this.hitTestCenterAxes(gui.x, gui.y) : null;
 
       // Update cursor for resize handles
       let cursor = "crosshair";
-      if (this.isPanning) {
+      if (this.centerAxisDragMode) {
+        cursor = this.cursorForCenterAxis(this.centerAxisDragMode);
+      } else if (this.isPanning) {
         cursor = "grabbing";
       } else if (isPanMode()) {
         cursor = "grab";
       } else if (editor.isResizing) {
         cursor = "nwse-resize";
+      } else if (axisHit) {
+        cursor = this.cursorForCenterAxis(axisHit);
       } else {
         const resizableSelectionId = editor.tool === "select" ? this.singleResizableSelectionId() : null;
         const selEl = resizableSelectionId ? project.effectiveElementById(resizableSelectionId) : null;
@@ -338,6 +349,18 @@ export class GuiRenderer {
         editor.panX = this.panOrigX + pointer.x - this.panStartX;
         editor.panY = this.panOrigY + pointer.y - this.panStartY;
         this.updateTransform();
+        return;
+      }
+
+      if (this.centerAxisDragMode) {
+        const next = { ...project.mainGuiCenter };
+        if (this.centerAxisDragMode === "x" || this.centerAxisDragMode === "both") {
+          next.x = editor.snapCoordinate(gui.x);
+        }
+        if (this.centerAxisDragMode === "y" || this.centerAxisDragMode === "both") {
+          next.y = editor.snapCoordinate(gui.y);
+        }
+        project.mainGuiCenter = next;
         return;
       }
 
@@ -419,6 +442,16 @@ export class GuiRenderer {
 
     const onPointerUp = () => {
       this.isPanning = false;
+      if (this.centerAxisDragMode) {
+        const center = { ...project.mainGuiCenter };
+        const original = this.centerAxisDragOriginal;
+        this.centerAxisDragMode = null;
+        this.centerAxisDragOriginal = null;
+        void project.updateMainGuiCenter(center).catch(error => {
+          if (original) project.mainGuiCenter = original;
+          this.logRendererError("Failed to update main GUI center axes", error, { center });
+        });
+      }
       if (editor.isResizing && editor.resizeElementId) {
         const el = project.effectiveElementById(editor.resizeElementId);
         if (el) {
@@ -458,6 +491,14 @@ export class GuiRenderer {
 
       const gui = this.screenToGui(pointer.x, pointer.y);
       const shiftHeld = e.shiftKey;
+
+      const axisHit = editor.showCenterAxes && editor.tool === "select" && !shiftHeld ? this.hitTestCenterAxes(gui.x, gui.y) : null;
+      if (axisHit) {
+        this.centerAxisDragMode = axisHit;
+        this.centerAxisDragOriginal = { ...project.mainGuiCenter };
+        editor.clearSelection();
+        return;
+      }
 
       // Check resize handles on selected element first
       const resizableSelectionId = this.singleResizableSelectionId();
@@ -514,6 +555,9 @@ export class GuiRenderer {
         switch (editor.tool) {
           case "slot":
           case "texture":
+          case "progress":
+          case "fluid_tank":
+          case "energy_bar":
           case "text":
             void project.addElement(editor.tool, gui.x, gui.y);
             break;
@@ -626,6 +670,30 @@ export class GuiRenderer {
     return null;
   }
 
+  private hitTestCenterAxes(gx: number, gy: number): CenterAxisDragMode | null {
+    if (!project.isOpen) return null;
+
+    const { width: gw, height: gh } = project.guiSize;
+    const bounds = project.visualBounds;
+    const axisMinX = Math.min(0, bounds.x);
+    const axisMinY = Math.min(0, bounds.y);
+    const axisMaxX = Math.max(gw, bounds.x + bounds.width);
+    const axisMaxY = Math.max(gh, bounds.y + bounds.height);
+    const hitSize = Math.max(2, 6 / editor.zoom);
+    const hitsX = Math.abs(gx - project.mainGuiCenter.x) <= hitSize && gy >= axisMinY - hitSize && gy <= axisMaxY + hitSize;
+    const hitsY = Math.abs(gy - project.mainGuiCenter.y) <= hitSize && gx >= axisMinX - hitSize && gx <= axisMaxX + hitSize;
+
+    if (hitsX && hitsY) return "both";
+    if (hitsX) return "x";
+    if (hitsY) return "y";
+    return null;
+  }
+
+  private cursorForCenterAxis(mode: CenterAxisDragMode): string {
+    if (mode === "both") return "move";
+    return mode === "x" ? "ew-resize" : "ns-resize";
+  }
+
   private singleResizableSelectionId(): string | null {
     if (!editor.selectedElementId) return null;
     if (editor.selectedIds.size !== 1) return null;
@@ -697,6 +765,7 @@ export class GuiRenderer {
     this.drawGrid();
     this.drawElements();
     this.drawAttachedRegions();
+    this.drawCenterAxes();
     this.drawSelection();
     this.requestFrame();
   }
@@ -722,17 +791,6 @@ export class GuiRenderer {
     const bounds = project.visualBounds;
     g.rect(bounds.x, bounds.y, bounds.width, bounds.height);
     g.stroke({ width: 1, color: 0xffb000, alpha: 0.95 });
-
-    const axisMinX = Math.min(0, bounds.x);
-    const axisMinY = Math.min(0, bounds.y);
-    const axisMaxX = Math.max(gw, bounds.x + bounds.width);
-    const axisMaxY = Math.max(gh, bounds.y + bounds.height);
-    g.moveTo(project.mainGuiCenter.x, axisMinY);
-    g.lineTo(project.mainGuiCenter.x, axisMaxY);
-    g.stroke({ width: 1, color: 0xff3355, alpha: 0.95 });
-    g.moveTo(axisMinX, project.mainGuiCenter.y);
-    g.lineTo(axisMaxX, project.mainGuiCenter.y);
-    g.stroke({ width: 1, color: 0xff3355, alpha: 0.95 });
 
     // Minor grid
     const minorAlpha = palette.minorAlpha;
@@ -802,6 +860,26 @@ export class GuiRenderer {
       g.rect(region.x, region.y, region.width, region.height);
       g.stroke({ width: selected ? 2 : 1, color: selected ? SELECTED_TINT : 0x2f8cff, alpha: selected ? 1 : 0.85 });
     }
+  }
+
+  private drawCenterAxes() {
+    const g = this.centerAxisGraphics;
+    g.clear();
+    if (!project.isOpen || !editor.showCenterAxes) return;
+
+    const { width: gw, height: gh } = project.guiSize;
+    const bounds = project.visualBounds;
+    const axisMinX = Math.min(0, bounds.x);
+    const axisMinY = Math.min(0, bounds.y);
+    const axisMaxX = Math.max(gw, bounds.x + bounds.width);
+    const axisMaxY = Math.max(gh, bounds.y + bounds.height);
+
+    g.moveTo(project.mainGuiCenter.x, axisMinY);
+    g.lineTo(project.mainGuiCenter.x, axisMaxY);
+    g.stroke({ width: 1, color: 0xff3355, alpha: 0.95 });
+    g.moveTo(axisMinX, project.mainGuiCenter.y);
+    g.lineTo(axisMaxX, project.mainGuiCenter.y);
+    g.stroke({ width: 1, color: 0xff3355, alpha: 0.95 });
   }
 
   private drawElement(el: Element): Container | null {

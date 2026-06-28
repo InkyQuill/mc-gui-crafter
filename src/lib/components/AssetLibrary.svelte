@@ -10,6 +10,7 @@
   let editingGuidesAsset = $state<string | null>(null);
   let showingTexturePackPicker = $state(false);
   let selectedTexturePackAssets = $state<string[]>([]);
+  let texturePackPointerStarted = false;
 
   const minecraftPackAssets = api.MINECRAFT_TEXTURE_PACK_ASSETS;
 
@@ -172,10 +173,18 @@
   }
 
   function openTexturePackPicker() {
-    selectedTexturePackAssets = minecraftPackAssets
+    selectedTexturePackAssets = [];
+    showingTexturePackPicker = true;
+  }
+
+  function selectableTexturePackAssets(): string[] {
+    return minecraftPackAssets
       .map(asset => asset.name)
       .filter(name => !project.assets.includes(name));
-    showingTexturePackPicker = true;
+  }
+
+  function selectAllTexturePackAssets() {
+    selectedTexturePackAssets = selectableTexturePackAssets();
   }
 
   function toggleTexturePackAsset(name: string) {
@@ -194,10 +203,15 @@
     }
   }
 
+  function handleTexturePackBackdropPointerDown(event: PointerEvent) {
+    texturePackPointerStarted = event.target === event.currentTarget;
+  }
+
   function closeTexturePackPickerOnBackdrop(event: MouseEvent) {
-    if (event.target === event.currentTarget) {
+    if (texturePackPointerStarted && event.target === event.currentTarget) {
       showingTexturePackPicker = false;
     }
+    texturePackPointerStarted = false;
   }
 </script>
 
@@ -265,7 +279,7 @@
               {#if dataUrl}
                 <img src={dataUrl} alt={name} />
               {:else}
-                <span class="no-preview">?</span>
+                <span class="no-preview">Loading</span>
               {/if}
               <span class="asset-label">{displayName(name)}</span>
             </button>
@@ -281,12 +295,17 @@
 </aside>
 
 {#if showingTexturePackPicker}
-  <div class="modal-backdrop" role="presentation" onclick={closeTexturePackPickerOnBackdrop}>
+  <div class="modal-backdrop" role="presentation" onpointerdown={handleTexturePackBackdropPointerDown} onclick={closeTexturePackPickerOnBackdrop}>
     <div class="texture-pack-dialog" role="dialog" aria-modal="true" aria-labelledby="texture-pack-title">
       <header>
         <h2 id="texture-pack-title">Minecraft Style</h2>
         <button type="button" class="close-btn" aria-label="Close texture pack picker" onclick={() => showingTexturePackPicker = false}>×</button>
       </header>
+
+      <div class="texture-pack-tools" role="group" aria-label="Texture pack selection">
+        <button type="button" class="secondary-btn" onclick={selectAllTexturePackAssets}>Select all</button>
+        <button type="button" class="secondary-btn" onclick={() => selectedTexturePackAssets = []}>Clear</button>
+      </div>
 
       <div class="texture-pack-list">
         {#each minecraftPackAssets as asset (asset.name)}
@@ -388,7 +407,7 @@
     border: 1px solid var(--border);
     border-radius: 6px;
     display: grid;
-    grid-template-rows: auto minmax(0, 1fr) auto;
+    grid-template-rows: auto auto minmax(0, 1fr) auto;
     box-shadow: 0 18px 50px rgba(0, 0, 0, 0.35);
   }
 
@@ -416,6 +435,12 @@
     margin: 0;
     font-size: 13px;
     flex: 1;
+  }
+
+  .texture-pack-tools {
+    display: flex;
+    gap: 6px;
+    padding: 8px 10px 0;
   }
 
   .close-btn,

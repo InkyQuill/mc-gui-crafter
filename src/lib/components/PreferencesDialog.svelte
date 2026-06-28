@@ -5,6 +5,7 @@
   let { onclose }: { onclose: () => void } = $props();
 
   let dialogEl = $state<HTMLDivElement | undefined>();
+  let overlayPointerStarted = false;
   const dialogId = $props.id();
   const focusableSelector = [
     "button:not(:disabled)",
@@ -57,10 +58,15 @@
     preferences.reset();
   }
 
+  function handleOverlayPointerDown(event: PointerEvent) {
+    overlayPointerStarted = event.target === event.currentTarget;
+  }
+
   function handleOverlayClick(event: MouseEvent) {
-    if (event.target === event.currentTarget) {
+    if (overlayPointerStarted && event.target === event.currentTarget) {
       onclose();
     }
+    overlayPointerStarted = false;
   }
 
   function trapFocus(event: KeyboardEvent) {
@@ -93,7 +99,7 @@
   }
 </script>
 
-<div class="dialog-overlay" role="presentation" onclick={handleOverlayClick}>
+<div class="dialog-overlay" role="presentation" onpointerdown={handleOverlayPointerDown} onclick={handleOverlayClick}>
   <div
     bind:this={dialogEl}
     class="dialog"
