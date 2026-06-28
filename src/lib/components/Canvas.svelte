@@ -1,8 +1,9 @@
 <script lang="ts">
   import { GuiRenderer } from "../engine/renderer";
-  import { project } from "../stores/project.svelte";
+  import { assetDataUrls, project } from "../stores/project.svelte";
   import { editor } from "../stores/editor.svelte";
   import { preferences } from "../stores/preferences.svelte";
+  import { appendSessionLog } from "../api";
 
   let containerEl: HTMLDivElement | undefined = $state();
   let renderer: GuiRenderer | null = $state(null);
@@ -24,6 +25,15 @@
       .catch(error => {
         if (disposed) return;
         console.error("Failed to initialize GUI renderer", error);
+        void appendSessionLog({
+          level: "error",
+          source: "ui",
+          category: "renderer",
+          message: "Failed to initialize GUI renderer",
+          details: {
+            error: error instanceof Error ? error.message : String(error || "Unknown error"),
+          },
+        });
         initialized = false;
       });
 
@@ -48,6 +58,10 @@
     void project.guiSize.width;
     void project.guiSize.height;
     void project.assets.length;
+    for (const [name, dataUrl] of assetDataUrls) {
+      void name;
+      void dataUrl;
+    }
     void project.animations.length;
     void project.groups.length;
     void project.fontRenderDataVersion;

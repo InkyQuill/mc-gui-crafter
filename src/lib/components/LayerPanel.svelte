@@ -119,6 +119,34 @@
     return `group:${row.id}`;
   }
 
+  function visibleElementIds(layerRows: LayerRow[]): string[] {
+    const ids: string[] = [];
+    for (const row of layerRows) {
+      if (row.kind === "element") {
+        ids.push(row.element.id);
+      } else if (row.kind === "group" && !collapsedGroups.has(row.id)) {
+        ids.push(...row.elements.map(element => element.id));
+      } else if (row.kind === "attached_region" && !collapsedGroups.has(`attached:${row.region.id}`)) {
+        ids.push(...row.elements.map(element => element.id));
+      }
+    }
+    return ids;
+  }
+
+  function selectElementFromList(id: string, event: MouseEvent | KeyboardEvent) {
+    if (event.shiftKey) {
+      editor.selectElementRange(visibleElementIds(rows), id, event.ctrlKey || event.metaKey);
+    } else {
+      editor.selectElement(id, event.ctrlKey || event.metaKey);
+    }
+  }
+
+  function selectElementFromKeyboard(id: string, event: KeyboardEvent) {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    event.preventDefault();
+    selectElementFromList(id, event);
+  }
+
   let selectedGroupIds = $derived.by(() => {
     void editor.selectionRevision;
     const ids = new Set<string>();
@@ -129,9 +157,9 @@
     return ids;
   });
 
-  let selectedElementId = $derived.by(() => {
+  let selectedElementIds = $derived.by(() => {
     void editor.selectionRevision;
-    return editor.selectedElementId;
+    return editor.selectedIds;
   });
 
   let selectedAttachedRegionId = $derived.by(() => {
@@ -185,12 +213,14 @@
       {@const isBackmost = idx === 0}
       {@const isFrontmost = idx === project.elements.length - 1}
       {@const stateBadge = stateBadgeForElement(el)}
+      {@const isSelected = selectedElementIds.has(el.id)}
       <div class="layer-row" class:nested>
         <button
           class="layer-item"
-          class:selected={selectedElementId === el.id}
+          class:selected={isSelected}
           class:hidden-el={!(el.visible ?? true)}
-          onclick={() => editor.selectElement(el.id)}
+          onclick={(event) => selectElementFromList(el.id, event)}
+          onkeydown={(event) => selectElementFromKeyboard(el.id, event)}
         >
           <span class="layer-icon">{iconForElement(el)}</span>
           <span class="layer-text">

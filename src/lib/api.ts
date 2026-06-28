@@ -9,6 +9,7 @@ import type {
   EditScope,
   Element,
   EditorLayoutConfig,
+  FillDirection,
   FontAsset,
   FontRenderData,
   GlyphInfo,
@@ -17,7 +18,9 @@ import type {
   MinecraftSource,
   ModTarget,
   NineSlice,
+  NineSliceMode,
   CodegenMode,
+  ExportScope,
   ProjectData,
   ProjectExportSettings,
   ProjectState,
@@ -25,14 +28,18 @@ import type {
   ProjectSummary,
   SaveProjectResult,
   SemanticGroup,
+  SlotRole,
   StateAddRequest,
   StateOverrideClearRequest,
   StateOverrideUpdateRequest,
   StateUpdateRequest,
+  TextureRenderMode,
+  UvRect,
   WindowConfig,
 } from "./types";
 
 let tauriInvoke: ((cmd: string, args?: Record<string, unknown>) => Promise<unknown>) | null = null;
+let rawTauriInvoke: ((cmd: string, args?: Record<string, unknown>) => Promise<unknown>) | null = null;
 
 function hasTauriRuntime(): boolean {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -47,12 +54,121 @@ async function getInvoke() {
 
   try {
     const tauri = await import("@tauri-apps/api/core");
-    tauriInvoke = tauri.invoke;
+    rawTauriInvoke = tauri.invoke;
+    tauriInvoke = loggedInvoke;
     return tauriInvoke;
   } catch {
     tauriInvoke = mockInvoke;
     return tauriInvoke;
   }
+}
+
+async function loggedInvoke(cmd: string, args?: Record<string, unknown>): Promise<unknown> {
+  if (!rawTauriInvoke) throw new Error("Tauri invoke is not initialized");
+  if (cmd === "session_log_append" || cmd === "session_log_paths") {
+    return rawTauriInvoke(cmd, args);
+  }
+  const started = Date.now();
+  try {
+    const result = await rawTauriInvoke(cmd, args);
+    void appendSessionLog({
+      level: actionLogLevel(result),
+      source: "ui",
+      category: "action",
+      message: `${cmd} completed`,
+      details: {
+        command: cmd,
+        duration_ms: Date.now() - started,
+        args: compactForLog(args ?? {}),
+        result: compactActionResult(result),
+      },
+    });
+    return result;
+  } catch (error) {
+    void appendSessionLog({
+      level: "error",
+      source: "ui",
+      category: "action",
+      message: `${cmd} failed`,
+      details: {
+        command: cmd,
+        duration_ms: Date.now() - started,
+        args: compactForLog(args ?? {}),
+        error: String(error || "Unknown error"),
+      },
+    });
+    throw error;
+  }
+}
+
+type SessionLogLevel = "debug" | "info" | "warning" | "error";
+
+interface SessionLogEntryRequest {
+  level: SessionLogLevel;
+  source: string;
+  category: string;
+  message: string;
+  details?: unknown;
+}
+
+export interface SessionLogPaths {
+  current_log: string;
+  log_dir: string;
+}
+
+export async function appendSessionLog(entry: SessionLogEntryRequest): Promise<void> {
+  if (!rawTauriInvoke && !hasTauriRuntime()) return;
+  try {
+    const invoke = rawTauriInvoke ?? (await import("@tauri-apps/api/core")).invoke;
+    rawTauriInvoke = invoke;
+    await invoke("session_log_append", {
+      entry: {
+        ...entry,
+        details: compactForLog(entry.details ?? null),
+      },
+    });
+  } catch {
+    // Logging must never break the workflow being logged.
+  }
+}
+
+export async function sessionLogPaths(): Promise<SessionLogPaths> {
+  const invoke = await getInvoke();
+  return invoke("session_log_paths") as Promise<SessionLogPaths>;
+}
+
+function actionLogLevel(result: unknown): SessionLogLevel {
+  const value = result as { warnings?: unknown[]; errors?: unknown[] } | null;
+  if (Array.isArray(value?.errors) && value.errors.length > 0) return "error";
+  if (Array.isArray(value?.warnings) && value.warnings.length > 0) return "warning";
+  return "info";
+}
+
+function compactActionResult(result: unknown): unknown {
+  const value = result as { warnings?: unknown[]; errors?: unknown[]; files?: unknown[] } | null;
+  if (Array.isArray(value?.warnings) || Array.isArray(value?.errors)) {
+    return {
+      warnings: value?.warnings ?? [],
+      errors: value?.errors ?? [],
+      files: Array.isArray(value?.files) ? value.files.length : undefined,
+    };
+  }
+  return undefined;
+}
+
+function compactForLog(value: unknown, depth = 0): unknown {
+  if (depth > 4) return "[depth limit]";
+  if (typeof value === "string") {
+    if (value.startsWith("data:image/")) return `[data url ${value.length} chars]`;
+    return value.length > 1000 ? `${value.slice(0, 1000)}...` : value;
+  }
+  if (typeof value !== "object" || value === null) return value;
+  if (Array.isArray(value)) return value.slice(0, 25).map(item => compactForLog(item, depth + 1));
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .slice(0, 80)
+      .map(([key, item]) => [key, compactForLog(item, depth + 1)]),
+  );
 }
 
 interface MockSession {
@@ -78,6 +194,51 @@ export interface ElementMoveRequest {
   x: number;
   y: number;
 }
+
+type NullableElementField =
+  | "width"
+  | "height"
+  | "size"
+  | "asset"
+  | "icon"
+  | "icon_uv"
+  | "tooltip"
+  | "direction"
+  | "content"
+  | "font"
+  | "color"
+  | "shadow"
+  | "animation"
+  | "uv"
+  | "nine_slice"
+  | "slot_role"
+  | "slot_index"
+  | "inventory_group"
+  | "scroll_binding"
+  | "scroll_min"
+  | "scroll_max"
+  | "visible_rows"
+  | "total_rows"
+  | "columns"
+  | "target_group"
+  | "binding"
+  | "dock"
+  | "open_width"
+  | "open_height"
+  | "attached_region";
+
+export type ElementChanges = Partial<{
+  [Field in keyof Omit<Element, "id" | "type">]: Field extends NullableElementField
+    ? Element[Field] | null
+    : Element[Field];
+}>;
+
+export interface ElementPatchRequest {
+  id: string;
+  changes: ElementChanges;
+}
+
+const MOCK_UNDEFINED_NOOP = Symbol("mock undefined element update no-op");
 
 const mockSessions: MockSession[] = [];
 const mockAssetDataUrls = new Map<string, Map<string, string>>();
@@ -257,6 +418,257 @@ function refreshMockGroupPositions(session: MockSession, movedIds: Iterable<stri
   }
 }
 
+const I32_MIN = -2147483648;
+const I32_MAX = 2147483647;
+const U32_MAX = 4294967295;
+
+const MOCK_ELEMENT_MUTABLE_FIELDS = new Set([
+  "x",
+  "y",
+  "width",
+  "height",
+  "size",
+  "asset",
+  "icon",
+  "icon_uv",
+  "tooltip",
+  "direction",
+  "content",
+  "font",
+  "color",
+  "shadow",
+  "animation",
+  "visible",
+  "uv",
+  "render_mode",
+  "nine_slice",
+  "layer",
+  "slot_role",
+  "slot_index",
+  "inventory_group",
+  "scroll_binding",
+  "scroll_min",
+  "scroll_max",
+  "visible_rows",
+  "total_rows",
+  "columns",
+  "target_group",
+  "binding",
+  "dock",
+  "open_width",
+  "open_height",
+  "attached_region",
+]);
+
+const MOCK_SIGNED_NUMBER_FIELDS = new Set(["x", "y"]);
+const MOCK_UNSIGNED_NUMBER_FIELDS = new Set([
+  "width",
+  "height",
+  "size",
+  "color",
+  "slot_index",
+  "scroll_min",
+  "scroll_max",
+  "visible_rows",
+  "total_rows",
+  "columns",
+  "open_width",
+  "open_height",
+]);
+const MOCK_STRING_FIELDS = new Set([
+  "asset",
+  "icon",
+  "tooltip",
+  "content",
+  "font",
+  "animation",
+  "inventory_group",
+  "scroll_binding",
+  "target_group",
+  "binding",
+  "dock",
+  "attached_region",
+]);
+const MOCK_FILL_DIRECTIONS = new Set<FillDirection>([
+  "left_to_right",
+  "right_to_left",
+  "bottom_to_top",
+  "top_to_bottom",
+]);
+const MOCK_TEXTURE_RENDER_MODES = new Set<TextureRenderMode>(["plain", "nine_slice"]);
+const MOCK_NINE_SLICE_MODES = new Set<NineSliceMode>(["tile", "stretch"]);
+const MOCK_SLOT_ROLES = new Set<SlotRole>([
+  "machine",
+  "player_inventory",
+  "hotbar",
+  "scrollable_inventory",
+  "virtual_storage",
+  "upgrade",
+  "upgrade_settings",
+  "filter",
+  "ghost",
+  "offhand",
+]);
+
+function mockObject(value: unknown, label: string): Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw `${label} must be an object`;
+  }
+  return value as Record<string, unknown>;
+}
+
+function mockInteger(value: unknown, field: string, min: number, max: number): number {
+  if (typeof value !== "number" || !Number.isInteger(value) || value < min || value > max) {
+    throw `Invalid element update: ${field} must be an integer between ${min} and ${max}`;
+  }
+  return value;
+}
+
+function mockEnum<T extends string>(value: unknown, field: string, allowed: Set<T>): T {
+  if (typeof value !== "string" || !allowed.has(value as T)) {
+    throw `Invalid element update: ${field} has an invalid value`;
+  }
+  return value as T;
+}
+
+function validateMockUvRect(value: unknown, field: string): UvRect {
+  const object = mockObject(value, `Invalid element update: ${field}`);
+  const allowed = new Set(["x", "y", "width", "height"]);
+  for (const key of Object.keys(object)) {
+    if (!allowed.has(key)) throw `Invalid element update: ${field}.${key} is not a valid field`;
+  }
+  for (const key of allowed) {
+    if (!Object.prototype.hasOwnProperty.call(object, key)) {
+      throw `Invalid element update: ${field}.${key} is required`;
+    }
+  }
+  return {
+    x: mockInteger(object.x, `${field}.x`, 0, U32_MAX),
+    y: mockInteger(object.y, `${field}.y`, 0, U32_MAX),
+    width: mockInteger(object.width, `${field}.width`, 0, U32_MAX),
+    height: mockInteger(object.height, `${field}.height`, 0, U32_MAX),
+  };
+}
+
+function validateMockNineSlice(value: unknown): NineSlice {
+  const object = mockObject(value, "Invalid element update: nine_slice");
+  const allowed = new Set(["left", "right", "top", "bottom", "edge_mode", "center_mode"]);
+  for (const key of Object.keys(object)) {
+    if (!allowed.has(key)) throw `Invalid element update: nine_slice.${key} is not a valid field`;
+  }
+  for (const key of ["left", "right", "top", "bottom"]) {
+    if (!Object.prototype.hasOwnProperty.call(object, key)) {
+      throw `Invalid element update: nine_slice.${key} is required`;
+    }
+  }
+  return {
+    left: mockInteger(object.left, "nine_slice.left", 0, U32_MAX),
+    right: mockInteger(object.right, "nine_slice.right", 0, U32_MAX),
+    top: mockInteger(object.top, "nine_slice.top", 0, U32_MAX),
+    bottom: mockInteger(object.bottom, "nine_slice.bottom", 0, U32_MAX),
+    edge_mode:
+      object.edge_mode === undefined ? "tile" : mockEnum(object.edge_mode, "nine_slice.edge_mode", MOCK_NINE_SLICE_MODES),
+    center_mode:
+      object.center_mode === undefined ? "tile" : mockEnum(object.center_mode, "nine_slice.center_mode", MOCK_NINE_SLICE_MODES),
+  };
+}
+
+function validateMockElementChange(field: string, value: unknown): unknown {
+  if (field === "id" || field === "type") {
+    throw `Invalid element update: ${field} is not a mutable field`;
+  }
+  if (!MOCK_ELEMENT_MUTABLE_FIELDS.has(field)) {
+    throw `Invalid element update: ${field} is not a valid field`;
+  }
+  if (value === undefined) {
+    return MOCK_UNDEFINED_NOOP;
+  }
+  if (value === null) {
+    if (
+      field === "visible" ||
+      field === "render_mode" ||
+      field === "layer" ||
+      MOCK_SIGNED_NUMBER_FIELDS.has(field)
+    ) {
+      throw `Invalid element update: ${field} cannot be null`;
+    }
+    return undefined;
+  }
+  if (MOCK_SIGNED_NUMBER_FIELDS.has(field)) {
+    return mockInteger(value, field, I32_MIN, I32_MAX);
+  }
+  if (MOCK_UNSIGNED_NUMBER_FIELDS.has(field)) {
+    return mockInteger(value, field, 0, U32_MAX);
+  }
+  if (MOCK_STRING_FIELDS.has(field)) {
+    if (typeof value !== "string") throw `Invalid element update: ${field} must be a string`;
+    return value;
+  }
+  if (field === "shadow" || field === "visible") {
+    if (typeof value !== "boolean") throw `Invalid element update: ${field} must be a boolean`;
+    return value;
+  }
+  if (field === "direction") {
+    return mockEnum(value, field, MOCK_FILL_DIRECTIONS);
+  }
+  if (field === "render_mode") {
+    return mockEnum(value, field, MOCK_TEXTURE_RENDER_MODES);
+  }
+  if (field === "layer") {
+    return mockEnum(value, field, MOCK_LAYERS_SET);
+  }
+  if (field === "slot_role") {
+    return mockEnum(value, field, MOCK_SLOT_ROLES);
+  }
+  if (field === "uv" || field === "icon_uv") {
+    return validateMockUvRect(value, field);
+  }
+  if (field === "nine_slice") {
+    return validateMockNineSlice(value);
+  }
+  throw `Invalid element update: ${field} is not a valid field`;
+}
+
+function applyMockElementChanges(element: Element, changes: unknown): Element {
+  if (typeof changes !== "object" || changes === null || Array.isArray(changes)) {
+    throw "Element changes must be an object";
+  }
+
+  const object = changes as Record<string, unknown>;
+
+  const next = clone(element) as Element & Record<string, unknown>;
+  for (const [key, value] of Object.entries(object)) {
+    const nextValue = validateMockElementChange(key, value);
+    if (nextValue === MOCK_UNDEFINED_NOOP) continue;
+    if (nextValue === undefined) {
+      delete next[key];
+      continue;
+    }
+    next[key] = clone(nextValue);
+  }
+  return next;
+}
+
+function canonicalizeMockElementDefaults(element: Element): Element {
+  const next = clone(element) as Element & Record<string, unknown>;
+  const visible = next.visible === undefined ? true : next.visible;
+  const renderMode = next.render_mode === undefined ? "plain" : next.render_mode;
+  const layer = next.layer === undefined ? "background" : next.layer;
+
+  delete next.visible;
+  delete next.render_mode;
+  delete next.layer;
+
+  next.visible = visible;
+  next.render_mode = renderMode;
+  next.layer = layer;
+  return next;
+}
+
+function mockElementsEqual(left: Element, right: Element): boolean {
+  return JSON.stringify(canonicalizeMockElementDefaults(left)) === JSON.stringify(canonicalizeMockElementDefaults(right));
+}
+
 function mockAssetsForSession(session: MockSession): Map<string, string> {
   let assets = mockAssetDataUrls.get(session.id);
   if (!assets) {
@@ -280,6 +692,7 @@ function syncMockAssetMetadataFromProject(session: MockSession): void {
 }
 
 const MOCK_LAYERS: readonly Layer[] = ["background", "overlay", "animatable"];
+const MOCK_LAYERS_SET = new Set<Layer>(MOCK_LAYERS);
 
 function valuesEqual(left: unknown, right: unknown): boolean {
   return JSON.stringify(left ?? null) === JSON.stringify(right ?? null);
@@ -672,6 +1085,10 @@ function joinMockPath(...parts: string[]): string {
 function mockExportPreview(args?: Record<string, unknown>): ExportPreview {
   const target = String(args?.target ?? "forge").trim().toLowerCase();
   if (!["forge", "fabric", "neoforge"].includes(target)) throw `Unsupported export target: ${target}`;
+  const exportScope = String(args?.export_scope ?? "full_mod");
+  if (exportScope !== "textures_only" && exportScope !== "full_mod") {
+    throw `Invalid export scope: ${exportScope}`;
+  }
   const outputDir = String(args?.output_dir ?? "").trim();
   if (!outputDir) throw "Export output directory cannot be empty";
 
@@ -691,7 +1108,9 @@ function mockExportPreview(args?: Record<string, unknown>): ExportPreview {
       : "src/main/resources/META-INF/mods.toml";
   const referencedAssets = new Set<string>();
   for (const element of session.project.elements) {
-    if (element.type === "texture" && element.asset) referencedAssets.add(element.asset);
+    if (element.visible === false) continue;
+    if (element.asset) referencedAssets.add(element.asset);
+    if (element.icon) referencedAssets.add(element.icon);
   }
   for (const animation of session.project.animations) {
     if (animation.texture) referencedAssets.add(animation.texture);
@@ -701,23 +1120,31 @@ function mockExportPreview(args?: Record<string, unknown>): ExportPreview {
     .filter(asset => !assets.has(asset))
     .map(asset => `Texture asset referenced by project is missing: ${asset}`);
 
-  const files = [
-    joinMockPath(outputDir, "settings.gradle"),
-    joinMockPath(outputDir, "build.gradle"),
-    joinMockPath(outputDir, "gradle.properties"),
+  const referencedTextureFiles = [...referencedAssets]
+    .filter(asset => assets.has(asset))
+    .map(asset => joinMockPath(assetBase, asset));
+  const textureFiles = [
     joinMockPath(assetBase, `textures/gui/${resourceName}_gui.png`),
-    ...[...referencedAssets].filter(asset => assets.has(asset)).map(asset => joinMockPath(assetBase, asset)),
-    joinMockPath(assetBase, `gui/${resourceName}_layout.json`),
-    joinMockPath(javaBase, "GuiLayout.java"),
-    ...(settings.generate_runtime_helpers ? [joinMockPath(javaBase, "GuiRuntime.java")] : []),
-    ...(settings.codegen_mode === "modular" && settings.generate_semantic_registry
-      ? [joinMockPath(javaBase, "SemanticRegistry.java")]
-      : []),
-    joinMockPath(javaBase, `${className}Screen.java`),
-    joinMockPath(javaBase, `${className}Client.java`),
-    joinMockPath(outputDir, metadata),
-    joinMockPath(outputDir, "README.txt"),
+    ...referencedTextureFiles,
   ];
+  const files = exportScope === "textures_only"
+    ? textureFiles
+    : [
+      joinMockPath(outputDir, "settings.gradle"),
+      joinMockPath(outputDir, "build.gradle"),
+      joinMockPath(outputDir, "gradle.properties"),
+      ...textureFiles,
+      joinMockPath(assetBase, `gui/${resourceName}_layout.json`),
+      joinMockPath(javaBase, "GuiLayout.java"),
+      ...(settings.generate_runtime_helpers ? [joinMockPath(javaBase, "GuiRuntime.java")] : []),
+      ...(settings.codegen_mode === "modular" && settings.generate_semantic_registry
+        ? [joinMockPath(javaBase, "SemanticRegistry.java")]
+        : []),
+      joinMockPath(javaBase, `${className}Screen.java`),
+      joinMockPath(javaBase, `${className}Client.java`),
+      joinMockPath(outputDir, metadata),
+      joinMockPath(outputDir, "README.txt"),
+    ];
 
   return {
     target: target as ModTarget,
@@ -862,6 +1289,20 @@ async function mockInvoke(cmd: string, args?: Record<string, unknown>): Promise<
     case "project_summary": {
       const session = mockSession(args?.project_id);
       return mockProjectResult(session);
+    }
+    case "project_resize": {
+      const session = mockSession(args?.project_id);
+      const width = Number(args?.width);
+      const height = Number(args?.height);
+      if (!Number.isSafeInteger(width) || !Number.isSafeInteger(height) || width <= 0 || height <= 0) {
+        throw "Project dimensions must be greater than zero";
+      }
+      if (session.project.gui_size.width !== width || session.project.gui_size.height !== height) {
+        const previous = clone(session.project);
+        session.project.gui_size = { width, height };
+        markMockChanged(session, previous);
+      }
+      return mockSummary(session);
     }
     case "project_undo": {
       const session = mockSession(args?.project_id);
@@ -1134,15 +1575,59 @@ async function mockInvoke(cmd: string, args?: Record<string, unknown>): Promise<
     }
     case "element_update": {
       const session = mockSession(args?.project_id);
-      const el = session.project.elements.find(e => e.id === args?.id);
+      const index = session.project.elements.findIndex(e => e.id === args?.id);
+      const el = session.project.elements[index];
       if (!el) throw "Element not found";
-      const next = { ...el, ...(args?.changes as Partial<Element>) };
-      if (JSON.stringify(next) !== JSON.stringify(el)) {
+      const next = canonicalizeMockElementDefaults(applyMockElementChanges(el, args?.changes));
+      if (!mockElementsEqual(next, el)) {
         const previous = clone(session.project);
-        Object.assign(el, clone(next));
+        const refreshGroupPositions = el.x !== next.x || el.y !== next.y;
+        session.project.elements[index] = clone(next);
+        if (refreshGroupPositions) refreshMockGroupPositions(session, [next.id]);
         markMockChanged(session, previous);
+        return clone(next);
       }
       return clone(el);
+    }
+    case "element_update_many": {
+      const session = mockSession(args?.project_id);
+      const patches = ((args?.patches as ElementPatchRequest[] | undefined) ?? []).map(patch => ({
+        id: patch.id,
+        changes: clone(patch.changes),
+      }));
+      if (patches.length === 0) return [];
+
+      const seen = new Set<string>();
+      const nextElements = patches.map(patch => {
+        if (seen.has(patch.id)) throw `Duplicate element update: ${patch.id}`;
+        seen.add(patch.id);
+        const current = session.project.elements.find(element => element.id === patch.id);
+        if (!current) throw `Element not found: ${patch.id}`;
+        const element = canonicalizeMockElementDefaults(applyMockElementChanges(current, patch.changes));
+        return {
+          id: patch.id,
+          coordinateChanged: current.x !== element.x || current.y !== element.y,
+          element,
+        };
+      });
+
+      if (nextElements.some(({ id, element }) => {
+        const current = session.project.elements.find(currentElement => currentElement.id === id);
+        return current !== undefined && !mockElementsEqual(current, element);
+      })) {
+        const previous = clone(session.project);
+        for (const next of nextElements) {
+          const index = session.project.elements.findIndex(element => element.id === next.id);
+          session.project.elements[index] = clone(next.element);
+        }
+        refreshMockGroupPositions(
+          session,
+          nextElements.filter(({ coordinateChanged }) => coordinateChanged).map(({ id }) => id),
+        );
+        markMockChanged(session, previous);
+      }
+
+      return nextElements.map(({ element }) => clone(element));
     }
     case "element_resize": {
       const session = mockSession(args?.project_id);
@@ -1483,6 +1968,11 @@ export async function projectSummary(projectId?: string): Promise<ProjectSummary
   return invoke("project_summary", { project_id: projectId }) as Promise<ProjectSummary>;
 }
 
+export async function projectResize(width: number, height: number, projectId?: string): Promise<ProjectSessionSummary> {
+  const invoke = await getInvoke();
+  return invoke("project_resize", { width, height, project_id: projectId }) as Promise<ProjectSessionSummary>;
+}
+
 export async function projectUndo(projectId?: string): Promise<ProjectSessionSummary> {
   const invoke = await getInvoke();
   return invoke("project_undo", { project_id: projectId }) as Promise<ProjectSessionSummary>;
@@ -1582,9 +2072,14 @@ export async function elementMoveMany(moves: ElementMoveRequest[], projectId?: s
   return invoke("element_move_many", { moves, project_id: projectId }) as Promise<Element[]>;
 }
 
-export async function elementUpdate(id: string, changes: Partial<Element>, projectId?: string): Promise<Element> {
+export async function elementUpdate(id: string, changes: ElementChanges, projectId?: string): Promise<Element> {
   const invoke = await getInvoke();
   return invoke("element_update", { id, changes, project_id: projectId }) as Promise<Element>;
+}
+
+export async function elementUpdateMany(patches: ElementPatchRequest[], projectId?: string): Promise<Element[]> {
+  const invoke = await getInvoke();
+  return invoke("element_update_many", { patches, project_id: projectId }) as Promise<Element[]>;
 }
 
 export async function elementResize(id: string, x: number, y: number, width: number, height: number, projectId?: string): Promise<Element> {
@@ -1694,6 +2189,7 @@ export interface ExportSettingsOverride {
   codegen_mode: CodegenMode;
   generate_runtime_helpers: boolean;
   generate_semantic_registry: boolean;
+  export_scope?: ExportScope;
   overwrite?: boolean;
 }
 

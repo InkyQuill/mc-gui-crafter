@@ -101,6 +101,7 @@ export interface AttachedRegion {
 }
 
 export type CodegenMode = "simple" | "modular";
+export type ExportScope = "full_mod" | "textures_only";
 
 export interface ProjectExportSettings {
   codegen_mode: CodegenMode;

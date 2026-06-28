@@ -107,6 +107,29 @@ export class ProjectStore {
     let maxX = this.guiSize.width;
     let maxY = this.guiSize.height;
 
+    const content = this.visibleContentBounds;
+    if (content) {
+      minX = Math.min(minX, content.x);
+      minY = Math.min(minY, content.y);
+      maxX = Math.max(maxX, content.x + content.width);
+      maxY = Math.max(maxY, content.y + content.height);
+    }
+
+    return {
+      x: minX,
+      y: minY,
+      width: Math.max(1, maxX - minX),
+      height: Math.max(1, maxY - minY),
+    };
+  }
+
+  get visibleContentBounds(): VisualBounds | null {
+    let minX = Number.POSITIVE_INFINITY;
+    let minY = Number.POSITIVE_INFINITY;
+    let maxX = Number.NEGATIVE_INFINITY;
+    let maxY = Number.NEGATIVE_INFINITY;
+    let hasContent = false;
+
     for (const el of this.effectiveElements) {
       if (el.visible === false) continue;
       const size = this.elementVisualSize(el);
@@ -114,6 +137,7 @@ export class ProjectStore {
       minY = Math.min(minY, el.y);
       maxX = Math.max(maxX, el.x + size.width);
       maxY = Math.max(maxY, el.y + size.height);
+      hasContent = true;
     }
 
     for (const region of this.effectiveAttachedRegions) {
@@ -122,7 +146,10 @@ export class ProjectStore {
       minY = Math.min(minY, region.y);
       maxX = Math.max(maxX, region.x + region.width);
       maxY = Math.max(maxY, region.y + region.height);
+      hasContent = true;
     }
+
+    if (!hasContent) return null;
 
     return {
       x: minX,
@@ -227,6 +254,14 @@ export class ProjectStore {
     nextId = this.elements.length + 1;
     ProjectStore.addRecentProject(path);
     this.startAutoSave();
+  }
+
+  async resizeProject(width: number, height: number) {
+    const nextWidth = Math.max(1, Math.round(width));
+    const nextHeight = Math.max(1, Math.round(height));
+    await api.projectResize(nextWidth, nextHeight, this.activeProjectId ?? undefined);
+    await this.refreshSessions();
+    await this.hydrateActiveProject();
   }
 
   async saveProject() {
@@ -494,6 +529,44 @@ export class ProjectStore {
 
     await this.refreshSessions();
     await this.hydrateActiveProject();
+  }
+
+  async updateElements(patches: api.ElementPatchRequest[]): Promise<Element[]> {
+    if (patches.length === 0) return [];
+
+    const basePatches: api.ElementPatchRequest[] = [];
+    const statePatches: Array<{ id: string; fields: StateOverrideFields }> = [];
+    if (this.isEditingStateOverrides) {
+      for (const patch of patches) {
+        const element = this.elements.find(item => item.id === patch.id);
+        if (!element) throw new Error(`Element not found: ${patch.id}`);
+
+        const stateFields = this.pickElementStateOverrideFields(patch.changes);
+        const baseChanges = this.omitElementStateOverrideFields(patch.changes);
+        if (element.type === "slot" && patch.changes.size !== undefined) {
+          stateFields.width = patch.changes.size;
+          stateFields.height = patch.changes.size;
+          delete baseChanges.size;
+        }
+
+        if (Object.keys(stateFields).length > 0) statePatches.push({ id: patch.id, fields: stateFields });
+        if (Object.keys(baseChanges).length > 0) {
+          basePatches.push({ id: patch.id, changes: baseChanges });
+        }
+      }
+    } else {
+      basePatches.push(...patches);
+    }
+
+    const updated = basePatches.length > 0
+      ? await api.elementUpdateMany(basePatches, this.activeProjectId ?? undefined)
+      : [];
+    for (const patch of statePatches) {
+      await this.commitElementStateOverride(patch.id, patch.fields, false);
+    }
+    await this.refreshSessions();
+    await this.hydrateActiveProject();
+    return updated;
   }
 
   async updateExportSettings(changes: Partial<ProjectExportSettings>) {
@@ -875,11 +948,11 @@ export class ProjectStore {
     }
   }
 
-  private pickElementStateOverrideFields(changes: Partial<Element>): StateOverrideFields {
+  private pickElementStateOverrideFields(changes: api.ElementChanges): StateOverrideFields {
     return this.pickAllowedFields(changes, ELEMENT_STATE_OVERRIDE_FIELDS);
   }
 
-  private omitElementStateOverrideFields(changes: Partial<Element>): Partial<Element> {
+  private omitElementStateOverrideFields(changes: api.ElementChanges): api.ElementChanges {
     return this.omitAllowedFields(changes, ELEMENT_STATE_OVERRIDE_FIELDS);
   }
 

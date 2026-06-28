@@ -15,6 +15,13 @@ pub struct ExportConfig {
     pub output_dir: String,
     pub settings_override: Option<ProjectExportSettings>,
     pub overwrite: bool,
+    pub scope: ExportScope,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExportScope {
+    FullMod,
+    TexturesOnly,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -90,6 +97,21 @@ impl ExportTarget {
     }
 }
 
+impl ExportScope {
+    pub fn parse(value: Option<&str>) -> Result<Self, String> {
+        match value
+            .unwrap_or("full_mod")
+            .trim()
+            .to_ascii_lowercase()
+            .as_str()
+        {
+            "full_mod" | "full" | "mod" => Ok(Self::FullMod),
+            "textures_only" | "textures" | "texture" => Ok(Self::TexturesOnly),
+            other => Err(format!("Unsupported export scope: {other}")),
+        }
+    }
+}
+
 impl SanitizedExport {
     fn new(config: &ExportConfig) -> Result<Self, String> {
         let mod_id = sanitize_mod_id(&config.mod_id);
@@ -98,7 +120,7 @@ impl SanitizedExport {
         let package = sanitize_package(&config.package, &mod_id);
         let package_path = package.replace('.', "/");
         let resource_name = sanitize_resource_name(&config.class_name);
-        let output_dir = PathBuf::from(config.output_dir.trim());
+        let output_dir = absolute_output_dir(config.output_dir.trim())?;
 
         if output_dir.as_os_str().is_empty() {
             return Err("Export output directory cannot be empty".to_string());
@@ -126,6 +148,20 @@ impl SanitizedExport {
             .join("src/main/resources/assets")
             .join(&self.mod_id)
     }
+}
+
+fn absolute_output_dir(output_dir: &str) -> Result<PathBuf, String> {
+    let path = PathBuf::from(output_dir);
+    if path.as_os_str().is_empty() {
+        return Ok(path);
+    }
+    if path.is_absolute() {
+        return Ok(path);
+    }
+
+    let cwd = std::env::current_dir()
+        .map_err(|error| format!("Failed to resolve export output directory: {error}"))?;
+    Ok(cwd.join(path))
 }
 
 pub fn export_project(
@@ -193,6 +229,7 @@ pub fn preview_export_for_state(
     };
     warnings.extend(semantic_warnings(export_project.as_ref(), &settings));
     warnings.extend(progress_texture_warnings(export_project.as_ref()));
+    warnings.extend(project_size_warnings(export_project.as_ref()));
     warnings.extend(state_variant_warnings(project));
     warnings.extend(validation.warnings);
     Ok(ExportPreview {
@@ -236,26 +273,28 @@ fn plan_export(
     let mut files = Vec::new();
     let errors = missing_texture_errors(project);
 
-    let settings_path = export.output_dir.join("settings.gradle");
-    plan_file(
-        &mut files,
-        settings_path,
-        generated_text(generate_settings_gradle(&export, target)),
-    )?;
+    if config.scope == ExportScope::FullMod {
+        let settings_path = export.output_dir.join("settings.gradle");
+        plan_file(
+            &mut files,
+            settings_path,
+            generated_text(generate_settings_gradle(&export, target)),
+        )?;
 
-    let gradle_path = export.output_dir.join("build.gradle");
-    plan_file(
-        &mut files,
-        gradle_path,
-        generated_text(generate_build_gradle(&export, target)),
-    )?;
+        let gradle_path = export.output_dir.join("build.gradle");
+        plan_file(
+            &mut files,
+            gradle_path,
+            generated_text(generate_build_gradle(&export, target)),
+        )?;
 
-    let properties_path = export.output_dir.join("gradle.properties");
-    plan_file(
-        &mut files,
-        properties_path,
-        generated_text(generate_gradle_properties(&export, target)),
-    )?;
+        let properties_path = export.output_dir.join("gradle.properties");
+        plan_file(
+            &mut files,
+            properties_path,
+            generated_text(generate_gradle_properties(&export, target)),
+        )?;
+    }
 
     // Background atlas
     let bg_atlas =
@@ -290,11 +329,22 @@ fn plan_export(
         }
     }
 
-    for asset in referenced_texture_assets(project) {
-        if let Some(data) = project.texture_data.get(asset.as_ref()) {
-            let asset_path = export.asset_dir().join(asset.as_ref());
-            plan_file(&mut files, asset_path, data.clone())?;
+    if config.scope == ExportScope::FullMod {
+        for asset in referenced_texture_assets(project) {
+            if let Some(data) = project.texture_data.get(asset.as_ref()) {
+                let asset_path = export.asset_dir().join(asset.as_ref());
+                plan_file(&mut files, asset_path, data.clone())?;
+            }
         }
+    }
+
+    if config.scope == ExportScope::TexturesOnly {
+        return Ok(ExportPlan {
+            target,
+            export,
+            files,
+            errors,
+        });
     }
 
     let mut textures_json = serde_json::json!({
@@ -437,12 +487,13 @@ fn layout_json_value_for_state(
     let elements_json: Vec<serde_json::Value> = project
         .elements
         .iter()
-        .map(|e| {
-            let mut val = serde_json::to_value(e).unwrap();
-            if e.visible && e.layer == Layer::Animatable {
-                val["texture"] = serde_json::json!(format!("textures/gui/{}.png", e.id));
+        .map(|element| {
+            let mut value = serde_json::to_value(element).unwrap();
+            apply_export_layout_element_adjustments(element, &mut value);
+            if element.visible && element.layer == Layer::Animatable {
+                value["texture"] = serde_json::json!(format!("textures/gui/{}.png", element.id));
             }
-            val
+            value
         })
         .collect();
 
@@ -463,6 +514,27 @@ fn layout_json_value_for_state(
         layout["effective_state"] = serde_json::json!(state_id);
     }
     layout
+}
+
+fn apply_export_layout_element_adjustments(
+    element: &crate::project::Element,
+    value: &mut serde_json::Value,
+) {
+    if !matches!(
+        element.element_type,
+        ElementType::Slot | ElementType::VirtualSlotCell
+    ) {
+        return;
+    }
+
+    let size = element.render_size();
+    value["x"] = serde_json::json!(element.x + 1);
+    value["y"] = serde_json::json!(element.y + 1);
+    value["width"] = serde_json::json!(size.width.saturating_sub(2).max(1));
+    value["height"] = serde_json::json!(size.height.saturating_sub(2).max(1));
+    if let Some(object) = value.as_object_mut() {
+        object.remove("size");
+    }
 }
 
 fn write_file(path: &Path, data: &[u8]) -> Result<(), String> {
@@ -500,6 +572,48 @@ fn existing_file_warnings(files: &[PlannedFile]) -> Vec<String> {
             )
         })
         .collect()
+}
+
+fn project_size_warnings(project: &Project) -> Vec<String> {
+    let Some(bounds) = project.visible_content_bounds() else {
+        return Vec::new();
+    };
+    let width_mismatch = bounds.width != project.gui_size.width;
+    let height_mismatch = bounds.height != project.gui_size.height;
+    let origin_mismatch = bounds.x != 0 || bounds.y != 0;
+    if !width_mismatch && !height_mismatch && !origin_mismatch {
+        return Vec::new();
+    }
+
+    let mut warnings = Vec::new();
+    warnings.push(format!(
+        "Visible content bounds are {}x{} at {},{} but project size is {}x{}. Resize the project to {}x{} when content starts at 0,0; otherwise move visible content to 0,0 first.",
+        bounds.width,
+        bounds.height,
+        bounds.x,
+        bounds.y,
+        project.gui_size.width,
+        project.gui_size.height,
+        bounds.width,
+        bounds.height,
+    ));
+    if bounds.x == 0 && bounds.y == 0 {
+        warnings.push(format!(
+            "Project can be resized to visible content bounds: {}x{}.",
+            bounds.width, bounds.height
+        ));
+    } else {
+        warnings.push(format!(
+            "Visible content starts at {},{}; project resize alone will not preserve alignment. Move content by {},{} before resizing to {}x{}.",
+            bounds.x,
+            bounds.y,
+            -bounds.x,
+            -bounds.y,
+            bounds.width,
+            bounds.height,
+        ));
+    }
+    warnings
 }
 
 struct VisualAuthoringValidation {
@@ -2643,6 +2757,7 @@ mod tests {
             output_dir: output_dir.to_string_lossy().to_string(),
             settings_override: None,
             overwrite: false,
+            scope: ExportScope::FullMod,
         }
     }
 
@@ -2686,6 +2801,7 @@ mod tests {
             output_dir: output_dir.to_string_lossy().to_string(),
             settings_override: None,
             overwrite: false,
+            scope: ExportScope::FullMod,
         };
         let files = export_project(&sample_project(project_target), &config, target).unwrap();
         (output_dir, files)
@@ -3109,6 +3225,62 @@ mod tests {
     }
 
     #[test]
+    fn layout_json_exports_slots_as_sixteen_pixel_interior_bounds() {
+        let mut project = Project::new("Slot Interior", 176, 166, crate::project::ModTarget::Forge);
+        project.elements.push(Element {
+            id: "slot_0".into(),
+            element_type: ElementType::Slot,
+            x: 8,
+            y: 18,
+            width: None,
+            height: None,
+            size: Some(18),
+            asset: None,
+            icon: None,
+            icon_uv: None,
+            tooltip: None,
+            direction: None,
+            content: None,
+            font: None,
+            color: None,
+            shadow: None,
+            animation: None,
+            visible: true,
+            uv: None,
+            render_mode: TextureRenderMode::Plain,
+            nine_slice: None,
+            layer: Layer::Background,
+            slot_role: Some(SlotRole::Machine),
+            slot_index: Some(0),
+            inventory_group: Some("machine".into()),
+            scroll_binding: None,
+            scroll_min: None,
+            scroll_max: None,
+            visible_rows: None,
+            total_rows: None,
+            columns: None,
+            target_group: None,
+            binding: None,
+            dock: None,
+            open_width: None,
+            open_height: None,
+            attached_region: None,
+        });
+
+        let layout = layout_json_value(
+            &project,
+            serde_json::json!({ "background": "textures/gui/slot_interior_gui.png" }),
+        );
+        let slot = &layout["elements"][0];
+
+        assert_eq!(slot["x"], 9);
+        assert_eq!(slot["y"], 19);
+        assert_eq!(slot["width"], 16);
+        assert_eq!(slot["height"], 16);
+        assert!(slot.get("size").is_none());
+    }
+
+    #[test]
     fn layout_json_omits_generated_texture_for_hidden_animatable_elements() {
         let mut project = layered_project(ModTarget::Forge);
         let progress = project
@@ -3155,6 +3327,7 @@ mod tests {
             output_dir: "/tmp/gui-crafter-export-normalized".into(),
             settings_override: None,
             overwrite: false,
+            scope: ExportScope::FullMod,
         };
 
         let settings = effective_export_settings(&project, &config);
@@ -3227,6 +3400,7 @@ mod tests {
             output_dir: output_dir.path().to_string_lossy().to_string(),
             settings_override: None,
             overwrite: false,
+            scope: ExportScope::FullMod,
         };
         let preview = preview_export(&project, &config, "forge").unwrap();
 
@@ -3280,6 +3454,7 @@ mod tests {
             output_dir: output_dir.path().to_string_lossy().to_string(),
             settings_override: None,
             overwrite: false,
+            scope: ExportScope::FullMod,
         };
         let preview = preview_export(&project, &config, "forge").unwrap();
 
@@ -3626,6 +3801,7 @@ mod tests {
             output_dir: output_dir.path().to_string_lossy().to_string(),
             settings_override: None,
             overwrite: false,
+            scope: ExportScope::FullMod,
         };
 
         let preview = preview_export(&project, &config, "forge").unwrap();
@@ -3655,6 +3831,7 @@ mod tests {
                     output_dir: output_dir.path().to_string_lossy().to_string(),
                     settings_override: None,
                     overwrite: false,
+                    scope: ExportScope::FullMod,
                 };
 
                 let plan = plan_export(
@@ -3734,6 +3911,7 @@ mod tests {
             output_dir: output_dir.path().to_string_lossy().to_string(),
             settings_override: None,
             overwrite: false,
+            scope: ExportScope::FullMod,
         };
         let mut project = Project::new("Visual Offset", 100, 80, ModTarget::Forge);
         project.texture_data.insert(
@@ -3806,6 +3984,7 @@ mod tests {
             output_dir: output_dir.path().to_string_lossy().to_string(),
             settings_override: None,
             overwrite: false,
+            scope: ExportScope::FullMod,
         };
 
         let files = export_project(&layered_project(ModTarget::Fabric), &config, "fabric").unwrap();
@@ -3840,6 +4019,7 @@ mod tests {
             output_dir: output_dir.path().to_string_lossy().to_string(),
             settings_override: None,
             overwrite: false,
+            scope: ExportScope::FullMod,
         };
 
         let preview = preview_export(&layered_project(ModTarget::Forge), &config, "forge").unwrap();
@@ -3878,6 +4058,7 @@ mod tests {
             output_dir: output_dir.path().to_string_lossy().to_string(),
             settings_override: None,
             overwrite: false,
+            scope: ExportScope::FullMod,
         };
 
         export_project(&layered_project(ModTarget::Forge), &config, "forge").unwrap();
@@ -3900,6 +4081,7 @@ mod tests {
             output_dir: output_dir.path().to_string_lossy().to_string(),
             settings_override: None,
             overwrite: false,
+            scope: ExportScope::FullMod,
         };
         let mut project = layered_project(ModTarget::Forge);
         let progress = project
@@ -3933,6 +4115,7 @@ mod tests {
             output_dir: output_dir.path().to_string_lossy().to_string(),
             settings_override: None,
             overwrite: false,
+            scope: ExportScope::FullMod,
         };
         let mut project = layered_project(ModTarget::Forge);
         let mut atlas = RgbaImage::from_pixel(16, 8, Rgba([0x10, 0x20, 0x30, 0xff]));
@@ -3983,6 +4166,7 @@ mod tests {
             output_dir: output_dir.path().to_string_lossy().to_string(),
             settings_override: None,
             overwrite: false,
+            scope: ExportScope::FullMod,
         };
         let mut project = Project::new("Returns", 100, 80, ModTarget::Forge);
         project.attached_regions.push(AttachedRegion {
@@ -4025,6 +4209,7 @@ mod tests {
             output_dir: output_dir.path().to_string_lossy().to_string(),
             settings_override: None,
             overwrite: false,
+            scope: ExportScope::FullMod,
         };
 
         export_project(&sample_project(ModTarget::Forge), &config, "forge").unwrap();
@@ -4052,6 +4237,7 @@ mod tests {
             output_dir: output_dir.path().to_string_lossy().to_string(),
             settings_override: None,
             overwrite: false,
+            scope: ExportScope::FullMod,
         };
         let mut project = sample_project(ModTarget::Forge);
         project.elements.push(button_element(
@@ -4101,6 +4287,7 @@ mod tests {
                 output_dir: output_dir.path().to_string_lossy().to_string(),
                 settings_override: None,
                 overwrite: false,
+                scope: ExportScope::FullMod,
             };
             let mut project = sample_project(project_target);
             project.elements.push(button_element(
@@ -4162,6 +4349,7 @@ mod tests {
             output_dir: output_dir.path().to_string_lossy().to_string(),
             settings_override: None,
             overwrite: false,
+            scope: ExportScope::FullMod,
         };
         let mut project = sample_project(ModTarget::Fabric);
         project.elements.push(button_element(
@@ -4218,6 +4406,7 @@ mod tests {
                 output_dir: output_dir.path().to_string_lossy().to_string(),
                 settings_override: None,
                 overwrite: false,
+                scope: ExportScope::FullMod,
             };
             let mut project = sample_project(project_target);
             project.texture_data.insert(
@@ -4278,6 +4467,7 @@ mod tests {
             output_dir: output_dir.path().to_string_lossy().to_string(),
             settings_override: None,
             overwrite: false,
+            scope: ExportScope::FullMod,
         };
         let mut project = sample_project(ModTarget::Fabric);
         project.texture_data.insert(
@@ -4335,6 +4525,7 @@ mod tests {
             output_dir: output_dir.path().to_string_lossy().to_string(),
             settings_override: None,
             overwrite: false,
+            scope: ExportScope::FullMod,
         };
         let mut project = layered_project(ModTarget::Forge);
         project.elements.push(Element {
@@ -4463,6 +4654,7 @@ mod tests {
             output_dir: output_dir.to_string_lossy().to_string(),
             settings_override: None,
             overwrite: false,
+            scope: ExportScope::FullMod,
         };
 
         let error = export_project(&project, &config, "forge").unwrap_err();
@@ -4486,6 +4678,7 @@ mod tests {
             output_dir: output_dir.to_string_lossy().to_string(),
             settings_override: None,
             overwrite: false,
+            scope: ExportScope::FullMod,
         };
 
         let error = export_project(&project, &config, "forge").unwrap_err();
@@ -4513,6 +4706,7 @@ mod tests {
             output_dir: output_dir.to_string_lossy().to_string(),
             settings_override: None,
             overwrite: false,
+            scope: ExportScope::FullMod,
         };
 
         let preview = preview_export(&project, &config, "forge").unwrap();
@@ -4740,6 +4934,7 @@ mod tests {
             output_dir: output_dir.path().to_string_lossy().to_string(),
             settings_override: None,
             overwrite: false,
+            scope: ExportScope::FullMod,
         };
 
         export_project(&project, &config, "forge").unwrap();
@@ -4757,6 +4952,7 @@ mod tests {
             output_dir: output_dir.to_string_lossy().to_string(),
             settings_override: None,
             overwrite: false,
+            scope: ExportScope::FullMod,
         };
 
         let preview = preview_export(&sample_project(ModTarget::Forge), &config, "forge").unwrap();
@@ -4788,6 +4984,80 @@ mod tests {
     }
 
     #[test]
+    fn textures_only_export_plans_texture_assets_without_mod_scaffold() {
+        let output_dir = TempExportDir::new("textures-only");
+        let config = ExportConfig {
+            mod_id: "testmod".to_string(),
+            package: "com.example".to_string(),
+            class_name: "TextureOnlyGui".to_string(),
+            output_dir: output_dir.path().to_string_lossy().to_string(),
+            settings_override: None,
+            overwrite: false,
+            scope: ExportScope::TexturesOnly,
+        };
+
+        let preview = preview_export(&sample_project(ModTarget::Forge), &config, "forge").unwrap();
+
+        assert!(preview.files.iter().any(|path| path
+            .ends_with("src/main/resources/assets/testmod/textures/gui/textureonlygui_gui.png")));
+        assert!(preview
+            .files
+            .iter()
+            .all(|path| !path.ends_with("settings.gradle")));
+        assert!(preview
+            .files
+            .iter()
+            .all(|path| !path.ends_with("build.gradle")));
+        assert!(preview.files.iter().all(|path| !path.ends_with(".java")));
+        assert!(preview
+            .files
+            .iter()
+            .all(|path| !path.ends_with("_layout.json")));
+
+        let files = export_project(&sample_project(ModTarget::Forge), &config, "forge").unwrap();
+        assert_eq!(files, preview.files);
+        assert!(output_dir
+            .path()
+            .join("src/main/resources/assets/testmod/textures/gui/textureonlygui_gui.png")
+            .exists());
+        assert!(!output_dir.path().join("settings.gradle").exists());
+    }
+
+    #[test]
+    fn relative_output_dir_reports_and_writes_absolute_paths() {
+        let relative_dir = PathBuf::from(format!(
+            "target/gui-crafter-relative-export-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let expected_dir = std::env::current_dir().unwrap().join(&relative_dir);
+        let _ = fs::remove_dir_all(&expected_dir);
+        let config = ExportConfig {
+            mod_id: "testmod".to_string(),
+            package: "com.example".to_string(),
+            class_name: "RelativeGui".to_string(),
+            output_dir: relative_dir.to_string_lossy().to_string(),
+            settings_override: None,
+            overwrite: false,
+            scope: ExportScope::FullMod,
+        };
+
+        let preview = preview_export(&sample_project(ModTarget::Forge), &config, "forge").unwrap();
+        assert_eq!(preview.output_dir, expected_dir.to_string_lossy());
+        assert!(preview
+            .files
+            .iter()
+            .all(|file| Path::new(file).is_absolute()));
+
+        let files = export_project(&sample_project(ModTarget::Forge), &config, "forge").unwrap();
+        assert!(files.iter().all(|file| Path::new(file).is_absolute()));
+        assert!(expected_dir
+            .join("src/main/resources/assets/testmod/textures/gui/relativegui_gui.png")
+            .exists());
+
+        let _ = fs::remove_dir_all(expected_dir);
+    }
+
+    #[test]
     fn preview_reports_missing_textures_as_errors_without_writing_files() {
         let output_dir = temp_export_dir("preview-missing");
         let mut project = sample_project(ModTarget::Forge);
@@ -4799,6 +5069,7 @@ mod tests {
             output_dir: output_dir.to_string_lossy().to_string(),
             settings_override: None,
             overwrite: false,
+            scope: ExportScope::FullMod,
         };
 
         let preview = preview_export(&project, &config, "forge").unwrap();
@@ -4825,6 +5096,7 @@ mod tests {
             output_dir: output_dir.to_string_lossy().to_string(),
             settings_override: None,
             overwrite: false,
+            scope: ExportScope::FullMod,
         };
 
         let preview = preview_export(&sample_project(ModTarget::Forge), &config, "forge").unwrap();
@@ -4849,6 +5121,7 @@ mod tests {
             output_dir: output_dir.path().to_string_lossy().into_owned(),
             settings_override: None,
             overwrite: false,
+            scope: ExportScope::FullMod,
         };
         let first = preview_export(&project, &config, "forge").unwrap();
         fs::create_dir_all(Path::new(&first.files[0]).parent().unwrap()).unwrap();
@@ -4886,6 +5159,7 @@ mod tests {
             output_dir: output_dir.path().to_string_lossy().into_owned(),
             settings_override: None,
             overwrite: false,
+            scope: ExportScope::FullMod,
         };
         let plan = plan_export(&project, &config, "forge", None).unwrap();
 
@@ -4931,6 +5205,7 @@ mod tests {
             output_dir: output_dir.path().to_string_lossy().into_owned(),
             settings_override: None,
             overwrite: false,
+            scope: ExportScope::FullMod,
         };
 
         let preview = preview_export(&project, &config, "forge").unwrap();
@@ -4971,6 +5246,7 @@ mod tests {
             output_dir: output_dir.path().to_string_lossy().into_owned(),
             settings_override: None,
             overwrite: false,
+            scope: ExportScope::FullMod,
         };
 
         let preview = preview_export(&project, &config, "forge").unwrap();
@@ -4980,6 +5256,68 @@ mod tests {
                 |warning| !warning.contains("progress_arrow") || !warning.contains("stretched")
             ),
             "progress matching UV source size should not warn: {:?}",
+            preview.warnings
+        );
+    }
+
+    #[test]
+    fn preview_warns_when_visible_content_overflows_project_size() {
+        let output_dir = TempExportDir::new("content-overflow-preview");
+        let mut project = Project::new("Overflow", 100, 80, ModTarget::Forge);
+        let mut panel = button_element("panel", ElementType::Texture, 0, 0, None);
+        panel.x = 0;
+        panel.y = 0;
+        panel.width = Some(102);
+        panel.height = Some(80);
+        panel.asset = Some("textures/widgets/panel.png".into());
+        project.elements.push(panel);
+        project.texture_data.insert(
+            "textures/widgets/panel.png".into(),
+            png_bytes_with_size(102, 80, [180, 180, 180, 255]),
+        );
+        let config = export_config(output_dir.path(), "OverflowGui");
+
+        let preview = preview_export(&project, &config, "forge").unwrap();
+
+        assert!(
+            preview.warnings.iter().any(|warning| {
+                warning.contains("Visible content bounds are 102x80")
+                    && warning.contains("project size is 100x80")
+            }),
+            "overflow should warn: {:?}",
+            preview.warnings
+        );
+        assert!(preview
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("Project can be resized")));
+    }
+
+    #[test]
+    fn preview_warns_when_project_can_shrink_to_visible_content() {
+        let output_dir = TempExportDir::new("content-shrink-preview");
+        let mut project = Project::new("Shrink", 100, 80, ModTarget::Forge);
+        let mut panel = button_element("panel", ElementType::Texture, 0, 0, None);
+        panel.x = 0;
+        panel.y = 0;
+        panel.width = Some(96);
+        panel.height = Some(80);
+        panel.asset = Some("textures/widgets/panel.png".into());
+        project.elements.push(panel);
+        project.texture_data.insert(
+            "textures/widgets/panel.png".into(),
+            png_bytes_with_size(96, 80, [180, 180, 180, 255]),
+        );
+        let config = export_config(output_dir.path(), "ShrinkGui");
+
+        let preview = preview_export(&project, &config, "forge").unwrap();
+
+        assert!(
+            preview.warnings.iter().any(|warning| {
+                warning.contains("Visible content bounds are 96x80")
+                    && warning.contains("project size is 100x80")
+            }),
+            "shrink opportunity should warn: {:?}",
             preview.warnings
         );
     }
@@ -5014,6 +5352,7 @@ mod tests {
             output_dir: output_dir.path().to_string_lossy().into_owned(),
             settings_override: None,
             overwrite: false,
+            scope: ExportScope::FullMod,
         };
 
         let preview = preview_export(&project, &config, "forge").unwrap();

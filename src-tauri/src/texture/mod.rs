@@ -6,6 +6,7 @@ use image::{GenericImageView, Rgba, RgbaImage};
 
 const MAX_COMPOSITE_DIMENSION: u32 = 4096;
 const MAX_COMPOSITE_PIXELS: u64 = 16_777_216;
+const GENERATED_GUI_PANEL: &str = "textures/generated/gui_panel.png";
 
 pub fn composite_atlas_for_layer(project: &Project, layer: Layer) -> Result<Vec<u8>, String> {
     let has_elements = project
@@ -265,9 +266,50 @@ fn overlay_asset(
     offset_y: i32,
 ) -> Result<(), String> {
     let Some(data) = project.texture_data.get(asset_name) else {
+        if element.element_type == ElementType::Texture
+            && element.render_mode != TextureRenderMode::NineSlice
+            && asset_name == GENERATED_GUI_PANEL
+        {
+            let (width, height) = generated_panel_target_size(project, element);
+            let data = generated_gui_panel(width, height)?;
+            return overlay_texture_data(
+                img, project, element, &data, asset_name, offset_x, offset_y,
+            );
+        }
         return Ok(());
     };
+
+    if element.element_type == ElementType::Texture
+        && element.render_mode != TextureRenderMode::NineSlice
+        && asset_name == GENERATED_GUI_PANEL
+        && generated_panel_asset_is_stale(data, project, element)
+    {
+        let (width, height) = generated_panel_target_size(project, element);
+        let data = generated_gui_panel(width, height)?;
+        return overlay_texture_data(img, project, element, &data, asset_name, offset_x, offset_y);
+    }
+
     overlay_texture_data(img, project, element, data, asset_name, offset_x, offset_y)
+}
+
+fn generated_panel_target_size(project: &Project, element: &Element) -> (u32, u32) {
+    (
+        element
+            .width
+            .or(element.size)
+            .unwrap_or(project.gui_size.width),
+        element
+            .height
+            .or(element.size)
+            .unwrap_or(project.gui_size.height),
+    )
+}
+
+fn generated_panel_asset_is_stale(data: &[u8], project: &Project, element: &Element) -> bool {
+    let (target_width, target_height) = generated_panel_target_size(project, element);
+    image::load_from_memory(data)
+        .map(|texture| texture.dimensions() != (target_width, target_height))
+        .unwrap_or(true)
 }
 
 fn overlay_texture_data(
@@ -1287,6 +1329,52 @@ mod tests {
         let decoded = image::load_from_memory(&first).unwrap().to_rgba8();
         assert_eq!(decoded.width(), 176);
         assert_eq!(decoded.height(), 166);
+    }
+
+    #[test]
+    fn generated_gui_panel_export_uses_element_size_not_stale_asset_size() {
+        let mut project = Project::new("Generated Panel", 232, 242, ModTarget::Forge);
+        let asset = "textures/generated/gui_panel.png";
+        project.assets.push(asset.into());
+        project.texture_data.insert(
+            asset.into(),
+            test_png(230, 258, Rgba([0xff, 0x00, 0xff, 0xff])),
+        );
+        project
+            .elements
+            .push(texture_element("background", asset, 232, 242));
+
+        let atlas = composite_atlas_for_layer(&project, Layer::Background).unwrap();
+        let decoded = image::load_from_memory(&atlas).unwrap().to_rgba8();
+        let expected = image::load_from_memory(&generated_gui_panel(232, 242).unwrap())
+            .unwrap()
+            .to_rgba8();
+
+        assert_eq!(decoded.dimensions(), expected.dimensions());
+        assert_eq!(decoded.get_pixel(0, 0), expected.get_pixel(0, 0));
+        assert_eq!(decoded.get_pixel(8, 8), expected.get_pixel(8, 8));
+        assert_ne!(decoded.get_pixel(8, 8).0, [0xff, 0x00, 0xff, 0xff]);
+    }
+
+    #[test]
+    fn generated_gui_panel_nine_slice_uses_source_asset() {
+        let mut project = Project::new("Generated Panel Source", 32, 32, ModTarget::Forge);
+        let asset = "textures/generated/gui_panel.png";
+        project.assets.push(asset.into());
+        project.texture_data.insert(
+            asset.into(),
+            test_png(16, 16, Rgba([0xff, 0x00, 0xff, 0xff])),
+        );
+        let mut background = texture_element("background", asset, 32, 32);
+        background.render_mode = TextureRenderMode::NineSlice;
+        background.nine_slice = Some(test_nine_slice(NineSliceMode::Tile, NineSliceMode::Tile));
+        project.elements.push(background);
+
+        let atlas = composite_atlas_for_layer(&project, Layer::Background).unwrap();
+        let decoded = image::load_from_memory(&atlas).unwrap().to_rgba8();
+
+        assert_eq!(decoded.dimensions(), (32, 32));
+        assert_eq!(decoded.get_pixel(8, 8).0, [0xff, 0x00, 0xff, 0xff]);
     }
 
     #[test]

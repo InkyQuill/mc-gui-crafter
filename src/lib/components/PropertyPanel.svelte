@@ -1,6 +1,8 @@
 <script lang="ts">
   import { project } from "../stores/project.svelte";
   import { editor } from "../stores/editor.svelte";
+  import * as api from "../api";
+  import { readableError, status } from "../stores/status.svelte";
   import UvEditorDialog from "./UvEditorDialog.svelte";
   import type { AttachedRegion, AttachedRegionAnchor, AttachedRegionState, CodegenMode, Element, NineSlice, Size, SlotRole, TextureRenderMode, UvRect } from "../types";
 
@@ -8,11 +10,20 @@
 
   let uvEditorTarget = $state<UvTarget | null>(null);
   let editingNineSlice = $state(false);
+  let lastLoggedSizeMismatch = "";
   let selectedElementId = $derived.by(() => {
     void editor.selectionRevision;
     return editor.selectedElementId;
   });
   let selectedEl = $derived(selectedElementId ? project.effectiveElementById(selectedElementId) : null);
+  let selectedElements = $derived.by(() => {
+    void editor.selectionRevision;
+    return [...editor.selectedIds]
+      .map(id => project.effectiveElementById(id))
+      .filter((element): element is Element => Boolean(element));
+  });
+  let hasMultiSelection = $derived(selectedElements.length > 1);
+  let selectedSlots = $derived(selectedElements.filter(element => element.type === "slot" || element.type === "virtual_slot_cell"));
   let selectedTargetSize = $derived.by((): Size | null => {
     if (!selectedEl) return null;
     if (selectedEl.width === undefined || selectedEl.height === undefined) return null;
@@ -27,12 +38,48 @@
     const id = editor.selectedAttachedRegionId;
     return id ? project.effectiveAttachedRegionById(id) : null;
   });
+  let visibleContentSizeMismatch = $derived.by(() => {
+    const bounds = project.visibleContentBounds;
+    if (!project.isOpen || !bounds) return null;
+    const sizeMismatch = bounds.width !== project.guiSize.width || bounds.height !== project.guiSize.height;
+    const originMismatch = bounds.x !== 0 || bounds.y !== 0;
+    if (!sizeMismatch && !originMismatch) return null;
+    return {
+      bounds,
+      canResizeOnly: bounds.x === 0 && bounds.y === 0,
+    };
+  });
   let fontOptions = $derived.by(() => {
     const options = project.fonts.filter((font, index, fonts) => fonts.findIndex(candidate => candidate.id === font.id) === index);
     if (!options.some(font => font.id === "minecraft:default")) {
       options.unshift({ id: "minecraft:default", source: { type: "minecraft" } });
     }
     return options;
+  });
+
+  $effect(() => {
+    const mismatch = visibleContentSizeMismatch;
+    const key = mismatch
+      ? `${project.activeProjectId}:${mismatch.bounds.x}:${mismatch.bounds.y}:${mismatch.bounds.width}:${mismatch.bounds.height}:${project.guiSize.width}:${project.guiSize.height}`
+      : "";
+    if (!mismatch) {
+      lastLoggedSizeMismatch = "";
+      return;
+    }
+    if (key === lastLoggedSizeMismatch) return;
+    lastLoggedSizeMismatch = key;
+    void api.appendSessionLog({
+      level: "warning",
+      source: "ui",
+      category: "validation",
+      message: "Project size differs from visible content bounds",
+      details: {
+        project_id: project.activeProjectId,
+        project_size: project.guiSize,
+        visible_content_bounds: mismatch.bounds,
+        can_resize_only: mismatch.canResizeOnly,
+      },
+    });
   });
   const slotRoleOptions: SlotRole[] = [
     "machine",
@@ -52,6 +99,15 @@
   function updateProp(key: string, value: unknown) {
     if (!editor.selectedElementId) return;
     project.updateElement(editor.selectedElementId, { [key]: value });
+  }
+
+  function updateTextureProp(key: "asset", value: string | null): void;
+  function updateTextureProp(key: "uv", value: UvRect | null): void;
+  function updateTextureProp(key: "asset" | "uv", value: string | UvRect | null) {
+    const changes: api.ElementChanges = key === "asset"
+      ? { asset: value as string | null }
+      : { uv: value as UvRect | null };
+    updateProp(key, changes[key]);
   }
 
   function updateSelectedElement(changes: Partial<Element>) {
@@ -76,16 +132,56 @@
     return Number.isFinite(parsed) ? parsed : fallback;
   }
 
+  type MixedValue<T> = { mixed: true; value: null } | { mixed: false; value: T | null };
+
+  function structurallyEqual(left: unknown, right: unknown): boolean {
+    if (Object.is(left, right)) return true;
+    if (left === null || right === null) return left === right;
+    if (typeof left !== "object" || typeof right !== "object") return false;
+    return JSON.stringify(left) === JSON.stringify(right);
+  }
+
+  function mixedValue<T>(elements: Element[], read: (element: Element) => T): MixedValue<T> {
+    if (elements.length === 0) return { mixed: false, value: null };
+    const value = read(elements[0]);
+    return elements.every(element => structurallyEqual(read(element), value))
+      ? { mixed: false, value }
+      : { mixed: true, value: null };
+  }
+
+  function mixedSelectValue<T extends string | null | undefined>(field: MixedValue<T>): string {
+    return field.mixed ? "__mixed__" : field.value ?? "";
+  }
+
+  function updateSelectedElements(changes: api.ElementChanges) {
+    updateSelectedElementsWhere(() => true, changes);
+  }
+
+  function updateSelectedElementsWhere(predicate: (element: Element) => boolean, changes: api.ElementChanges) {
+    const patches = selectedElements
+      .filter(predicate)
+      .map(element => ({ id: element.id, changes }));
+    void project.updateElements(patches);
+  }
+
+  let multiLayer = $derived(mixedValue(selectedElements, element => element.layer ?? "background"));
+  let multiVisible = $derived(mixedValue(selectedElements, element => element.visible ?? true));
+  let multiAttachedRegion = $derived(mixedValue(selectedElements, element => element.attached_region ?? ""));
+  let multiSlotAsset = $derived(mixedValue(selectedSlots, element => element.asset ?? ""));
+  let multiSlotRole = $derived(mixedValue(selectedSlots, element => element.slot_role ?? ""));
+  let multiInventoryGroup = $derived(mixedValue(selectedSlots, element => element.inventory_group ?? ""));
+  let multiScrollBinding = $derived(mixedValue(selectedSlots, element => element.scroll_binding ?? ""));
+
   function updateUv(key: "x" | "y" | "width" | "height", value: string) {
     if (!selectedEl) return;
     const next = {
       x: selectedEl.uv?.x ?? 0,
       y: selectedEl.uv?.y ?? 0,
-      width: selectedEl.uv?.width ?? selectedEl.width ?? 16,
-      height: selectedEl.uv?.height ?? selectedEl.height ?? 16,
+      width: selectedEl.uv?.width ?? selectedEl.width ?? selectedEl.size ?? 16,
+      height: selectedEl.uv?.height ?? selectedEl.height ?? selectedEl.size ?? 16,
       [key]: Math.max(key === "width" || key === "height" ? 1 : 0, numberValue(value)),
     };
-    updateProp("uv", next);
+    updateTextureProp("uv", next);
   }
 
   function updateIconUv(key: "x" | "y" | "width" | "height", value: string) {
@@ -138,7 +234,7 @@
     if (uvEditorTarget === "icon_uv") {
       updateSelectedElement({ icon_uv: null });
     } else {
-      updateSelectedElement({ uv: null });
+      updateTextureProp("uv", null);
     }
     uvEditorTarget = null;
   }
@@ -167,6 +263,17 @@
   function useAssetGuides() {
     updateSelectedElement({ nine_slice: null });
   }
+
+  async function resizeProjectToVisibleContent() {
+    const mismatch = visibleContentSizeMismatch;
+    if (!mismatch?.canResizeOnly) return;
+    try {
+      await project.resizeProject(mismatch.bounds.width, mismatch.bounds.height);
+      status.success(`Project resized to ${mismatch.bounds.width}x${mismatch.bounds.height}.`);
+    } catch (error) {
+      status.error(`Resize failed: ${readableError(error)}`);
+    }
+  }
 </script>
 
 <aside class="properties">
@@ -194,12 +301,145 @@
           onchange={(event) => project.updateExportSettings({ generate_runtime_helpers: event.currentTarget.checked })}
         />
       </div>
-    </div>
+      </div>
 
-    <hr class="divider" />
+      {#if visibleContentSizeMismatch}
+        <div class="project-warning">
+          <div class="warning-title">Project size mismatch</div>
+          <p>
+            Visible content is {visibleContentSizeMismatch.bounds.width}x{visibleContentSizeMismatch.bounds.height}
+            at {visibleContentSizeMismatch.bounds.x},{visibleContentSizeMismatch.bounds.y};
+            project size is {project.guiSize.width}x{project.guiSize.height}.
+          </p>
+          <p>
+            Exported textures use visible bounds, while generated screen code keeps the project size.
+          </p>
+          {#if visibleContentSizeMismatch.canResizeOnly}
+            <button class="secondary-btn" onclick={resizeProjectToVisibleContent}>
+              Resize project to {visibleContentSizeMismatch.bounds.width}x{visibleContentSizeMismatch.bounds.height}
+            </button>
+          {:else}
+            <p>
+              Move visible content by {-visibleContentSizeMismatch.bounds.x},{-visibleContentSizeMismatch.bounds.y}, then resize to
+              {visibleContentSizeMismatch.bounds.width}x{visibleContentSizeMismatch.bounds.height}.
+            </p>
+          {/if}
+        </div>
+      {/if}
+
+      <hr class="divider" />
   {/if}
 
-  {#if selectedEl}
+  {#if hasMultiSelection}
+    <div class="props-form">
+      <div class="prop-row">
+        <span class="prop-label">Selection</span>
+        <span class="prop-value">{selectedElements.length} objects</span>
+      </div>
+      <div class="prop-row">
+        <label for="multi-prop-layer">Layer</label>
+        <select
+          id="multi-prop-layer"
+          value={mixedSelectValue(multiLayer)}
+          onchange={(e) => updateSelectedElements({ layer: e.currentTarget.value as api.ElementChanges["layer"] })}
+        >
+          {#if multiLayer.mixed}
+            <option value="__mixed__" disabled>Mixed</option>
+          {/if}
+          <option value="background">Background</option>
+          <option value="overlay">Overlay</option>
+          <option value="animatable">Animatable</option>
+        </select>
+      </div>
+      <div class="prop-row">
+        <label for="multi-prop-attached-region">Region</label>
+        <select
+          id="multi-prop-attached-region"
+          value={mixedSelectValue(multiAttachedRegion)}
+          onchange={(e) => updateSelectedElements({ attached_region: e.currentTarget.value || null })}
+        >
+          {#if multiAttachedRegion.mixed}
+            <option value="__mixed__" disabled>Mixed</option>
+          {/if}
+          <option value="">(none)</option>
+          {#each project.effectiveAttachedRegions as region (region.id)}
+            <option value={region.id}>{region.id}</option>
+          {/each}
+        </select>
+      </div>
+      <div class="prop-row">
+        <label for="multi-prop-visible">Visible</label>
+        <input
+          id="multi-prop-visible"
+          type="checkbox"
+          checked={!multiVisible.mixed && multiVisible.value === true}
+          indeterminate={multiVisible.mixed}
+          onchange={(e) => updateSelectedElements({ visible: e.currentTarget.checked })}
+        />
+      </div>
+
+      {#if selectedSlots.length === selectedElements.length}
+        <div class="prop-section">
+          <div class="section-title">Slot</div>
+          <div class="prop-row">
+            <label for="multi-prop-slot-asset">Background</label>
+            <select
+              id="multi-prop-slot-asset"
+              value={mixedSelectValue(multiSlotAsset)}
+              onchange={(e) => updateSelectedElements({ asset: e.currentTarget.value || null })}
+            >
+              {#if multiSlotAsset.mixed}
+                <option value="__mixed__" disabled>Mixed</option>
+              {/if}
+              <option value="">(none)</option>
+              {#each project.assets as a (a)}
+                <option value={a}>{a.replace("textures/", "").replace(".png", "")}</option>
+              {/each}
+            </select>
+          </div>
+          <div class="prop-row">
+            <label for="multi-prop-slot-role">Role</label>
+            <select
+              id="multi-prop-slot-role"
+              value={mixedSelectValue(multiSlotRole)}
+              onchange={(e) => updateSelectedElements({ slot_role: (e.currentTarget.value || null) as SlotRole | null })}
+            >
+              {#if multiSlotRole.mixed}
+                <option value="__mixed__" disabled>Mixed</option>
+              {/if}
+              <option value="">(none)</option>
+              {#each slotRoleOptions as role (role)}
+                <option value={role}>{role}</option>
+              {/each}
+            </select>
+          </div>
+          <div class="prop-row">
+            <label for="multi-prop-inventory-group">Group</label>
+            <input
+              id="multi-prop-inventory-group"
+              type="text"
+              value={multiInventoryGroup.mixed ? "" : multiInventoryGroup.value ?? ""}
+              placeholder={multiInventoryGroup.mixed ? "Mixed" : ""}
+              oninput={(e) => updateSelectedElements({ inventory_group: optionalText(e.currentTarget.value) })}
+            />
+          </div>
+          <div class="prop-row">
+            <label for="multi-prop-scroll-binding">Scroll</label>
+            <input
+              id="multi-prop-scroll-binding"
+              type="text"
+              value={multiScrollBinding.mixed ? "" : multiScrollBinding.value ?? ""}
+              placeholder={multiScrollBinding.mixed ? "Mixed" : ""}
+              oninput={(e) => updateSelectedElements({ scroll_binding: optionalText(e.currentTarget.value) })}
+            />
+          </div>
+          <button class="secondary-btn" onclick={() => updateSelectedElements({ uv: null })}>
+            Clear UV
+          </button>
+        </div>
+      {/if}
+    </div>
+  {:else if selectedEl}
     <div class="props-form">
       <div class="prop-row">
         <span class="prop-label">ID</span>
@@ -424,13 +664,13 @@
         </div>
       {/if}
 
-      {#if selectedEl.type === "texture" || selectedEl.type === "progress"}
+      {#if selectedEl.type === "texture" || selectedEl.type === "progress" || selectedEl.type === "slot" || selectedEl.type === "virtual_slot_cell"}
         <div class="prop-row">
-          <label for="prop-asset">{selectedEl.type === "progress" ? "Source" : "Texture"}</label>
+          <label for="prop-asset">{selectedEl.type === "progress" ? "Source" : selectedEl.type === "slot" || selectedEl.type === "virtual_slot_cell" ? "Background" : "Texture"}</label>
           <select
             id="prop-asset"
             value={selectedEl.asset ?? ""}
-            onchange={(e) => updateProp("asset", e.currentTarget.value || undefined)}
+            onchange={(e) => updateTextureProp("asset", e.currentTarget.value || null)}
           >
             <option value="">(none)</option>
             {#each project.assets as a (a)}
@@ -462,7 +702,7 @@
               id="prop-uv-width"
               type="number"
               min="1"
-              value={selectedEl.uv?.width ?? selectedEl.width ?? 16}
+              value={selectedEl.uv?.width ?? selectedEl.width ?? selectedEl.size ?? 16}
               oninput={(e) => updateUv("width", e.currentTarget.value)}
             />
             <label for="prop-uv-height">H</label>
@@ -470,11 +710,11 @@
               id="prop-uv-height"
               type="number"
               min="1"
-              value={selectedEl.uv?.height ?? selectedEl.height ?? 16}
+              value={selectedEl.uv?.height ?? selectedEl.height ?? selectedEl.size ?? 16}
               oninput={(e) => updateUv("height", e.currentTarget.value)}
             />
           </div>
-          <button class="secondary-btn" onclick={() => updateProp("uv", null)}>
+          <button class="secondary-btn" onclick={() => updateTextureProp("uv", null)}>
             Clear UV
           </button>
           <button class="secondary-btn" onclick={() => openUvEditor("uv")} disabled={project.assets.length === 0}>
@@ -829,6 +1069,30 @@
 
   .project-form {
     margin-bottom: 8px;
+  }
+
+  .project-warning {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin: 8px 0;
+    padding: 8px;
+    border: 1px solid color-mix(in srgb, var(--accent) 60%, var(--border));
+    border-radius: 4px;
+    background: color-mix(in srgb, var(--accent) 10%, transparent);
+  }
+
+  .project-warning p {
+    margin: 0;
+    color: var(--muted-text);
+    font-size: 11px;
+    line-height: 1.35;
+  }
+
+  .warning-title {
+    color: var(--text);
+    font-size: 11px;
+    font-weight: 600;
   }
 
   .prop-row {

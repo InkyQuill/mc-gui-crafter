@@ -218,6 +218,7 @@ fn is_default_layer(layer: &Layer) -> bool {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct UvRect {
     pub x: u32,
     pub y: u32,
@@ -239,6 +240,7 @@ fn default_nine_slice_mode() -> NineSliceMode {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct NineSlice {
     pub left: u32,
     pub right: u32,
@@ -1408,6 +1410,28 @@ impl Project {
         let mut max_x = i64::from(self.gui_size.width);
         let mut max_y = i64::from(self.gui_size.height);
 
+        if let Some(bounds) = self.visible_content_bounds() {
+            min_x = min_x.min(i64::from(bounds.x));
+            min_y = min_y.min(i64::from(bounds.y));
+            max_x = max_x.max(i64::from(bounds.x) + i64::from(bounds.width));
+            max_y = max_y.max(i64::from(bounds.y) + i64::from(bounds.height));
+        }
+
+        VisualBounds {
+            x: min_x.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32,
+            y: min_y.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32,
+            width: u32::try_from((max_x - min_x).max(1)).unwrap_or(u32::MAX),
+            height: u32::try_from((max_y - min_y).max(1)).unwrap_or(u32::MAX),
+        }
+    }
+
+    pub fn visible_content_bounds(&self) -> Option<VisualBounds> {
+        let mut min_x = i64::MAX;
+        let mut min_y = i64::MAX;
+        let mut max_x = i64::MIN;
+        let mut max_y = i64::MIN;
+        let mut has_content = false;
+
         for element in self.elements.iter().filter(|element| element.visible) {
             let x = i64::from(element.x);
             let y = i64::from(element.y);
@@ -1418,6 +1442,7 @@ impl Project {
             min_y = min_y.min(y);
             max_x = max_x.max(x + width);
             max_y = max_y.max(y + height);
+            has_content = true;
         }
 
         for region in self.attached_regions.iter().filter(|region| region.visible) {
@@ -1429,14 +1454,15 @@ impl Project {
             min_y = min_y.min(y);
             max_x = max_x.max(x + width);
             max_y = max_y.max(y + height);
+            has_content = true;
         }
 
-        VisualBounds {
+        has_content.then(|| VisualBounds {
             x: min_x.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32,
             y: min_y.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32,
             width: u32::try_from((max_x - min_x).max(1)).unwrap_or(u32::MAX),
             height: u32::try_from((max_y - min_y).max(1)).unwrap_or(u32::MAX),
-        }
+        })
     }
 
     fn element_visual_size(&self, element: &Element) -> Size {
@@ -2462,6 +2488,29 @@ mod tests {
                 height: 200
             }
         );
+    }
+
+    #[test]
+    fn visible_content_bounds_exclude_declared_project_canvas() {
+        let mut project = Project::new("Content Bounds", 100, 200, ModTarget::Forge);
+        let mut panel = base_element_for_test("panel", ElementType::Texture, 0, 0);
+        panel.width = Some(80);
+        panel.height = Some(120);
+        project.elements.push(panel);
+
+        let bounds = project.visible_content_bounds().unwrap();
+
+        assert_eq!(
+            bounds,
+            VisualBounds {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: 120
+            }
+        );
+        assert_eq!(project.visual_bounds().width, 100);
+        assert_eq!(project.visual_bounds().height, 200);
     }
 
     #[test]

@@ -23,6 +23,8 @@ Prefer these closed-alpha MCP tools:
 - `slot_grid_add`, `element_add_many`, and `element_update_many` for bulk edits.
 - `group_upsert` for creating or replacing group membership.
 - `project_semantic_groups_update` with `member_ids` for explicit semantics.
+- `session_report` to record agent-discovered bugs, confusing behavior,
+  validation gaps, or production feedback into the app's session log.
 
 ## Core Workflow
 
@@ -103,6 +105,15 @@ Prefer these closed-alpha MCP tools:
      aligning `slot_count`, slot roles, and `inventory_group`; fix scrollbar
      warnings by matching `scroll_binding` and scrollbar `target_group`.
    - After export, inspect generated layout JSON and texture files when possible.
+
+8. Report product feedback through the session log:
+   - When you find confusing behavior, missing validation, bad generated output,
+     a likely bug, or user feedback that should reach maintainers, call
+     `session_report` with a concise `summary`, `severity`, and useful
+     structured `details`.
+   - After calling `session_report`, ask the user to attach the exact file
+     returned as `log_path` when filing an issue. The log includes the report
+     plus recent warnings, errors, and actions needed for reproduction.
 
 ## Visual Authoring
 
@@ -199,6 +210,9 @@ Complex modular GUI:
 
 - If an MCP tool is not visible in the client but docs/source say it exists,
   reconnect or restart the MCP client session. Some clients cache tool metadata.
+- If you diagnose a product issue or limitation while helping a user, call
+  `session_report` before ending the session, then ask the user to attach the
+  exact file returned as `log_path` to their issue.
 - If save fails with no project path, use `project_save_as`.
 - If export preview warns about missing textures or existing files, resolve the
   warning before reporting success unless the user explicitly accepts it.

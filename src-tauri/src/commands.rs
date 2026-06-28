@@ -7,6 +7,7 @@ use crate::project::{
     Project, ProjectExportSettings, ProjectSessionSummary, ProjectState, SemanticGroup,
     StateOverrideTarget,
 };
+use crate::session_log::{SessionLogEntry, SessionLogLevel};
 use crate::templates::TemplateInfo;
 use crate::AppState;
 use serde::Deserialize;
@@ -19,6 +20,22 @@ pub struct ElementMove {
     id: String,
     x: i32,
     y: i32,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct ElementPatch {
+    pub id: String,
+    pub changes: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SessionLogRequest {
+    pub level: SessionLogLevel,
+    pub source: String,
+    pub category: String,
+    pub message: String,
+    #[serde(default)]
+    pub details: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -136,6 +153,32 @@ pub fn ui_layout_reset(window: tauri::Window) -> Result<AppConfig, String> {
 }
 
 #[tauri::command(rename_all = "snake_case")]
+pub fn session_log_append(state: State<AppState>, entry: SessionLogRequest) -> Result<(), String> {
+    state.session_log.lock().unwrap().append(SessionLogEntry {
+        level: entry.level,
+        source: entry.source,
+        category: entry.category,
+        message: entry.message,
+        details: entry.details,
+    })
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub fn session_log_paths(state: State<AppState>) -> Result<serde_json::Value, String> {
+    let log = state.session_log.lock().unwrap();
+    let path = log.path().to_string_lossy().to_string();
+    let dir = log
+        .path()
+        .parent()
+        .map(|path| path.to_string_lossy().to_string())
+        .unwrap_or_default();
+    Ok(serde_json::json!({
+        "current_log": path,
+        "log_dir": dir,
+    }))
+}
+
+#[tauri::command(rename_all = "snake_case")]
 pub fn project_open(state: State<AppState>, path: String) -> Result<serde_json::Value, String> {
     let project = format::load_from_mcgui(&path)?;
     let mut sessions = state.sessions.lock().unwrap();
@@ -218,6 +261,33 @@ pub fn project_summary(
     }))
 }
 
+#[tauri::command(rename_all = "snake_case")]
+pub fn project_resize(
+    state: State<AppState>,
+    width: u32,
+    height: u32,
+    project_id: Option<String>,
+) -> Result<ProjectSessionSummary, String> {
+    if width == 0 || height == 0 {
+        return Err("Project dimensions must be greater than zero".to_string());
+    }
+
+    let mut sessions = state.sessions.lock().unwrap();
+    let session = sessions.resolve(project_id.as_deref())?;
+    let old_size = session.project.gui_size.clone();
+    let new_size = crate::project::Size { width, height };
+    if old_size == new_size {
+        return session_summary(&sessions, &session.id);
+    }
+
+    sessions.record_history(project_id.as_deref())?;
+    sessions
+        .resolve_mut(project_id.as_deref())?
+        .project
+        .gui_size = new_size;
+    sessions.mark_changed(project_id.as_deref())
+}
+
 #[tauri::command(rename_all = "camelCase")]
 pub fn project_export_settings_update(
     state: State<AppState>,
@@ -284,6 +354,16 @@ pub fn element_update(
 ) -> Result<Element, String> {
     let mut sessions = state.sessions.lock().unwrap();
     update_element_in_session(&mut sessions, project_id.as_deref(), &id, changes)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub fn element_update_many(
+    state: State<AppState>,
+    patches: Vec<ElementPatch>,
+    project_id: Option<String>,
+) -> Result<Vec<Element>, String> {
+    let mut sessions = state.sessions.lock().unwrap();
+    element_update_many_in_session(&mut sessions, project_id.as_deref(), patches)
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -697,6 +777,7 @@ pub fn project_export_preview(
     generate_runtime_helpers: Option<bool>,
     generate_semantic_registry: Option<bool>,
     overwrite: Option<bool>,
+    export_scope: Option<String>,
 ) -> Result<crate::export::ExportPreview, String> {
     let sessions = state.sessions.lock().unwrap();
     let project = &sessions.resolve(project_id.as_deref())?.project;
@@ -714,6 +795,7 @@ pub fn project_export_preview(
         output_dir,
         settings_override,
         overwrite: overwrite.unwrap_or(false),
+        scope: crate::export::ExportScope::parse(export_scope.as_deref())?,
     };
 
     crate::export::preview_export(project, &config, &target)
@@ -732,6 +814,7 @@ pub fn project_export(
     generate_runtime_helpers: Option<bool>,
     generate_semantic_registry: Option<bool>,
     overwrite: Option<bool>,
+    export_scope: Option<String>,
 ) -> Result<Vec<String>, String> {
     let sessions = state.sessions.lock().unwrap();
     let project = &sessions.resolve(project_id.as_deref())?.project;
@@ -749,6 +832,7 @@ pub fn project_export(
         output_dir,
         settings_override,
         overwrite: overwrite.unwrap_or(false),
+        scope: crate::export::ExportScope::parse(export_scope.as_deref())?,
     };
 
     crate::export::export_project(project, &config, &target)
@@ -1268,6 +1352,7 @@ fn update_element_in_session(
     if &updated == current {
         return Ok(current.clone());
     }
+    let refresh_group_positions = current.x != updated.x || current.y != updated.y;
 
     sessions.record_history(project_id)?;
     let session = sessions.resolve_mut(project_id)?;
@@ -1276,7 +1361,72 @@ fn update_element_in_session(
         .find_element_mut(id)
         .ok_or("Element not found")?;
     *element = updated.clone();
+    if refresh_group_positions {
+        refresh_group_positions_for_elements(&mut session.project, &[id.to_string()]);
+    }
     sessions.mark_changed(project_id)?;
+    Ok(updated)
+}
+
+fn element_update_many_in_session(
+    sessions: &mut crate::project::ProjectSessionManager,
+    project_id: Option<&str>,
+    patches: Vec<ElementPatch>,
+) -> Result<Vec<Element>, String> {
+    let updated = {
+        let session = sessions.resolve(project_id)?;
+        if patches.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut seen = std::collections::HashSet::new();
+        let mut updated = Vec::with_capacity(patches.len());
+
+        for patch in &patches {
+            if !seen.insert(patch.id.clone()) {
+                return Err(format!("Duplicate element update: {}", patch.id));
+            }
+            let current = session
+                .project
+                .find_element(&patch.id)
+                .ok_or_else(|| format!("Element not found: {}", patch.id))?;
+            updated.push(apply_element_changes(current, patch.changes.clone())?);
+        }
+
+        updated
+    };
+
+    let (changed_count, coordinate_changed_ids) = {
+        let session = sessions.resolve(project_id)?;
+        let mut changed_count = 0;
+        let mut coordinate_changed_ids = Vec::new();
+        for element in &updated {
+            if let Some(current) = session.project.find_element(&element.id) {
+                if current != element {
+                    changed_count += 1;
+                }
+                if current.x != element.x || current.y != element.y {
+                    coordinate_changed_ids.push(element.id.clone());
+                }
+            }
+        }
+        (changed_count, coordinate_changed_ids)
+    };
+
+    if changed_count == 0 {
+        return Ok(updated);
+    }
+
+    sessions.record_history(project_id)?;
+    let session = sessions.resolve_mut(project_id)?;
+    for element in &updated {
+        *session
+            .project
+            .find_element_mut(&element.id)
+            .ok_or_else(|| format!("Element not found: {}", element.id))? = element.clone();
+    }
+    refresh_group_positions_for_elements(&mut session.project, &coordinate_changed_ids);
+    sessions.mark_changed(project_id)?;
+
     Ok(updated)
 }
 
@@ -1304,10 +1454,55 @@ fn apply_element_changes(element: &Element, changes: serde_json::Value) -> Resul
         if key == "id" || key == "type" {
             continue;
         }
+        if !is_mutable_element_field(key) {
+            return Err(format!(
+                "Invalid element update: {key} is not a valid field"
+            ));
+        }
         target.insert(key.clone(), new_value.clone());
     }
 
     serde_json::from_value(value).map_err(|error| format!("Invalid element update: {error}"))
+}
+
+fn is_mutable_element_field(field: &str) -> bool {
+    matches!(
+        field,
+        "x" | "y"
+            | "width"
+            | "height"
+            | "size"
+            | "asset"
+            | "icon"
+            | "icon_uv"
+            | "tooltip"
+            | "direction"
+            | "content"
+            | "font"
+            | "color"
+            | "shadow"
+            | "animation"
+            | "visible"
+            | "uv"
+            | "render_mode"
+            | "nine_slice"
+            | "layer"
+            | "slot_role"
+            | "slot_index"
+            | "inventory_group"
+            | "scroll_binding"
+            | "scroll_min"
+            | "scroll_max"
+            | "visible_rows"
+            | "total_rows"
+            | "columns"
+            | "target_group"
+            | "binding"
+            | "dock"
+            | "open_width"
+            | "open_height"
+            | "attached_region"
+    )
 }
 
 fn create_attached_region_in_session(
@@ -3623,6 +3818,380 @@ mod tests {
         let summary = session_summary(&sessions, &project_id).unwrap();
         assert!(!summary.can_undo);
         assert!(summary.can_redo);
+    }
+
+    #[test]
+    fn element_update_rejects_unknown_key_without_changes() {
+        let mut sessions = ProjectSessionManager::default();
+        let project_id = sessions.create_session(Project::new(
+            "Update Unknown Key",
+            176,
+            166,
+            ModTarget::Forge,
+        ));
+        sessions
+            .resolve_mut(Some(&project_id))
+            .unwrap()
+            .project
+            .add_element(sample_element("slot_1", 8, 18));
+
+        let error = update_element_in_session(
+            &mut sessions,
+            Some(&project_id),
+            "slot_1",
+            serde_json::json!({ "unknown_key": true }),
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            error,
+            "Invalid element update: unknown_key is not a valid field"
+        );
+        let unchanged = sessions
+            .resolve(Some(&project_id))
+            .unwrap()
+            .project
+            .find_element("slot_1")
+            .unwrap();
+        assert_eq!(unchanged.x, 8);
+        assert!(unchanged.visible);
+        let summary = session_summary(&sessions, &project_id).unwrap();
+        assert_eq!(summary.revision, 0);
+        assert!(!summary.can_undo);
+    }
+
+    #[test]
+    fn element_update_rejects_unknown_uv_key_without_changes() {
+        let mut sessions = ProjectSessionManager::default();
+        let project_id = sessions.create_session(Project::new(
+            "Update Unknown UV Key",
+            176,
+            166,
+            ModTarget::Forge,
+        ));
+        sessions
+            .resolve_mut(Some(&project_id))
+            .unwrap()
+            .project
+            .add_element(sample_element("slot_1", 8, 18));
+
+        let error = update_element_in_session(
+            &mut sessions,
+            Some(&project_id),
+            "slot_1",
+            serde_json::json!({
+                "uv": { "x": 1, "y": 2, "width": 16, "height": 16, "extra": true }
+            }),
+        )
+        .unwrap_err();
+
+        assert!(error.contains("unknown field `extra`"), "{error}");
+        let unchanged = sessions
+            .resolve(Some(&project_id))
+            .unwrap()
+            .project
+            .find_element("slot_1")
+            .unwrap();
+        assert!(unchanged.uv.is_none());
+        let summary = session_summary(&sessions, &project_id).unwrap();
+        assert_eq!(summary.revision, 0);
+        assert!(!summary.can_undo);
+    }
+
+    #[test]
+    fn element_update_many_changes_multiple_elements_in_one_revision() {
+        let mut sessions = ProjectSessionManager::default();
+        let project_id =
+            sessions.create_session(Project::new("Batch Update", 176, 166, ModTarget::Forge));
+        let session = sessions.resolve_mut(Some(&project_id)).unwrap();
+        session.project.add_element(sample_element("slot_1", 8, 18));
+        session
+            .project
+            .add_element(sample_element("slot_2", 26, 18));
+
+        let result = element_update_many_in_session(
+            &mut sessions,
+            Some(&project_id),
+            vec![
+                ElementPatch {
+                    id: "slot_1".to_string(),
+                    changes: serde_json::json!({ "asset": "textures/slot.png", "visible": false }),
+                },
+                ElementPatch {
+                    id: "slot_2".to_string(),
+                    changes: serde_json::json!({ "asset": "textures/slot.png", "visible": false }),
+                },
+            ],
+        )
+        .unwrap();
+
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].asset.as_deref(), Some("textures/slot.png"));
+        assert!(!result[0].visible);
+        assert_eq!(result[1].asset.as_deref(), Some("textures/slot.png"));
+        assert!(!result[1].visible);
+
+        let summary = session_summary(&sessions, &project_id).unwrap();
+        assert_eq!(summary.revision, 1);
+        assert!(summary.can_undo);
+    }
+
+    #[test]
+    fn element_update_many_rejects_unknown_key_without_changes() {
+        let mut sessions = ProjectSessionManager::default();
+        let project_id = sessions.create_session(Project::new(
+            "Batch Update Unknown Key",
+            176,
+            166,
+            ModTarget::Forge,
+        ));
+        let session = sessions.resolve_mut(Some(&project_id)).unwrap();
+        session.project.add_element(sample_element("slot_1", 8, 18));
+        session
+            .project
+            .add_element(sample_element("slot_2", 26, 18));
+
+        let error = element_update_many_in_session(
+            &mut sessions,
+            Some(&project_id),
+            vec![
+                ElementPatch {
+                    id: "slot_1".to_string(),
+                    changes: serde_json::json!({ "visible": false }),
+                },
+                ElementPatch {
+                    id: "slot_2".to_string(),
+                    changes: serde_json::json!({ "unknown_key": true }),
+                },
+            ],
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            error,
+            "Invalid element update: unknown_key is not a valid field"
+        );
+        let project = &sessions.resolve(Some(&project_id)).unwrap().project;
+        assert!(project.find_element("slot_1").unwrap().visible);
+        assert!(project.find_element("slot_2").unwrap().visible);
+        let summary = session_summary(&sessions, &project_id).unwrap();
+        assert_eq!(summary.revision, 0);
+        assert!(!summary.can_undo);
+    }
+
+    #[test]
+    fn element_update_many_rejects_unknown_nine_slice_key_without_changes() {
+        let mut sessions = ProjectSessionManager::default();
+        let project_id = sessions.create_session(Project::new(
+            "Batch Update Unknown Nine Slice Key",
+            176,
+            166,
+            ModTarget::Forge,
+        ));
+        let session = sessions.resolve_mut(Some(&project_id)).unwrap();
+        session.project.add_element(sample_element("slot_1", 8, 18));
+        session
+            .project
+            .add_element(sample_element("slot_2", 26, 18));
+
+        let error = element_update_many_in_session(
+            &mut sessions,
+            Some(&project_id),
+            vec![
+                ElementPatch {
+                    id: "slot_1".to_string(),
+                    changes: serde_json::json!({ "visible": false }),
+                },
+                ElementPatch {
+                    id: "slot_2".to_string(),
+                    changes: serde_json::json!({
+                        "nine_slice": {
+                            "left": 2,
+                            "right": 2,
+                            "top": 2,
+                            "bottom": 2,
+                            "extra": true
+                        }
+                    }),
+                },
+            ],
+        )
+        .unwrap_err();
+
+        assert!(error.contains("unknown field `extra`"), "{error}");
+        let project = &sessions.resolve(Some(&project_id)).unwrap().project;
+        assert!(project.find_element("slot_1").unwrap().visible);
+        assert!(project.find_element("slot_2").unwrap().nine_slice.is_none());
+        let summary = session_summary(&sessions, &project_id).unwrap();
+        assert_eq!(summary.revision, 0);
+        assert!(!summary.can_undo);
+    }
+
+    #[test]
+    fn element_update_many_refreshes_group_positions_after_coordinate_changes() {
+        let mut sessions = ProjectSessionManager::default();
+        let project_id = sessions.create_session(Project::new(
+            "Batch Update Group",
+            176,
+            166,
+            ModTarget::Forge,
+        ));
+        {
+            let project = &mut sessions.resolve_mut(Some(&project_id)).unwrap().project;
+            project.add_element(sample_element("slot_1", 8, 18));
+            project.add_element(sample_element("slot_2", 26, 18));
+            project.groups.push(Group {
+                id: "group_player_inventory".to_string(),
+                x: 8,
+                y: 18,
+                elements: vec!["slot_1".to_string(), "slot_2".to_string()],
+                visible: None,
+                state_owned: Vec::new(),
+            });
+        }
+
+        let result = element_update_many_in_session(
+            &mut sessions,
+            Some(&project_id),
+            vec![ElementPatch {
+                id: "slot_1".to_string(),
+                changes: serde_json::json!({ "x": 12, "y": 24 }),
+            }],
+        )
+        .unwrap();
+
+        assert_eq!((result[0].x, result[0].y), (12, 24));
+        let project = &sessions.resolve(Some(&project_id)).unwrap().project;
+        assert_eq!((project.groups[0].x, project.groups[0].y), (12, 18));
+    }
+
+    #[test]
+    fn element_update_many_rejects_duplicate_ids_without_changes() {
+        let mut sessions = ProjectSessionManager::default();
+        let project_id = sessions.create_session(Project::new(
+            "Batch Update Duplicate",
+            176,
+            166,
+            ModTarget::Forge,
+        ));
+        sessions
+            .resolve_mut(Some(&project_id))
+            .unwrap()
+            .project
+            .add_element(sample_element("slot_1", 8, 18));
+
+        let error = element_update_many_in_session(
+            &mut sessions,
+            Some(&project_id),
+            vec![
+                ElementPatch {
+                    id: "slot_1".to_string(),
+                    changes: serde_json::json!({ "visible": false }),
+                },
+                ElementPatch {
+                    id: "slot_1".to_string(),
+                    changes: serde_json::json!({ "x": 10 }),
+                },
+            ],
+        )
+        .unwrap_err();
+
+        assert_eq!(error, "Duplicate element update: slot_1");
+        let unchanged = sessions
+            .resolve(Some(&project_id))
+            .unwrap()
+            .project
+            .find_element("slot_1")
+            .unwrap();
+        assert_eq!(unchanged.x, 8);
+        assert!(unchanged.visible);
+        let summary = session_summary(&sessions, &project_id).unwrap();
+        assert_eq!(summary.revision, 0);
+        assert!(!summary.can_undo);
+    }
+
+    #[test]
+    fn element_update_many_noop_preserves_redo() {
+        let mut sessions = ProjectSessionManager::default();
+        let project_id = sessions.create_session(Project::new(
+            "Batch Update Redo",
+            176,
+            166,
+            ModTarget::Forge,
+        ));
+        sessions
+            .resolve_mut(Some(&project_id))
+            .unwrap()
+            .project
+            .add_element(sample_element("slot_1", 8, 18));
+
+        element_update_many_in_session(
+            &mut sessions,
+            Some(&project_id),
+            vec![ElementPatch {
+                id: "slot_1".to_string(),
+                changes: serde_json::json!({ "x": 10 }),
+            }],
+        )
+        .unwrap();
+
+        sessions.undo(Some(&project_id)).unwrap();
+        let unchanged = element_update_many_in_session(
+            &mut sessions,
+            Some(&project_id),
+            vec![ElementPatch {
+                id: "slot_1".to_string(),
+                changes: serde_json::json!({ "x": 8 }),
+            }],
+        )
+        .unwrap();
+
+        assert_eq!(unchanged.len(), 1);
+        assert_eq!(unchanged[0].x, 8);
+        let summary = session_summary(&sessions, &project_id).unwrap();
+        assert!(!summary.can_undo);
+        assert!(summary.can_redo);
+    }
+
+    #[test]
+    fn element_update_many_failure_is_atomic() {
+        let mut sessions = ProjectSessionManager::default();
+        let project_id = sessions.create_session(Project::new(
+            "Batch Update Failure",
+            176,
+            166,
+            ModTarget::Forge,
+        ));
+        let session = sessions.resolve_mut(Some(&project_id)).unwrap();
+        session.project.add_element(sample_element("slot_1", 8, 18));
+
+        let error = element_update_many_in_session(
+            &mut sessions,
+            Some(&project_id),
+            vec![
+                ElementPatch {
+                    id: "slot_1".to_string(),
+                    changes: serde_json::json!({ "visible": false }),
+                },
+                ElementPatch {
+                    id: "missing".to_string(),
+                    changes: serde_json::json!({ "visible": false }),
+                },
+            ],
+        )
+        .unwrap_err();
+
+        assert_eq!(error, "Element not found: missing");
+        let unchanged = sessions
+            .resolve(Some(&project_id))
+            .unwrap()
+            .project
+            .find_element("slot_1")
+            .unwrap();
+        assert!(unchanged.visible);
+        let summary = session_summary(&sessions, &project_id).unwrap();
+        assert_eq!(summary.revision, 0);
+        assert!(!summary.can_undo);
     }
 
     #[test]
