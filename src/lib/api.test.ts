@@ -125,6 +125,7 @@ describe("mock export preview", () => {
     await elementAdd({
       ...slot("slot_with_asset", 8),
       asset: slotAsset.name,
+      visible: undefined,
     }, project.project_id);
     await elementAdd({
       id: "background_with_asset",

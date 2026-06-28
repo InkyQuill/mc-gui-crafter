@@ -1108,7 +1108,7 @@ function mockExportPreview(args?: Record<string, unknown>): ExportPreview {
       : "src/main/resources/META-INF/mods.toml";
   const referencedAssets = new Set<string>();
   for (const element of session.project.elements) {
-    if (!element.visible) continue;
+    if (element.visible === false) continue;
     if (element.asset) referencedAssets.add(element.asset);
     if (element.icon) referencedAssets.add(element.icon);
   }
