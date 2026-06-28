@@ -15,6 +15,7 @@ import type {
   GlyphInfo,
   Group,
   Layer,
+  MainGuiCenter,
   MinecraftSource,
   ModTarget,
   NineSlice,
@@ -354,13 +355,22 @@ function mockProjectResult(session: MockSession): ProjectSummary {
   };
 }
 
+function defaultMainGuiCenter(size: { width: number; height: number }): MainGuiCenter {
+  return {
+    x: Math.floor(size.width / 2),
+    y: Math.floor(size.height / 2),
+  };
+}
+
 function createMockSession(project: ProjectData): ProjectSummary {
+  const normalizedProject = clone(project);
+  normalizedProject.main_gui_center ??= defaultMainGuiCenter(normalizedProject.gui_size);
   const id = `mock_project_${mockNextProjectId++}`;
   const session: MockSession = {
     id,
-    project: clone(project),
+    project: normalizedProject,
     revision: 0,
-    active_state_id: (project.states ?? []).find(state => state.initial)?.id ?? project.states?.[0]?.id ?? null,
+    active_state_id: (normalizedProject.states ?? []).find(state => state.initial)?.id ?? normalizedProject.states?.[0]?.id ?? null,
     edit_scope: "base",
     can_undo: false,
     can_redo: false,
@@ -369,7 +379,7 @@ function createMockSession(project: ProjectData): ProjectSummary {
   };
   mockSessions.push(session);
   mockAssetDataUrls.set(id, new Map());
-  mockAssetMetadata.set(id, new Map(Object.entries(project.asset_metadata ?? {})));
+  mockAssetMetadata.set(id, new Map(Object.entries(normalizedProject.asset_metadata ?? {})));
   mockActiveProjectId = id;
   return mockProjectResult(session);
 }
@@ -1269,6 +1279,10 @@ async function mockInvoke(cmd: string, args?: Record<string, unknown>): Promise<
       return createMockSession({
         name: (args?.name as string) || "Untitled",
         gui_size: { width: (args?.width as number) || 176, height: (args?.height as number) || 166 },
+        main_gui_center: defaultMainGuiCenter({
+          width: (args?.width as number) || 176,
+          height: (args?.height as number) || 166,
+        }),
         mod_target: (args?.mod_target as ModTarget) || "forge",
         elements: [{
           id: "background",
@@ -1305,6 +1319,7 @@ async function mockInvoke(cmd: string, args?: Record<string, unknown>): Promise<
       return createMockSession({
         name: "Opened Project",
         gui_size: { width: 176, height: 166 },
+        main_gui_center: { x: 88, y: 83 },
         mod_target: "forge",
         elements: [],
         groups: [],
@@ -1361,6 +1376,22 @@ async function mockInvoke(cmd: string, args?: Record<string, unknown>): Promise<
       if (session.project.gui_size.width !== width || session.project.gui_size.height !== height) {
         const previous = clone(session.project);
         session.project.gui_size = { width, height };
+        markMockChanged(session, previous);
+      }
+      return mockSummary(session);
+    }
+    case "project_main_gui_center_update": {
+      const session = mockSession(args?.project_id);
+      const center = args?.center as MainGuiCenter | undefined;
+      const x = Number(center?.x);
+      const y = Number(center?.y);
+      if (!Number.isSafeInteger(x) || !Number.isSafeInteger(y)) {
+        throw "Main GUI center axes must be integer coordinates";
+      }
+      const previousCenter = session.project.main_gui_center ?? defaultMainGuiCenter(session.project.gui_size);
+      if (previousCenter.x !== x || previousCenter.y !== y) {
+        const previous = clone(session.project);
+        session.project.main_gui_center = { x, y };
         markMockChanged(session, previous);
       }
       return mockSummary(session);
@@ -2052,6 +2083,11 @@ export async function projectSummary(projectId?: string): Promise<ProjectSummary
 export async function projectResize(width: number, height: number, projectId?: string): Promise<ProjectSessionSummary> {
   const invoke = await getInvoke();
   return invoke("project_resize", { width, height, project_id: projectId }) as Promise<ProjectSessionSummary>;
+}
+
+export async function projectMainGuiCenterUpdate(center: MainGuiCenter, projectId?: string): Promise<ProjectSessionSummary> {
+  const invoke = await getInvoke();
+  return invoke("project_main_gui_center_update", { center, project_id: projectId }) as Promise<ProjectSessionSummary>;
 }
 
 export async function projectUndo(projectId?: string): Promise<ProjectSessionSummary> {

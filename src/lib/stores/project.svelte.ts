@@ -11,6 +11,7 @@ import type {
   FontAsset,
   FontRenderData,
   Group,
+  MainGuiCenter,
   ModTarget,
   ProjectExportSettings,
   ProjectSessionSummary,
@@ -42,6 +43,13 @@ const DEFAULT_EXPORT_SETTINGS: ProjectExportSettings = {
   generate_semantic_registry: false,
 };
 
+function defaultMainGuiCenter(size: Size): MainGuiCenter {
+  return {
+    x: Math.floor(size.width / 2),
+    y: Math.floor(size.height / 2),
+  };
+}
+
 const ELEMENT_STATE_OVERRIDE_FIELDS = new Set(["visible", "x", "y", "width", "height", "attached_region", "layer"]);
 const ATTACHED_REGION_STATE_OVERRIDE_FIELDS = new Set(["visible", "x", "y", "width", "height"]);
 
@@ -52,6 +60,7 @@ export class ProjectStore {
   activeProjectId = $state<string | null>(null);
   name = $state("Untitled GUI");
   guiSize = $state<Size>({ width: 176, height: 166 });
+  mainGuiCenter = $state<MainGuiCenter>({ x: 88, y: 83 });
   modTarget = $state<ModTarget>("forge");
   elements = $state<Element[]>([]);
   groups = $state<Group[]>([]);
@@ -260,6 +269,16 @@ export class ProjectStore {
     const nextWidth = Math.max(1, Math.round(width));
     const nextHeight = Math.max(1, Math.round(height));
     await api.projectResize(nextWidth, nextHeight, this.activeProjectId ?? undefined);
+    await this.refreshSessions();
+    await this.hydrateActiveProject();
+  }
+
+  async updateMainGuiCenter(center: MainGuiCenter) {
+    const next = {
+      x: Math.round(center.x),
+      y: Math.round(center.y),
+    };
+    await api.projectMainGuiCenterUpdate(next, this.activeProjectId ?? undefined);
     await this.refreshSessions();
     await this.hydrateActiveProject();
   }
@@ -1137,6 +1156,7 @@ export class ProjectStore {
   private applyProjectData(project: ActiveProjectPayload["project"]) {
     this.name = project.name;
     this.guiSize = project.gui_size;
+    this.mainGuiCenter = project.main_gui_center ?? defaultMainGuiCenter(project.gui_size);
     this.modTarget = project.mod_target;
     this.elements = project.elements;
     this.groups = project.groups;
@@ -1295,6 +1315,7 @@ export class ProjectStore {
     this.activeProjectId = null;
     this.name = "Untitled GUI";
     this.guiSize = { width: 176, height: 166 };
+    this.mainGuiCenter = { x: 88, y: 83 };
     this.modTarget = "forge";
     this.elements = [];
     this.groups = [];

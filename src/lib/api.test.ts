@@ -6,6 +6,7 @@ import {
   elementUpdateMany,
   projectExportPreview,
   projectGetActive,
+  projectMainGuiCenterUpdate,
   projectNew,
   projectSummary,
   projectUndo,
@@ -155,5 +156,26 @@ describe("mock export preview", () => {
 
     expect(preview.files).toContain("/tmp/mcgui-textures-only/src/main/resources/assets/testmod/textures/custom_slot.png");
     expect(preview.files).toContain("/tmp/mcgui-textures-only/src/main/resources/assets/testmod/textures/custom_background.png");
+  });
+});
+
+describe("mock projectMainGuiCenterUpdate", () => {
+  it("updates main GUI center through undoable project history", async () => {
+    const project = await projectNew("Mock Center Axes", 100, 80, "forge");
+    let active = await projectGetActive();
+    expect(active.project.main_gui_center).toEqual({ x: 50, y: 40 });
+
+    const before = await projectSummary(project.project_id);
+    await projectMainGuiCenterUpdate({ x: 70, y: 30 }, project.project_id);
+    active = await projectGetActive();
+    expect(active.project.main_gui_center).toEqual({ x: 70, y: 30 });
+    expect((await projectSummary(project.project_id)).revision).toBe(before.revision + 1);
+
+    await projectMainGuiCenterUpdate({ x: 70, y: 30 }, project.project_id);
+    expect((await projectSummary(project.project_id)).revision).toBe(before.revision + 1);
+
+    await projectUndo(project.project_id);
+    active = await projectGetActive();
+    expect(active.project.main_gui_center).toEqual({ x: 50, y: 40 });
   });
 });

@@ -114,6 +114,11 @@ export interface Size {
   height: number;
 }
 
+export interface MainGuiCenter {
+  x: number;
+  y: number;
+}
+
 export interface UvRect {
   x: number;
   y: number;
@@ -332,6 +337,7 @@ export interface MinecraftSource {
 export interface ProjectData {
   name: string;
   gui_size: Size;
+  main_gui_center?: MainGuiCenter | null;
   mod_target: ModTarget;
   elements: Element[];
   groups: Group[];
