@@ -723,6 +723,17 @@ export class GuiRenderer {
     g.rect(bounds.x, bounds.y, bounds.width, bounds.height);
     g.stroke({ width: 1, color: 0xffb000, alpha: 0.95 });
 
+    const axisMinX = Math.min(0, bounds.x);
+    const axisMinY = Math.min(0, bounds.y);
+    const axisMaxX = Math.max(gw, bounds.x + bounds.width);
+    const axisMaxY = Math.max(gh, bounds.y + bounds.height);
+    g.moveTo(project.mainGuiCenter.x, axisMinY);
+    g.lineTo(project.mainGuiCenter.x, axisMaxY);
+    g.stroke({ width: 1, color: 0xff3355, alpha: 0.95 });
+    g.moveTo(axisMinX, project.mainGuiCenter.y);
+    g.lineTo(axisMaxX, project.mainGuiCenter.y);
+    g.stroke({ width: 1, color: 0xff3355, alpha: 0.95 });
+
     // Minor grid
     const minorAlpha = palette.minorAlpha;
     if (minorAlpha > 0) {
