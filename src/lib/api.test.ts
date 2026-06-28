@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { Element } from "./types";
 import {
+  assetImport,
   elementAdd,
   elementUpdateMany,
+  projectExportPreview,
   projectGetActive,
   projectNew,
   projectSummary,
@@ -104,5 +106,53 @@ describe("mock elementUpdateMany", () => {
       { id: "a", changes: { x: 8, y: 18, visible: true } },
     ], project.project_id)).resolves.toHaveLength(1);
     expect((await projectSummary(project.project_id)).revision).toBe(before.revision);
+  });
+});
+
+describe("mock export preview", () => {
+  it("includes visible element assets in textures-only previews", async () => {
+    const project = await projectNew("Mock Textures Only Assets", 176, 166, "forge");
+    const slotAsset = await assetImport(
+      "/tmp/custom_slot.png",
+      project.project_id,
+      "data:image/png;base64,iVBORw0KGgo=",
+    );
+    const backgroundAsset = await assetImport(
+      "/tmp/custom_background.png",
+      project.project_id,
+      "data:image/png;base64,iVBORw0KGgo=",
+    );
+    await elementAdd({
+      ...slot("slot_with_asset", 8),
+      asset: slotAsset.name,
+    }, project.project_id);
+    await elementAdd({
+      id: "background_with_asset",
+      type: "texture",
+      x: 0,
+      y: 0,
+      width: 176,
+      height: 166,
+      visible: true,
+      asset: backgroundAsset.name,
+    }, project.project_id);
+
+    const preview = await projectExportPreview(
+      "forge",
+      "testmod",
+      "com.example",
+      "TextureOnlyGui",
+      "/tmp/mcgui-textures-only",
+      project.project_id,
+      {
+        codegen_mode: "simple",
+        generate_runtime_helpers: true,
+        generate_semantic_registry: false,
+        export_scope: "textures_only",
+      },
+    );
+
+    expect(preview.files).toContain("/tmp/mcgui-textures-only/src/main/resources/assets/testmod/textures/custom_slot.png");
+    expect(preview.files).toContain("/tmp/mcgui-textures-only/src/main/resources/assets/testmod/textures/custom_background.png");
   });
 });
