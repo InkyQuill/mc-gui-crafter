@@ -765,6 +765,17 @@ pub fn asset_get_data_url(
 }
 
 #[tauri::command(rename_all = "snake_case")]
+pub fn texture_pack_load(
+    state: State<AppState>,
+    pack_id: String,
+    asset_names: Vec<String>,
+    project_id: Option<String>,
+) -> Result<Vec<serde_json::Value>, String> {
+    let mut sessions = state.sessions.lock().unwrap();
+    load_texture_pack_in_session(&mut sessions, project_id.as_deref(), &pack_id, &asset_names)
+}
+
+#[tauri::command(rename_all = "snake_case")]
 pub fn project_export_preview(
     state: State<AppState>,
     target: String,
@@ -2665,6 +2676,78 @@ fn update_asset_in_session(
     }))
 }
 
+fn load_texture_pack_in_session(
+    sessions: &mut crate::project::ProjectSessionManager,
+    project_id: Option<&str>,
+    pack_id: &str,
+    asset_names: &[String],
+) -> Result<Vec<serde_json::Value>, String> {
+    let all_assets = match pack_id {
+        "minecraft" => crate::texture_pack::minecraft_default_assets(),
+        _ => return Err(format!("Unknown texture pack: {pack_id}")),
+    };
+    let assets: Vec<_> = all_assets
+        .into_iter()
+        .filter(|asset| asset_names.iter().any(|name| name == asset.path))
+        .collect();
+    if assets.len() != asset_names.len() {
+        let known: std::collections::HashSet<_> = assets.iter().map(|asset| asset.path).collect();
+        let missing = asset_names
+            .iter()
+            .find(|name| !known.contains(name.as_str()))
+            .cloned()
+            .unwrap_or_else(|| "unknown".to_string());
+        return Err(format!(
+            "Texture pack '{pack_id}' does not contain asset: {missing}"
+        ));
+    }
+    if assets.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let should_change = {
+        let project = &sessions.resolve(project_id)?.project;
+        assets.iter().any(|asset| {
+            !project.assets.iter().any(|name| name == asset.path)
+                || !project.texture_data.contains_key(asset.path)
+                || !project.asset_metadata.contains_key(asset.path)
+        })
+    };
+
+    if should_change {
+        sessions.record_history(project_id)?;
+        let session = sessions.resolve_mut(project_id)?;
+        for asset in &assets {
+            if !session.project.assets.iter().any(|name| name == asset.path) {
+                session.project.assets.push(asset.path.to_string());
+            }
+            session
+                .project
+                .texture_data
+                .entry(asset.path.to_string())
+                .or_insert_with(|| asset.bytes.to_vec());
+            session
+                .project
+                .asset_metadata
+                .entry(asset.path.to_string())
+                .or_insert_with(|| asset.metadata.clone());
+        }
+        sessions.mark_changed(project_id)?;
+    }
+
+    let project = &sessions.resolve(project_id)?.project;
+    Ok(assets
+        .iter()
+        .map(|asset| {
+            compact_asset_metadata(
+                asset.path,
+                project.texture_data.get(asset.path).map(Vec::as_slice),
+                project.asset_metadata.get(asset.path),
+            )
+        })
+        .collect())
+}
+
 fn update_asset_metadata_in_session(
     sessions: &mut crate::project::ProjectSessionManager,
     project_id: Option<&str>,
@@ -3427,6 +3510,56 @@ mod tests {
         assert!(!removed);
         assert!(!summary.can_undo);
         assert!(summary.can_redo);
+    }
+
+    #[test]
+    fn texture_pack_load_imports_only_selected_assets() {
+        let mut sessions = ProjectSessionManager::default();
+        let project_id =
+            sessions.create_session(Project::new("Texture Pack", 176, 166, ModTarget::Forge));
+
+        let loaded = load_texture_pack_in_session(
+            &mut sessions,
+            Some(&project_id),
+            "minecraft",
+            &[crate::texture_pack::MINECRAFT_SLOT.to_string()],
+        )
+        .unwrap();
+
+        let project = &sessions.resolve(Some(&project_id)).unwrap().project;
+        assert_eq!(loaded.len(), 1);
+        assert!(project
+            .assets
+            .contains(&crate::texture_pack::MINECRAFT_SLOT.to_string()));
+        assert!(!project
+            .assets
+            .contains(&crate::texture_pack::MINECRAFT_BUTTON.to_string()));
+        assert!(project
+            .texture_data
+            .contains_key(crate::texture_pack::MINECRAFT_SLOT));
+        assert!(project
+            .asset_metadata
+            .contains_key(crate::texture_pack::MINECRAFT_SLOT));
+        let summary = session_summary(&sessions, &project_id).unwrap();
+        assert_eq!(summary.revision, 1);
+        assert!(summary.can_undo);
+    }
+
+    #[test]
+    fn texture_pack_load_is_noop_when_selected_assets_are_present() {
+        let mut sessions = ProjectSessionManager::default();
+        let project_id =
+            sessions.create_session(Project::new("Texture Pack", 176, 166, ModTarget::Forge));
+        let selected = vec![crate::texture_pack::MINECRAFT_SLOT.to_string()];
+
+        load_texture_pack_in_session(&mut sessions, Some(&project_id), "minecraft", &selected)
+            .unwrap();
+        load_texture_pack_in_session(&mut sessions, Some(&project_id), "minecraft", &selected)
+            .unwrap();
+
+        let summary = session_summary(&sessions, &project_id).unwrap();
+        assert_eq!(summary.revision, 1);
+        assert!(summary.can_undo);
     }
 
     #[test]

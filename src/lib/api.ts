@@ -245,6 +245,51 @@ const mockAssetDataUrls = new Map<string, Map<string, string>>();
 const mockAssetMetadata = new Map<string, Map<string, AssetMetadata>>();
 const mockExistingExportFiles = new Set<string>();
 const EMPTY_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+const MOCK_MINECRAFT_TEXTURE_PACK: Record<string, AssetMetadata> = {
+  "textures/minecraft/gui_panel.png": {
+    width: 25,
+    height: 25,
+    nine_slice: { left: 4, right: 4, top: 4, bottom: 4, edge_mode: "tile", center_mode: "tile" },
+  },
+  "textures/minecraft/slot.png": {
+    width: 18,
+    height: 18,
+    nine_slice: { left: 1, right: 1, top: 1, bottom: 1, edge_mode: "tile", center_mode: "tile" },
+  },
+  "textures/minecraft/button.png": {
+    width: 200,
+    height: 20,
+    nine_slice: { left: 3, right: 3, top: 3, bottom: 3, edge_mode: "tile", center_mode: "tile" },
+  },
+  "textures/minecraft/button_disabled.png": {
+    width: 200,
+    height: 20,
+    nine_slice: { left: 1, right: 1, top: 1, bottom: 1, edge_mode: "tile", center_mode: "tile" },
+  },
+  "textures/minecraft/button_highlighted.png": {
+    width: 200,
+    height: 20,
+    nine_slice: { left: 3, right: 3, top: 3, bottom: 3, edge_mode: "tile", center_mode: "tile" },
+  },
+  "textures/minecraft/burn_back.png": { width: 14, height: 14, nine_slice: null },
+  "textures/minecraft/burn_progress.png": { width: 24, height: 16, nine_slice: null },
+  "textures/minecraft/lit_progress.png": { width: 14, height: 14, nine_slice: null },
+  "textures/minecraft/progress_arrow_back.png": { width: 24, height: 16, nine_slice: null },
+  "textures/minecraft/scroller.png": {
+    width: 6,
+    height: 32,
+    nine_slice: { left: 1, right: 1, top: 1, bottom: 1, edge_mode: "tile", center_mode: "tile" },
+  },
+  "textures/minecraft/scroller_background.png": {
+    width: 6,
+    height: 32,
+    nine_slice: { left: 1, right: 1, top: 1, bottom: 1, edge_mode: "tile", center_mode: "tile" },
+  },
+};
+export const MINECRAFT_TEXTURE_PACK_ASSETS = Object.entries(MOCK_MINECRAFT_TEXTURE_PACK).map(([name, metadata]) => ({
+  name,
+  metadata,
+}));
 let mockActiveProjectId: string | null = null;
 let mockNextProjectId = 1;
 let mockAppConfig: AppConfig = {
@@ -1116,12 +1161,13 @@ function mockExportPreview(args?: Record<string, unknown>): ExportPreview {
     if (animation.texture) referencedAssets.add(animation.texture);
   }
   const assets = mockAssetsForSession(session);
+  const projectAssets = new Set(session.project.assets ?? []);
   const errors = [...referencedAssets]
-    .filter(asset => !assets.has(asset))
+    .filter(asset => !assets.has(asset) && !projectAssets.has(asset))
     .map(asset => `Texture asset referenced by project is missing: ${asset}`);
 
   const referencedTextureFiles = [...referencedAssets]
-    .filter(asset => assets.has(asset))
+    .filter(asset => assets.has(asset) || projectAssets.has(asset))
     .map(asset => joinMockPath(assetBase, asset));
   const textureFiles = [
     joinMockPath(assetBase, `textures/gui/${resourceName}_gui.png`),
@@ -1231,13 +1277,28 @@ async function mockInvoke(cmd: string, args?: Record<string, unknown>): Promise<
           y: 0,
           width: (args?.width as number) || 176,
           height: (args?.height as number) || 166,
-          asset: "textures/generated/gui_panel.png",
+          asset: "textures/minecraft/gui_panel.png",
+          render_mode: "nine_slice",
           visible: true,
           layer: "background",
         }],
         groups: [],
         animations: [],
-        assets: ["textures/generated/gui_panel.png"],
+        assets: ["textures/minecraft/gui_panel.png"],
+        asset_metadata: {
+          "textures/minecraft/gui_panel.png": {
+            width: 25,
+            height: 25,
+            nine_slice: {
+              left: 4,
+              right: 4,
+              top: 4,
+              bottom: 4,
+              edge_mode: "tile",
+              center_mode: "tile",
+            },
+          },
+        },
         is_dirty: true,
       });
     case "project_open":
@@ -1846,6 +1907,26 @@ async function mockInvoke(cmd: string, args?: Record<string, unknown>): Promise<
       if (dataUrl === undefined) throw `Asset not found: ${String(args?.name ?? "")}`;
       return dataUrl;
     }
+    case "texture_pack_load": {
+      const session = mockSession(args?.project_id);
+      const packId = String(args?.pack_id ?? "");
+      if (packId !== "minecraft") throw `Unknown texture pack: ${packId}`;
+      const assetNames = Array.isArray(args?.asset_names) ? args.asset_names.map(String) : [];
+      const missing = assetNames.find(name => !(name in MOCK_MINECRAFT_TEXTURE_PACK));
+      if (missing) throw `Texture pack '${packId}' does not contain asset: ${missing}`;
+      if (assetNames.length === 0) return [];
+      const previous = clone(session.project);
+      const metadata = mockAssetMetadataForSession(session);
+      for (const name of assetNames) {
+        if (!session.project.assets.includes(name)) session.project.assets.push(name);
+        if (!metadata.has(name)) metadata.set(name, clone(MOCK_MINECRAFT_TEXTURE_PACK[name]));
+      }
+      session.project.asset_metadata = Object.fromEntries(metadata.entries());
+      if (JSON.stringify(previous) !== JSON.stringify(session.project)) {
+        markMockChanged(session, previous);
+      }
+      return Promise.all(assetNames.map(name => mockAssetResult(name, "", metadata.get(name))));
+    }
     case "list_minecraft_sources":
       return [];
     case "font_list":
@@ -2206,6 +2287,11 @@ export async function assetUpdate(name: string, dataUrl: string, projectId?: str
 export async function assetList(projectId?: string): Promise<AssetImportResult[]> {
   const invoke = await getInvoke();
   return invoke("asset_list", { project_id: projectId }) as Promise<AssetImportResult[]>;
+}
+
+export async function texturePackLoad(packId: string, assetNames: string[], projectId?: string): Promise<AssetImportResult[]> {
+  const invoke = await getInvoke();
+  return invoke("texture_pack_load", { pack_id: packId, asset_names: assetNames, project_id: projectId }) as Promise<AssetImportResult[]>;
 }
 
 export async function assetRemove(name: string, projectId?: string): Promise<boolean> {

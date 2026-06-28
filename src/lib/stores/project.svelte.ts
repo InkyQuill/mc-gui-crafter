@@ -322,9 +322,9 @@ export class ProjectStore {
     }
 
     if (type === "progress") {
-      element.width ??= 22;
-      element.height ??= 15;
-      element.asset ??= "textures/generated/progress_arrow.png";
+      element.width ??= 24;
+      element.height ??= 16;
+      element.asset ??= "textures/minecraft/burn_progress.png";
       element.layer ??= "animatable";
       element.direction ??= "left_to_right";
     }
@@ -332,7 +332,7 @@ export class ProjectStore {
     if (type === "button") {
       element.width ??= 52;
       element.height ??= 20;
-      element.asset ??= "textures/generated/button.png";
+      element.asset ??= "textures/minecraft/button.png";
       element.layer ??= "background";
       element.content ??= "Button";
     }
@@ -340,7 +340,7 @@ export class ProjectStore {
     if (type === "toggle_button") {
       element.width ??= 20;
       element.height ??= 20;
-      element.asset ??= "textures/generated/button.png";
+      element.asset ??= "textures/minecraft/button.png";
       element.layer ??= "background";
       element.content ??= "Toggle";
     }
@@ -1231,6 +1231,13 @@ export class ProjectStore {
     await this.hydrateActiveProject();
     this.bumpRenderVersion();
     return updated;
+  }
+
+  async loadTexturePack(packId: string, assetNames: string[]) {
+    const loaded = await api.texturePackLoad(packId, assetNames, this.activeProjectId ?? undefined);
+    await this.refreshSessions();
+    await this.syncFromBackend();
+    return loaded;
   }
 
   private async syncFontRenderData(fontIds: string[], projectId: string | null, requestId: number) {

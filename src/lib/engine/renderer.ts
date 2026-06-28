@@ -7,6 +7,7 @@ import { appendSessionLog } from "../api";
 
 const SELECTED_TINT = 0xffff00;
 const LEGACY_BACKGROUND_TEXTURE = "textures/background.png";
+const MINECRAFT_SLOT_TEXTURE = "textures/minecraft/slot.png";
 
 const GENERATED_TEXTURES = new Set([
   LEGACY_BACKGROUND_TEXTURE,
@@ -17,6 +18,15 @@ const GENERATED_TEXTURES = new Set([
   "textures/generated/fluid_tank.png",
   "textures/generated/energy_bar.png",
   "textures/generated/scrollbar.png",
+  "textures/minecraft/gui_panel.png",
+  MINECRAFT_SLOT_TEXTURE,
+  "textures/minecraft/button.png",
+  "textures/minecraft/button_disabled.png",
+  "textures/minecraft/button_highlighted.png",
+  "textures/minecraft/burn_progress.png",
+  "textures/minecraft/progress_arrow_back.png",
+  "textures/minecraft/scroller.png",
+  "textures/minecraft/scroller_background.png",
 ]);
 
 function isGeneratedTexturePath(path: string | undefined): boolean {
@@ -813,6 +823,10 @@ export class GuiRenderer {
       const textured = this.drawTexture(el);
       if (textured) return textured;
     }
+    if (project.getAssetDataUrl(MINECRAFT_SLOT_TEXTURE)) {
+      const textured = this.drawTexture({ ...el, asset: MINECRAFT_SLOT_TEXTURE });
+      if (textured) return textured;
+    }
 
     const container = new Container();
     const g = new Graphics();
@@ -1074,15 +1088,32 @@ export class GuiRenderer {
     const w = el.width ?? el.size ?? 16;
     const h = el.height ?? el.size ?? 16;
 
-    if (el.asset === "textures/generated/gui_panel.png" || el.asset === LEGACY_BACKGROUND_TEXTURE) {
+    if (
+      el.asset === "textures/generated/gui_panel.png" ||
+      el.asset === "textures/minecraft/gui_panel.png" ||
+      el.asset === LEGACY_BACKGROUND_TEXTURE
+    ) {
       this.drawGeneratedGuiPanelGraphics(g, el.x, el.y, w, h);
-    } else if (el.asset === "textures/generated/slot.png") {
+    } else if (el.asset === "textures/generated/slot.png" || el.asset === "textures/minecraft/slot.png") {
       this.drawGeneratedSlotGraphics(g, el.x, el.y, w, h);
-    } else if (el.asset === "textures/generated/button.png") {
+    } else if (
+      el.asset === "textures/generated/button.png" ||
+      el.asset === "textures/minecraft/button.png" ||
+      el.asset === "textures/minecraft/button_disabled.png" ||
+      el.asset === "textures/minecraft/button_highlighted.png"
+    ) {
       this.drawButtonGraphics(g, el.x, el.y, w, h);
-    } else if (el.asset === "textures/generated/progress_arrow.png") {
+    } else if (
+      el.asset === "textures/generated/progress_arrow.png" ||
+      el.asset === "textures/minecraft/burn_progress.png" ||
+      el.asset === "textures/minecraft/progress_arrow_back.png"
+    ) {
       this.drawProgressArrow(g, el.x, el.y, w, h, el.direction);
-    } else if (el.asset === "textures/generated/scrollbar.png") {
+    } else if (
+      el.asset === "textures/generated/scrollbar.png" ||
+      el.asset === "textures/minecraft/scroller.png" ||
+      el.asset === "textures/minecraft/scroller_background.png"
+    ) {
       this.drawScrollbarGraphics(g, el.x, el.y, w, h);
     } else {
       g.rect(el.x, el.y, w, h);
