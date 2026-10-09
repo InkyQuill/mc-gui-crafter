@@ -207,7 +207,25 @@ fn overlay_button(
                     .then_some("textures/generated/button.png")
             })
     }) {
-        overlay_asset(img, project, element, asset_name, offset_x, offset_y)?;
+        if element.asset.is_none()
+            && asset_name == texture_pack::MINECRAFT_BUTTON
+            && project
+                .asset_metadata
+                .get(asset_name)
+                .and_then(|metadata| metadata.nine_slice.as_ref())
+                .is_some()
+        {
+            let mut resolved = element.clone();
+            let size = element.render_size();
+            resolved.width = Some(size.width);
+            resolved.height = Some(size.height);
+            resolved.asset = Some(asset_name.to_owned());
+            resolved.element_type = ElementType::Texture;
+            resolved.render_mode = TextureRenderMode::NineSlice;
+            overlay_asset(img, project, &resolved, asset_name, offset_x, offset_y)?;
+        } else {
+            overlay_asset(img, project, element, asset_name, offset_x, offset_y)?;
+        }
     } else {
         let data = generated_button()?;
         overlay_texture_data(
@@ -827,6 +845,37 @@ mod tests {
     }
 
     #[test]
+    fn implicit_minecraft_button_preserves_nine_slice_border() {
+        let mut project = Project::new("Button", 20, 20, ModTarget::Forge);
+        project.texture_data.insert(
+            texture_pack::MINECRAFT_BUTTON.into(),
+            grid_png(3, 3, |x, y| Rgba([x as u8, y as u8, 0, 255])),
+        );
+        project.asset_metadata.insert(
+            texture_pack::MINECRAFT_BUTTON.into(),
+            AssetMetadata {
+                nine_slice: Some(test_nine_slice(
+                    NineSliceMode::Stretch,
+                    NineSliceMode::Stretch,
+                )),
+                ..Default::default()
+            },
+        );
+        let mut button = button_element("button", 0, 0);
+        button.width = None;
+        button.height = None;
+        project.elements.push(button);
+        let image = image::load_from_memory(
+            &composite_atlas_for_layer(&project, Layer::Background).unwrap(),
+        )
+        .unwrap()
+        .to_rgba8();
+        assert_eq!(image.get_pixel(1, 1).0, [1, 1, 0, 255]);
+        assert_eq!(image.get_pixel(18, 18).0, [1, 1, 0, 255]);
+        assert_eq!(image.get_pixel(19, 19).0, [2, 2, 0, 255]);
+    }
+
+    #[test]
     fn validate_nine_slice_guides_rejects_large_values_without_panicking() {
         let guides = NineSlice {
             left: u32::MAX,
@@ -1170,7 +1219,10 @@ mod tests {
     #[test]
     fn composite_atlas_rejects_unrenderable_visual_bounds() {
         let mut project = Project::new("Huge", 4097, 1, ModTarget::Forge);
-        project.elements.push(button_element("button", 0, 0));
+        let mut button = button_element("button", 0, 0);
+        button.width = None;
+        button.height = None;
+        project.elements.push(button);
 
         let err = composite_atlas_for_layer(&project, Layer::Background).unwrap_err();
 

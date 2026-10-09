@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tick } from "svelte";
   import {
     ArrowDown,
     ArrowRight,
@@ -29,6 +30,9 @@
 
   let collapsedGroups = $state<Set<string>>(new Set());
   let contextMenu = $state<{ element: Element; x: number; y: number } | null>(null);
+
+  let contextMenuElement = $state<HTMLDivElement>();
+  let contextMenuOpener: HTMLElement | null = null;
 
   function displayId(id: string): string {
     return id.length > 26 ? `${id.slice(0, 23)}...` : id;
@@ -169,13 +173,21 @@
     selectElementFromList(id, event);
   }
 
-  function openElementContextMenu(el: Element, event: MouseEvent) {
+  async function openElementContextMenu(el: Element, event: MouseEvent) {
     event.preventDefault();
     editor.selectElement(el.id, event.ctrlKey || event.metaKey);
+    contextMenuOpener = event.currentTarget instanceof HTMLElement ? event.currentTarget : null;
     contextMenu = { element: el, x: event.clientX, y: event.clientY };
+    await tick();
+    if (!contextMenu || !contextMenuElement) return;
+    const bounds = contextMenuElement.getBoundingClientRect();
+    contextMenu.x = Math.max(0, Math.min(contextMenu.x, window.innerWidth - bounds.width));
+    contextMenu.y = Math.max(0, Math.min(contextMenu.y, window.innerHeight - bounds.height));
+    contextMenuElement.querySelector<HTMLButtonElement>("button:not(:disabled)")?.focus();
   }
 
   function closeContextMenu() {
+    if (contextMenu && contextMenuElement?.contains(document.activeElement)) contextMenuOpener?.focus();
     contextMenu = null;
   }
 
@@ -377,6 +389,7 @@
   {#if contextMenu}
     {@const idx = project.elements.findIndex(element => element.id === contextMenu!.element.id)}
     <div
+      bind:this={contextMenuElement}
       class="context-menu"
       style={`left: ${contextMenu.x}px; top: ${contextMenu.y}px;`}
       role="menu"
@@ -631,6 +644,9 @@
   }
 
   .context-menu {
+    max-width: 100vw;
+    max-height: 100vh;
+    overflow: auto;
     position: fixed;
     z-index: 1200;
     min-width: 160px;

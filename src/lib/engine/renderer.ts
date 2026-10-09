@@ -361,6 +361,7 @@ export class GuiRenderer {
           next.y = editor.snapCoordinate(gui.y);
         }
         project.mainGuiCenter = next;
+        this.render();
         return;
       }
 
@@ -447,10 +448,13 @@ export class GuiRenderer {
         const original = this.centerAxisDragOriginal;
         this.centerAxisDragMode = null;
         this.centerAxisDragOriginal = null;
-        void project.updateMainGuiCenter(center).catch(error => {
-          if (original) project.mainGuiCenter = original;
-          this.logRendererError("Failed to update main GUI center axes", error, { center });
-        });
+        if (!original || center.x !== original.x || center.y !== original.y) {
+          void project.updateMainGuiCenter(center).catch(error => {
+            if (original) project.mainGuiCenter = original;
+            this.render();
+            this.logRendererError("Failed to update main GUI center axes", error, { center });
+          });
+        }
       }
       if (editor.isResizing && editor.resizeElementId) {
         const el = project.effectiveElementById(editor.resizeElementId);

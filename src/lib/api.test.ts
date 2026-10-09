@@ -179,3 +179,19 @@ describe("mock projectMainGuiCenterUpdate", () => {
     expect(active.project.main_gui_center).toEqual({ x: 50, y: 40 });
   });
 });
+
+
+describe("center coordinate boundaries", () => {
+  it("accepts i32 bounds and rejects invalid coordinates without mutating history", async () => {
+    const created = await projectNew("Bounds", 100, 80, "forge");
+    await projectMainGuiCenterUpdate({ x: -2147483648, y: 2147483647 }, created.project_id);
+    const before = await projectSummary(created.project_id);
+    for (const bad of [-2147483649, 2147483648, 0.5, NaN, Infinity]) {
+      for (const center of [{ x: bad, y: 0 }, { x: 0, y: bad }]) {
+        await expect(projectMainGuiCenterUpdate(center, created.project_id)).rejects.toBeDefined();
+      }
+    }
+    expect((await projectSummary(created.project_id)).revision).toBe(before.revision);
+    expect((await projectGetActive()).project.main_gui_center).toEqual({ x: -2147483648, y: 2147483647 });
+  });
+});

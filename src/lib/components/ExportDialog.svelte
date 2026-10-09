@@ -25,6 +25,7 @@
   let previewError = $state("");
   let previewRequestId = 0;
   let overlayPointerStarted = false;
+  let overlayPointerEnded = false;
   let overwriteWarnings = $derived(preview?.warnings.filter(warning => warning.startsWith("Target file already exists")) ?? []);
   let nonOverwriteWarnings = $derived(preview?.warnings.filter(warning => !warning.startsWith("Target file already exists")) ?? []);
   let overwritePaths = $derived(new Set(overwriteWarnings.map(warning => warning.replace("Target file already exists and will be overwritten: ", ""))));
@@ -158,10 +159,11 @@
 
   function handleOverlayPointerDown(event: PointerEvent) {
     overlayPointerStarted = event.target === event.currentTarget;
+    overlayPointerEnded = false;
   }
 
   function handleOverlayClick(event: MouseEvent) {
-    if (overlayPointerStarted && event.target === event.currentTarget) {
+    if (overlayPointerStarted && overlayPointerEnded && event.target === event.currentTarget) {
       onclose();
     }
     overlayPointerStarted = false;
@@ -174,7 +176,7 @@
   }
 </script>
 
-<div class="dialog-overlay" role="presentation" onpointerdown={handleOverlayPointerDown} onclick={handleOverlayClick} onkeydown={handleOverlayKeydown}>
+<div class="dialog-overlay" role="presentation" onpointerdown={handleOverlayPointerDown} onpointerup={(event) => overlayPointerEnded = event.target === event.currentTarget} onpointercancel={() => { overlayPointerStarted = false; overlayPointerEnded = false; }} onclick={handleOverlayClick} onkeydown={handleOverlayKeydown}>
   <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="export-project-title">
     <h2 id="export-project-title">Export Project</h2>
 

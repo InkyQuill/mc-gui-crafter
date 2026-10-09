@@ -56,6 +56,10 @@ pub fn load_from_mcgui(path: &str) -> Result<Project, String> {
         .map_err(|e| format!("Failed to parse layout.json: {e}"))?;
 
     let mut project = Project::new(&name, gui_width, gui_height, mod_target);
+    if let Some(value) = manifest.get("main_gui_center") {
+        project.main_gui_center = serde_json::from_value(value.clone())
+            .map_err(|e| format!("Failed to parse main_gui_center: {e}"))?;
+    }
     project.elements = layout.elements;
     project.groups = layout.groups;
     project.attached_regions = layout.attached_regions;
@@ -122,6 +126,7 @@ pub fn save_to_mcgui(project: &Project) -> Result<(), String> {
         "version": 1,
         "name": project.name,
         "gui_size": project.gui_size,
+        "main_gui_center": project.main_gui_center,
         "mod_target": project.mod_target,
     });
     zip_writer
@@ -225,6 +230,54 @@ mod tests {
             ))
             .to_string_lossy()
             .into_owned()
+    }
+
+    #[test]
+    fn custom_center_survives_archive_round_trip() {
+        let path = temp_project_path();
+        let mut project = Project::new("Center", 176, 166, ModTarget::Forge);
+        project.project_path = Some(path.clone());
+        project.main_gui_center = crate::project::MainGuiCenter { x: -12, y: 40 };
+        save_to_mcgui(&project).unwrap();
+        let loaded = load_from_mcgui(&path).unwrap();
+        assert_eq!(loaded.main_gui_center, project.main_gui_center);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn legacy_center_defaults_but_malformed_center_is_rejected() {
+        for center in [
+            None,
+            Some(serde_json::json!(null)),
+            Some(serde_json::json!({"x": 1})),
+            Some(serde_json::json!({"x": 2147483648_i64, "y": 0})),
+        ] {
+            let path = temp_project_path();
+            let mut manifest = serde_json::json!({"name":"Legacy", "gui_size":{"width":100,"height":80}, "mod_target":"forge"});
+            if let Some(value) = &center {
+                manifest["main_gui_center"] = value.clone();
+            }
+            let mut zip = zip::ZipWriter::new(std::fs::File::create(&path).unwrap());
+            for (name, value) in [
+                ("manifest.json", manifest),
+                ("layout.json", serde_json::json!({})),
+            ] {
+                zip.start_file(name, zip::write::SimpleFileOptions::default())
+                    .unwrap();
+                zip.write_all(value.to_string().as_bytes()).unwrap();
+            }
+            zip.finish().unwrap();
+            let loaded = load_from_mcgui(&path);
+            if center.is_none() {
+                assert_eq!(
+                    loaded.unwrap().main_gui_center,
+                    crate::project::MainGuiCenter { x: 50, y: 40 }
+                );
+            } else {
+                assert!(loaded.unwrap_err().contains("main_gui_center"));
+            }
+            std::fs::remove_file(path).unwrap();
+        }
     }
 
     #[test]

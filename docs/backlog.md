@@ -7,10 +7,6 @@ still reproduce; confirmed defects and future capabilities are separated.
 
 ## Correctness and release qualification
 
-- [ ] **Persist custom main GUI center in `.mcgui`.** The model, inspector and
-  exporters carry `main_gui_center`, but `format::save_to_mcgui` does not write it
-  and `load_from_mcgui` reconstructs the default center. Add a custom-center
-  save/reopen regression and retain midpoint defaults for older archives.
 - [ ] Add real editor interaction coverage for multi-selection (Ctrl/Cmd toggle,
   Shift range, mixed values, one undo per batch), tab switching, and center axes.
   The implementation exists; historical plan checkboxes and browser API mocks

@@ -26,6 +26,7 @@
   let saveError = $state<string | null>(null);
   let isSaving = $state(false);
   let overlayPointerStarted = false;
+  let overlayPointerEnded = false;
 
   let canvasStyle = $derived.by(() => {
     if (zoom === "fit") {
@@ -155,10 +156,11 @@
 
   function handleOverlayPointerDown(event: PointerEvent) {
     overlayPointerStarted = event.target === event.currentTarget;
+    overlayPointerEnded = false;
   }
 
   function handleOverlayClick(event: MouseEvent) {
-    if (overlayPointerStarted && event.target === event.currentTarget) {
+    if (overlayPointerStarted && overlayPointerEnded && event.target === event.currentTarget) {
       onclose();
     }
     overlayPointerStarted = false;
@@ -171,7 +173,7 @@
   }
 </script>
 
-<div class="pixel-editor-overlay" role="presentation" onpointerdown={handleOverlayPointerDown} onclick={handleOverlayClick} onkeydown={handleOverlayKeydown}>
+<div class="pixel-editor-overlay" role="presentation" onpointerdown={handleOverlayPointerDown} onpointerup={(event) => overlayPointerEnded = event.target === event.currentTarget} onpointercancel={() => { overlayPointerStarted = false; overlayPointerEnded = false; }} onclick={handleOverlayClick} onkeydown={handleOverlayKeydown}>
   <div class="pixel-editor" role="dialog" aria-modal="true" aria-labelledby="pixel-editor-title">
     <div class="pe-header">
       <span id="pixel-editor-title" class="pe-title">Edit: {assetName.replace("textures/", "")}</span>

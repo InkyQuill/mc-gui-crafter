@@ -11,6 +11,32 @@
   let showingTexturePackPicker = $state(false);
   let selectedTexturePackAssets = $state<string[]>([]);
   let texturePackPointerStarted = false;
+  let texturePackPointerEnded = false;
+  let texturePackDialog = $state<HTMLDivElement>();
+
+  $effect(() => {
+    if (!showingTexturePackPicker || !texturePackDialog) return;
+    const opener = document.activeElement;
+    texturePackDialog.querySelector<HTMLButtonElement>("button:not(:disabled)")?.focus();
+    return () => { if (opener instanceof HTMLElement && opener.isConnected) opener.focus(); };
+  });
+
+  function handleTexturePackKeydown(event: KeyboardEvent) {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      showingTexturePackPicker = false;
+    } else if (event.key === "Tab" && texturePackDialog) {
+      const controls = [...texturePackDialog.querySelectorAll<HTMLElement>("button:not(:disabled), input:not(:disabled)")];
+      const first = controls[0];
+      const last = controls[controls.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault(); last?.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault(); first?.focus();
+      }
+    }
+  }
 
   const minecraftPackAssets = api.MINECRAFT_TEXTURE_PACK_ASSETS;
 
@@ -205,10 +231,11 @@
 
   function handleTexturePackBackdropPointerDown(event: PointerEvent) {
     texturePackPointerStarted = event.target === event.currentTarget;
+    texturePackPointerEnded = false;
   }
 
   function closeTexturePackPickerOnBackdrop(event: MouseEvent) {
-    if (texturePackPointerStarted && event.target === event.currentTarget) {
+    if (texturePackPointerStarted && texturePackPointerEnded && event.target === event.currentTarget) {
       showingTexturePackPicker = false;
     }
     texturePackPointerStarted = false;
@@ -295,8 +322,8 @@
 </aside>
 
 {#if showingTexturePackPicker}
-  <div class="modal-backdrop" role="presentation" onpointerdown={handleTexturePackBackdropPointerDown} onclick={closeTexturePackPickerOnBackdrop}>
-    <div class="texture-pack-dialog" role="dialog" aria-modal="true" aria-labelledby="texture-pack-title">
+  <div class="modal-backdrop" role="presentation" onpointerdown={handleTexturePackBackdropPointerDown} onpointerup={(event) => texturePackPointerEnded = event.target === event.currentTarget} onpointercancel={() => { texturePackPointerStarted = false; texturePackPointerEnded = false; }} onclick={closeTexturePackPickerOnBackdrop}>
+    <div bind:this={texturePackDialog} onkeydown={handleTexturePackKeydown} tabindex="-1" class="texture-pack-dialog" role="dialog" aria-modal="true" aria-labelledby="texture-pack-title">
       <header>
         <h2 id="texture-pack-title">Minecraft Style</h2>
         <button type="button" class="close-btn" aria-label="Close texture pack picker" onclick={() => showingTexturePackPicker = false}>×</button>

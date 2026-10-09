@@ -12,8 +12,8 @@ or extend beyond the main GUI rectangle.
 The project has an explicit `main_gui_center` (x, y), defaulting to the midpoint
 of `gui_size`. Exported screen placement uses this reference point to center the
 main GUI independently of attached-region visual bounds. Inspector controls and
-canvas axis overlays expose the same values. Persistence of custom centers is
-still tracked in [the backlog](../backlog.md).
+canvas axis overlays expose the same values. Custom centers persist in `.mcgui`
+archives; older files without the field default to the midpoint.
 
 Standard Minecraft slot cells have an 18-pixel pitch, not 18 pixels plus another
 2-pixel gap. Templates and semantic grid helpers supply their own inventory

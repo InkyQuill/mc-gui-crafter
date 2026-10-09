@@ -798,7 +798,8 @@ pub struct Group {
     pub state_owned: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(remote = "Self")]
 pub struct Project {
     pub name: String,
     pub gui_size: Size,
@@ -830,61 +831,29 @@ pub struct Project {
     pub fonts: Vec<FontAsset>,
 }
 
-impl<'de> Deserialize<'de> for Project {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        struct ProjectData {
-            name: String,
-            gui_size: Size,
-            #[serde(default)]
-            main_gui_center: Option<MainGuiCenter>,
-            mod_target: ModTarget,
-            elements: Vec<Element>,
-            groups: Vec<Group>,
-            #[serde(default)]
-            states: Vec<ProjectState>,
-            #[serde(default)]
-            state_overrides: HashMap<String, ProjectStateOverrides>,
-            animations: Vec<crate::animation::Animation>,
-            assets: Vec<String>,
-            #[serde(default)]
-            asset_metadata: HashMap<String, AssetMetadata>,
-            #[serde(default)]
-            semantic_groups: Vec<SemanticGroup>,
-            #[serde(default)]
-            attached_regions: Vec<AttachedRegion>,
-            #[serde(default)]
-            export_settings: ProjectExportSettings,
-            #[serde(default)]
-            fonts: Vec<FontAsset>,
-        }
+// Remote derive keeps a single schema for every persisted Project field.
+impl Serialize for Project {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        Self::serialize(self, serializer)
+    }
+}
 
-        let data = ProjectData::deserialize(deserializer)?;
-        Ok(Project {
-            name: data.name,
-            gui_size: data.gui_size,
-            main_gui_center: data
-                .main_gui_center
-                .unwrap_or_else(|| MainGuiCenter::default_for_size(data.gui_size)),
-            mod_target: data.mod_target,
-            elements: data.elements,
-            groups: data.groups,
-            states: data.states,
-            state_overrides: data.state_overrides,
-            animations: data.animations,
-            assets: data.assets,
-            asset_metadata: data.asset_metadata,
-            semantic_groups: data.semantic_groups,
-            attached_regions: data.attached_regions,
-            export_settings: data.export_settings,
-            project_path: None,
-            is_dirty: false,
-            texture_data: HashMap::new(),
-            fonts: data.fonts,
-        })
+impl<'de> Deserialize<'de> for Project {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let mut value = serde_json::Value::deserialize(deserializer)?;
+        let object = value
+            .as_object_mut()
+            .ok_or_else(|| serde::de::Error::custom("Expected project object"))?;
+        if !object.contains_key("main_gui_center") {
+            let size: Size =
+                serde_json::from_value(object.get("gui_size").cloned().unwrap_or_default())
+                    .map_err(serde::de::Error::custom)?;
+            object.insert(
+                "main_gui_center".into(),
+                serde_json::json!(MainGuiCenter::default_for_size(size)),
+            );
+        }
+        Self::deserialize(value).map_err(serde::de::Error::custom)
     }
 }
 

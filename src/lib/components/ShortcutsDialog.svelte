@@ -3,6 +3,7 @@
 
   let dialogEl = $state<HTMLDivElement | undefined>();
   let overlayPointerStarted = false;
+  let overlayPointerEnded = false;
   const dialogId = $props.id();
   const focusableSelector = [
     "button:not(:disabled)",
@@ -68,10 +69,11 @@
 
   function handleOverlayPointerDown(event: PointerEvent) {
     overlayPointerStarted = event.target === event.currentTarget;
+    overlayPointerEnded = false;
   }
 
   function handleOverlayClick(event: MouseEvent) {
-    if (overlayPointerStarted && event.target === event.currentTarget) {
+    if (overlayPointerStarted && overlayPointerEnded && event.target === event.currentTarget) {
       onclose();
     }
     overlayPointerStarted = false;
@@ -109,7 +111,7 @@
   }
 </script>
 
-<div class="dialog-overlay" role="presentation" onpointerdown={handleOverlayPointerDown} onclick={handleOverlayClick}>
+<div class="dialog-overlay" role="presentation" onpointerdown={handleOverlayPointerDown} onpointerup={(event) => overlayPointerEnded = event.target === event.currentTarget} onpointercancel={() => { overlayPointerStarted = false; overlayPointerEnded = false; }} onclick={handleOverlayClick}>
   <div
     bind:this={dialogEl}
     class="dialog"

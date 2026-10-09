@@ -21,7 +21,7 @@ docker run --rm \
     bsdtar -xf data.tar.* -C payload
     chown -R builder:builder /tmp/package
     su builder -c "cd /tmp/package && makepkg --nodeps --noconfirm"
-    pacman -Sy --noconfirm
+    pacman -Syu --noconfirm
     pacman -U --noconfirm ./*.pkg.tar.zst
     pacman -Qk mc-gui-crafter
     test -x /usr/bin/mc-gui-crafter

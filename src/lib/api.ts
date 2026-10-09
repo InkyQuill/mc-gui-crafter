@@ -1385,7 +1385,7 @@ async function mockInvoke(cmd: string, args?: Record<string, unknown>): Promise<
       const center = args?.center as MainGuiCenter | undefined;
       const x = Number(center?.x);
       const y = Number(center?.y);
-      if (!Number.isSafeInteger(x) || !Number.isSafeInteger(y)) {
+      if (!Number.isSafeInteger(x) || !Number.isSafeInteger(y) || x < I32_MIN || x > I32_MAX || y < I32_MIN || y > I32_MAX) {
         throw "Main GUI center axes must be integer coordinates";
       }
       const previousCenter = session.project.main_gui_center ?? defaultMainGuiCenter(session.project.gui_size);
