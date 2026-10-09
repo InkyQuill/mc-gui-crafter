@@ -1,4 +1,5 @@
 <script lang="ts">
+  import appIcon from "../../../assets/branding/app-icon.svg";
   import { project } from "../stores/project.svelte";
   import { editor } from "../stores/editor.svelte";
   import { status, readableError } from "../stores/status.svelte";
@@ -127,7 +128,7 @@
 
 <header class="toolbar-shell">
   <div class="toolbar-primary">
-    <span class="logo">MCGUI Crafter</span>
+    <span class="logo"><img src={appIcon} alt="" width="24" height="24" />MCGUI Crafter</span>
 
     <div class="toolbar-group file-actions">
       <button onclick={() => showNewDialog = true} title="New project">New</button>
@@ -284,6 +285,9 @@
   }
 
   .logo {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
     font-weight: 700;
     color: var(--accent);
     font-size: 13px;
