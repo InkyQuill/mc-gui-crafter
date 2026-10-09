@@ -526,7 +526,7 @@ describe runtime meaning. Use `attached_region_move_with_elements` when
 repositioning a region after adding children.
 
 `state: "toggleable"` is preserved as metadata, but generated runtime open/close
-behavior is deferred to the toggleable attached-region roadmap item. Use
+behavior is deferred to the toggleable attached-region item in [the backlog](backlog.md). Use
 `static` for fully supported exports today.
 
 ### Simple And Modular Codegen

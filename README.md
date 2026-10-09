@@ -24,6 +24,21 @@ Built with **Tauri 2 + Svelte 5 + Rust**.
 - Export to Forge, Fabric, and NeoForge Screen classes + texture atlases
 - Arbitrary GUI sizes (not limited to vanilla Minecraft dimensions)
 
+## Downloads and releases
+
+Linux x86_64 packages are published on [GitHub Releases](https://github.com/InkyQuill/mc-gui-crafter/releases):
+`.deb`, `.rpm`, and `.pkg.tar.zst` for pacman, with `SHA256SUMS`.
+The release line remains alpha, starting from `v0.0.1-alpha`.
+See [release instructions](docs/releases.md) for installation and maintainer workflows.
+
+## Documentation
+
+- [Architecture](docs/architecture.md)
+- [MCP API and setup](docs/mcp.md)
+- [Feedback and logs](docs/feedback.md)
+- [Outstanding work](docs/backlog.md)
+- [Architecture decisions](docs/adr/001-technology-stack.md)
+
 ## Development
 
 ```bash
@@ -39,9 +54,9 @@ pnpm tauri build
 
 ### Prerequisites
 
-- Rust 1.75+ (`rustc`, `cargo`)
-- Node.js 22.12+ or 20.19+
-- pnpm
+- Current stable Rust (`rustc`, `cargo`)
+- Node.js 24 LTS
+- pnpm 11.5.1 (pinned in `package.json`)
 - Tauri system dependencies ([see docs](https://v2.tauri.app/start/prerequisites/))
 
 ## Opening Project Files
