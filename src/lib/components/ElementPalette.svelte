@@ -84,7 +84,7 @@
   }
 
   async function addSlotGrid() {
-    if (![slotGridColumns, slotGridRows, slotGridCadence].every(Number.isFinite)) return;
+    if (![slotGridColumns, slotGridRows, slotGridX, slotGridY, slotGridCadence].every(Number.isFinite)) return;
     const columns = Math.max(1, Math.min(12, Math.round(slotGridColumns)));
     const rows = Math.max(1, Math.min(12, Math.round(slotGridRows)));
     const cadence = Math.max(16, Math.min(32, Math.round(slotGridCadence)));

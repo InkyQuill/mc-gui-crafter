@@ -20,7 +20,7 @@ const assert=require('node:assert/strict');
  await endpoints(()=>page.locator('button[title*="Preferences"]').click(),'preferences');
  await endpoints(()=>page.locator('button[title*="shortcut" i]').click(),'shortcuts');
  await page.getByText('Add slot grid',{exact:true}).click();
- for (const [label,valid] of [['Cols','9'],['Rows','3'],['Step','18']]) {
+ for (const [label,valid] of [['Cols','9'],['Rows','3'],['X','8'],['Y','18'],['Step','18']]) {
    const count=await page.evaluate(async()=>(await import('/src/lib/stores/project.svelte.ts')).project.elements.length);
    await page.locator('.slot-grid-tool').getByLabel(label,{exact:true}).fill('');
    await page.locator('.slot-grid-add').click();

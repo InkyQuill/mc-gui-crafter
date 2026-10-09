@@ -207,8 +207,7 @@ fn overlay_button(
                     .then_some("textures/generated/button.png")
             })
     }) {
-        if element.asset.is_none()
-            && asset_name == texture_pack::MINECRAFT_BUTTON
+        if asset_name == texture_pack::MINECRAFT_BUTTON
             && project
                 .asset_metadata
                 .get(asset_name)
@@ -221,7 +220,16 @@ fn overlay_button(
             resolved.height = Some(size.height);
             resolved.asset = Some(asset_name.to_owned());
             resolved.element_type = ElementType::Texture;
-            resolved.render_mode = TextureRenderMode::NineSlice;
+            // Buttons can be smaller than their fixed borders. Keep those exportable
+            // with plain scaling, using the same element-over-metadata guide precedence.
+            resolved.render_mode =
+                if resolved_nine_slice(project, &resolved).is_some_and(|guides| {
+                    validate_nine_slice_guides(guides, size.width, size.height).is_ok()
+                }) {
+                    TextureRenderMode::NineSlice
+                } else {
+                    TextureRenderMode::Plain
+                };
             overlay_asset(img, project, &resolved, asset_name, offset_x, offset_y)?;
         } else {
             overlay_asset(img, project, element, asset_name, offset_x, offset_y)?;
@@ -845,7 +853,7 @@ mod tests {
     }
 
     #[test]
-    fn implicit_minecraft_button_preserves_nine_slice_border() {
+    fn minecraft_button_preserves_nine_slice_border() {
         let mut project = Project::new("Button", 20, 20, ModTarget::Forge);
         project.texture_data.insert(
             texture_pack::MINECRAFT_BUTTON.into(),
@@ -861,18 +869,83 @@ mod tests {
                 ..Default::default()
             },
         );
-        let mut button = button_element("button", 0, 0);
-        button.width = None;
-        button.height = None;
-        project.elements.push(button);
-        let image = image::load_from_memory(
-            &composite_atlas_for_layer(&project, Layer::Background).unwrap(),
-        )
-        .unwrap()
-        .to_rgba8();
-        assert_eq!(image.get_pixel(1, 1).0, [1, 1, 0, 255]);
-        assert_eq!(image.get_pixel(18, 18).0, [1, 1, 0, 255]);
-        assert_eq!(image.get_pixel(19, 19).0, [2, 2, 0, 255]);
+        for explicit in [false, true] {
+            let mut button = button_element("button", 0, 0);
+            if explicit {
+                button.asset = Some(texture_pack::MINECRAFT_BUTTON.into());
+            }
+            project.elements.clear();
+            button.width = None;
+            button.height = None;
+            project.elements.push(button);
+            let image = image::load_from_memory(
+                &composite_atlas_for_layer(&project, Layer::Background).unwrap(),
+            )
+            .unwrap()
+            .to_rgba8();
+            assert_eq!(image.get_pixel(1, 1).0, [1, 1, 0, 255]);
+            assert_eq!(image.get_pixel(18, 18).0, [1, 1, 0, 255]);
+            assert_eq!(image.get_pixel(19, 19).0, [2, 2, 0, 255]);
+        }
+    }
+
+    #[test]
+    fn undersized_minecraft_buttons_fall_back_to_resize() {
+        let source = RgbaImage::from_fn(7, 7, |x, y| Rgba([x as u8, y as u8, 0, 255]));
+        let mut project = Project::new("Small Button", 20, 20, ModTarget::Forge);
+        project.texture_data.insert(
+            texture_pack::MINECRAFT_BUTTON.into(),
+            grid_png(7, 7, |x, y| *source.get_pixel(x, y)),
+        );
+        project.asset_metadata.insert(
+            texture_pack::MINECRAFT_BUTTON.into(),
+            AssetMetadata {
+                nine_slice: Some(test_nine_slice(
+                    NineSliceMode::Stretch,
+                    NineSliceMode::Stretch,
+                )),
+                ..Default::default()
+            },
+        );
+        for explicit in [false, true] {
+            for override_guides in [false, true] {
+                let edge = if override_guides { 3 } else { 1 };
+                for (width, height) in [(edge * 2, 20), (edge, 20), (20, edge * 2), (20, edge)] {
+                    let mut button = button_element("small", 0, 0);
+                    button.width = Some(width);
+                    button.height = Some(height);
+                    if explicit {
+                        button.asset = Some(texture_pack::MINECRAFT_BUTTON.into());
+                    }
+                    if override_guides {
+                        button.nine_slice = Some(NineSlice {
+                            left: edge,
+                            right: edge,
+                            top: edge,
+                            bottom: edge,
+                            ..test_nine_slice(NineSliceMode::Stretch, NineSliceMode::Stretch)
+                        });
+                    }
+                    project.elements = vec![button];
+                    let actual = image::load_from_memory(
+                        &composite_atlas_for_layer(&project, Layer::Background).unwrap(),
+                    )
+                    .unwrap()
+                    .to_rgba8();
+                    let expected = image::imageops::resize(
+                        &source,
+                        width,
+                        height,
+                        image::imageops::FilterType::Nearest,
+                    );
+                    assert_eq!(
+                        image::imageops::crop_imm(&actual, 0, 0, width, height).to_image(),
+                        expected,
+                        "explicit={explicit}, override={override_guides}, size={width}x{height}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]
