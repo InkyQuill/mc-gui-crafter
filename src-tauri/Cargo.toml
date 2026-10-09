@@ -1,6 +1,6 @@
 [package]
 name = "mc-gui-crafter"
-version = "0.0.1-alpha"
+version = "0.1.0-alpha"
 description = "Desktop GUI editor for Minecraft machine screens"
 authors = ["Pavel Obruchnikov <me@inkyquill.net>"]
 license = "MIT"
