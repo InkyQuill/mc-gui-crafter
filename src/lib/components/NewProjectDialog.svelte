@@ -21,6 +21,8 @@
   let customGridOutputSlot = $state(true);
   let customGridProgressArrow = $state(true);
   let customGridPlayerInventory = $state(true);
+  let overlayPointerStarted = false;
+  let overlayPointerEnded = false;
 
   $effect(() => {
     api.templateList().then(t => { templates = t; });
@@ -87,10 +89,16 @@
     onclose();
   }
 
+  function handleOverlayPointerDown(event: PointerEvent) {
+    overlayPointerStarted = event.target === event.currentTarget;
+    overlayPointerEnded = false;
+  }
+
   function handleOverlayClick(event: MouseEvent) {
-    if (event.target === event.currentTarget) {
+    if (overlayPointerStarted && overlayPointerEnded && event.target === event.currentTarget) {
       onclose();
     }
+    overlayPointerStarted = false;
   }
 
   function handleOverlayKeydown(event: KeyboardEvent) {
@@ -100,7 +108,7 @@
   }
 </script>
 
-<div class="dialog-overlay" role="presentation" onclick={handleOverlayClick} onkeydown={handleOverlayKeydown}>
+<div class="dialog-overlay" role="presentation" onpointerdown={handleOverlayPointerDown} onpointerup={(event) => overlayPointerEnded = event.target === event.currentTarget} onpointercancel={() => { overlayPointerStarted = false; overlayPointerEnded = false; }} onclick={handleOverlayClick} onkeydown={handleOverlayKeydown}>
   <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="new-project-title">
     <h2 id="new-project-title">New Project</h2>
 

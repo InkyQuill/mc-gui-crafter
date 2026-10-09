@@ -1,7 +1,7 @@
 {
   "name": "mc-gui-crafter",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.0.1-alpha",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -13,6 +13,7 @@
     "verify": "pnpm check && pnpm test && pnpm build"
   },
   "dependencies": {
+    "@lucide/svelte": "^1.21.0",
     "@tauri-apps/api": "^2.0.0",
     "@tauri-apps/plugin-dialog": "^2.0.0",
     "@tauri-apps/plugin-fs": "^2.0.0",
@@ -27,5 +28,6 @@
     "typescript": "^6.0.3",
     "vite": "^8.0.14",
     "vitest": "^4.1.9"
-  }
+  },
+  "packageManager": "pnpm@11.5.1"
 }

@@ -1,5 +1,6 @@
 export interface EditorPreferences {
   showGrid: boolean;
+  showCenterAxes: boolean;
   snapToGrid: boolean;
   majorGridSize: number;
   minorGridSize: number;
@@ -12,6 +13,7 @@ const STORAGE_KEY = "mcgui_preferences";
 
 const defaults: EditorPreferences = {
   showGrid: true,
+  showCenterAxes: true,
   snapToGrid: true,
   majorGridSize: 18,
   minorGridSize: 2,
@@ -35,6 +37,7 @@ function booleanOrDefault(value: unknown, fallback: boolean): boolean {
 function normalizePreferences(value: Partial<EditorPreferences>): EditorPreferences {
   return {
     showGrid: booleanOrDefault(value.showGrid, defaults.showGrid),
+    showCenterAxes: booleanOrDefault(value.showCenterAxes, defaults.showCenterAxes),
     snapToGrid: booleanOrDefault(value.snapToGrid, defaults.snapToGrid),
     majorGridSize: numberOrDefault(value.majorGridSize, defaults.majorGridSize),
     minorGridSize: numberOrDefault(value.minorGridSize, defaults.minorGridSize),

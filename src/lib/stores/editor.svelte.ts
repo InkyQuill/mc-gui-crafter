@@ -1,7 +1,17 @@
 import { preferences } from "./preferences.svelte";
 import type { Size } from "../types";
 
-export type EditorTool = "select" | "pan" | "slot" | "texture" | "text" | "button" | "toggle_button";
+export type EditorTool =
+  | "select"
+  | "pan"
+  | "slot"
+  | "texture"
+  | "progress"
+  | "fluid_tank"
+  | "energy_bar"
+  | "text"
+  | "button"
+  | "toggle_button";
 
 export function snap(value: number, snapSize: number): number {
   if (snapSize <= 1) return Math.round(value);
@@ -47,6 +57,14 @@ class EditorStore {
 
   set showGrid(value: boolean) {
     preferences.update({ showGrid: value });
+  }
+
+  get showCenterAxes() {
+    return preferences.values.showCenterAxes;
+  }
+
+  set showCenterAxes(value: boolean) {
+    preferences.update({ showCenterAxes: value });
   }
 
   get snapToGrid() {

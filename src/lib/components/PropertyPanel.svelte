@@ -274,6 +274,28 @@
       status.error(`Resize failed: ${readableError(error)}`);
     }
   }
+
+  async function updateMainGuiCenterAxis(axis: "x" | "y", value: string) {
+    try {
+      await project.updateMainGuiCenter({
+        ...project.mainGuiCenter,
+        [axis]: numberValue(value, project.mainGuiCenter[axis]),
+      });
+    } catch (error) {
+      status.error(`Center axes update failed: ${readableError(error)}`);
+    }
+  }
+
+  async function resetMainGuiCenter() {
+    try {
+      await project.updateMainGuiCenter({
+        x: Math.floor(project.guiSize.width / 2),
+        y: Math.floor(project.guiSize.height / 2),
+      });
+    } catch (error) {
+      status.error(`Center axes reset failed: ${readableError(error)}`);
+    }
+  }
 </script>
 
 <aside class="properties">
@@ -301,6 +323,29 @@
           onchange={(event) => project.updateExportSettings({ generate_runtime_helpers: event.currentTarget.checked })}
         />
       </div>
+      <div class="prop-row">
+        <label for="project-center-x">Center X</label>
+        <input
+          id="project-center-x"
+          type="number"
+          step="1"
+          value={project.mainGuiCenter.x}
+          onchange={(event) => updateMainGuiCenterAxis("x", event.currentTarget.value)}
+        />
+      </div>
+      <div class="prop-row">
+        <label for="project-center-y">Center Y</label>
+        <input
+          id="project-center-y"
+          type="number"
+          step="1"
+          value={project.mainGuiCenter.y}
+          onchange={(event) => updateMainGuiCenterAxis("y", event.currentTarget.value)}
+        />
+      </div>
+      <button class="secondary-btn" onclick={resetMainGuiCenter}>
+        Reset center axes
+      </button>
       </div>
 
       {#if visibleContentSizeMismatch}
@@ -312,7 +357,7 @@
             project size is {project.guiSize.width}x{project.guiSize.height}.
           </p>
           <p>
-            Exported textures use visible bounds, while generated screen code keeps the project size.
+            Exported textures use visible bounds, while generated screen code centers the main GUI on the red axes.
           </p>
           {#if visibleContentSizeMismatch.canResizeOnly}
             <button class="secondary-btn" onclick={resizeProjectToVisibleContent}>

@@ -35,10 +35,26 @@ macro_rules! iterable_enum {
     };
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Size {
     pub width: u32,
     pub height: u32,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct MainGuiCenter {
+    pub x: i32,
+    pub y: i32,
+}
+
+impl MainGuiCenter {
+    pub fn default_for_size(size: Size) -> Self {
+        Self {
+            x: (size.width / 2) as i32,
+            y: (size.height / 2) as i32,
+        }
+    }
 }
 
 iterable_enum! {
@@ -783,9 +799,11 @@ pub struct Group {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(remote = "Self")]
 pub struct Project {
     pub name: String,
     pub gui_size: Size,
+    pub main_gui_center: MainGuiCenter,
     pub mod_target: ModTarget,
     pub elements: Vec<Element>,
     pub groups: Vec<Group>,
@@ -811,6 +829,32 @@ pub struct Project {
     pub texture_data: HashMap<String, Vec<u8>>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub fonts: Vec<FontAsset>,
+}
+
+// Remote derive keeps a single schema for every persisted Project field.
+impl Serialize for Project {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        Self::serialize(self, serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for Project {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let mut value = serde_json::Value::deserialize(deserializer)?;
+        let object = value
+            .as_object_mut()
+            .ok_or_else(|| serde::de::Error::custom("Expected project object"))?;
+        if !object.contains_key("main_gui_center") {
+            let size: Size =
+                serde_json::from_value(object.get("gui_size").cloned().unwrap_or_default())
+                    .map_err(serde::de::Error::custom)?;
+            object.insert(
+                "main_gui_center".into(),
+                serde_json::json!(MainGuiCenter::default_for_size(size)),
+            );
+        }
+        Self::deserialize(value).map_err(serde::de::Error::custom)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -1043,9 +1087,11 @@ fn summary_for_session_with_active(
 
 impl Project {
     pub fn new(name: &str, width: u32, height: u32, target: ModTarget) -> Self {
+        let gui_size = Size { width, height };
         Self {
             name: name.to_string(),
-            gui_size: Size { width, height },
+            gui_size,
+            main_gui_center: MainGuiCenter::default_for_size(gui_size),
             mod_target: target,
             elements: Vec::new(),
             groups: Vec::new(),
@@ -2265,6 +2311,42 @@ mod tests {
         });
         let project: Project = serde_json::from_value(value).unwrap();
         assert!(project.fonts.is_empty());
+    }
+
+    #[test]
+    fn project_defaults_main_gui_center_to_half_gui_size() {
+        let json = r#"{
+            "name": "Legacy",
+            "gui_size": { "width": 177, "height": 167 },
+            "mod_target": "forge",
+            "elements": [],
+            "groups": [],
+            "animations": [],
+            "assets": []
+        }"#;
+
+        let project: Project = serde_json::from_str(json).unwrap();
+
+        assert_eq!(project.main_gui_center.x, 88);
+        assert_eq!(project.main_gui_center.y, 83);
+    }
+
+    #[test]
+    fn project_main_gui_center_round_trips() {
+        let project = Project {
+            main_gui_center: MainGuiCenter { x: 132, y: 84 },
+            ..Project::new("Center", 264, 168, ModTarget::Forge)
+        };
+
+        let serialized = serde_json::to_value(&project).unwrap();
+        assert_eq!(serialized["main_gui_center"]["x"], serde_json::json!(132));
+        assert_eq!(serialized["main_gui_center"]["y"], serde_json::json!(84));
+
+        let deserialized: Project = serde_json::from_value(serialized).unwrap();
+        assert_eq!(
+            deserialized.main_gui_center,
+            MainGuiCenter { x: 132, y: 84 }
+        );
     }
 
     #[test]

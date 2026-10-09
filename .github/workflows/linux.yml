@@ -1,0 +1,77 @@
+name: Linux packages
+on:
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+permissions:
+  contents: read
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '24'
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          workspaces: src-tauri
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libssl-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev patchelf rpm
+      - run: python3 -m unittest discover -s scripts/release -p 'test_*.py'
+      - run: python3 scripts/release/check-version.py
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm verify
+      - run: cargo test --manifest-path src-tauri/Cargo.toml --locked
+      - run: pnpm tauri build --ci --bundles deb,rpm -- --locked
+      - name: Inspect native installers
+        run: |
+          mkdir release-assets
+          version=$(python3 scripts/release/check-version.py)
+          cp src-tauri/target/release/bundle/deb/*.deb "release-assets/mc-gui-crafter_${version}_amd64.deb"
+          cp src-tauri/target/release/bundle/rpm/*.rpm "release-assets/mc-gui-crafter-${version}-1.x86_64.rpm"
+          dpkg-deb --info release-assets/*.deb
+          rpm -qip release-assets/*.rpm
+          dpkg-deb --contents release-assets/*.deb
+          rpm -qlp release-assets/*.rpm
+      - name: Install and remove Debian package
+        run: |
+          sudo apt-get install -y ./release-assets/*.deb
+          package=$(dpkg-deb -f release-assets/*.deb Package)
+          dpkg --verify "$package"
+          test -x /usr/bin/mc-gui-crafter
+          if ldd /usr/bin/mc-gui-crafter | grep 'not found'; then exit 1; fi
+          sudo apt-get remove -y "$package"
+      - name: Install and remove RPM in Fedora
+        run: |
+          docker run --rm -v "$PWD/release-assets:/packages:ro" fedora:43 bash -euo pipefail -c '
+            dnf install -y /packages/*.rpm
+            package=$(rpm -qp --queryformat "%{NAME}" /packages/*.rpm)
+            rpm --verify "$package"
+            test -x /usr/bin/mc-gui-crafter
+            if ldd /usr/bin/mc-gui-crafter | grep "not found"; then exit 1; fi
+            dnf remove -y "$package"
+          '
+
+      - name: Build and install Arch package in a disposable container
+        run: scripts/release/package-arch.sh
+      - name: Record source identity and checksums
+        run: |
+          git rev-parse HEAD > release-assets/SOURCE_COMMIT
+          cd release-assets
+          sha256sum -- *.deb *.rpm *.pkg.tar.zst SOURCE_COMMIT > SHA256SUMS
+          sha256sum --check SHA256SUMS
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: linux-packages-${{ github.sha }}
+          path: release-assets/
+          if-no-files-found: error
+          retention-days: 30

@@ -11,6 +11,7 @@ mod session_log;
 mod startup;
 mod templates;
 mod texture;
+mod texture_pack;
 
 use std::sync::Mutex;
 use tauri::{Manager, WindowEvent};
@@ -118,6 +119,7 @@ pub fn run() {
             commands::project_redo,
             commands::project_summary,
             commands::project_resize,
+            commands::project_main_gui_center_update,
             commands::project_export_settings_update,
             commands::project_semantic_groups_update,
             commands::template_list,
@@ -127,6 +129,7 @@ pub fn run() {
             commands::asset_metadata_update,
             commands::asset_remove,
             commands::asset_get_data_url,
+            commands::texture_pack_load,
             commands::project_export_preview,
             commands::project_export,
             commands::element_add,

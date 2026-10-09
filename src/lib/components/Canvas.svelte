@@ -127,6 +127,7 @@
   // Re-render when grid preferences change
   $effect(() => {
     void preferences.values.showGrid;
+    void preferences.values.showCenterAxes;
     void preferences.values.majorGridSize;
     void preferences.values.minorGridSize;
     void preferences.values.snapToGrid;

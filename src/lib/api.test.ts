@@ -6,6 +6,7 @@ import {
   elementUpdateMany,
   projectExportPreview,
   projectGetActive,
+  projectMainGuiCenterUpdate,
   projectNew,
   projectSummary,
   projectUndo,
@@ -155,5 +156,42 @@ describe("mock export preview", () => {
 
     expect(preview.files).toContain("/tmp/mcgui-textures-only/src/main/resources/assets/testmod/textures/custom_slot.png");
     expect(preview.files).toContain("/tmp/mcgui-textures-only/src/main/resources/assets/testmod/textures/custom_background.png");
+  });
+});
+
+describe("mock projectMainGuiCenterUpdate", () => {
+  it("updates main GUI center through undoable project history", async () => {
+    const project = await projectNew("Mock Center Axes", 100, 80, "forge");
+    let active = await projectGetActive();
+    expect(active.project.main_gui_center).toEqual({ x: 50, y: 40 });
+
+    const before = await projectSummary(project.project_id);
+    await projectMainGuiCenterUpdate({ x: 70, y: 30 }, project.project_id);
+    active = await projectGetActive();
+    expect(active.project.main_gui_center).toEqual({ x: 70, y: 30 });
+    expect((await projectSummary(project.project_id)).revision).toBe(before.revision + 1);
+
+    await projectMainGuiCenterUpdate({ x: 70, y: 30 }, project.project_id);
+    expect((await projectSummary(project.project_id)).revision).toBe(before.revision + 1);
+
+    await projectUndo(project.project_id);
+    active = await projectGetActive();
+    expect(active.project.main_gui_center).toEqual({ x: 50, y: 40 });
+  });
+});
+
+
+describe("center coordinate boundaries", () => {
+  it("accepts i32 bounds and rejects invalid coordinates without mutating history", async () => {
+    const created = await projectNew("Bounds", 100, 80, "forge");
+    await projectMainGuiCenterUpdate({ x: -2147483648, y: 2147483647 }, created.project_id);
+    const before = await projectSummary(created.project_id);
+    for (const bad of [-2147483649, 2147483648, 0.5, NaN, Infinity]) {
+      for (const center of [{ x: bad, y: 0 }, { x: 0, y: bad }]) {
+        await expect(projectMainGuiCenterUpdate(center, created.project_id)).rejects.toBeDefined();
+      }
+    }
+    expect((await projectSummary(created.project_id)).revision).toBe(before.revision);
+    expect((await projectGetActive()).project.main_gui_center).toEqual({ x: -2147483648, y: 2147483647 });
   });
 });

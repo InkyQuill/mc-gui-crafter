@@ -1,25 +1,14 @@
 use crate::project::{
-    Element, ElementType, FillDirection, Group, Layer, NineSlice, NineSliceMode, Project,
-    SemanticGroup, SemanticGroupKind, SlotRole, TextureRenderMode,
+    Element, ElementType, FillDirection, Group, Layer, NineSlice, Project, SemanticGroup,
+    SemanticGroupKind, SlotRole, TextureRenderMode,
 };
+use crate::texture_pack;
 use serde::Serialize;
 
-pub const GENERATED_GUI_PANEL: &str = "textures/generated/gui_panel.png";
-pub const GENERATED_SLOT: &str = "textures/generated/slot.png";
-pub const GENERATED_BUTTON: &str = "textures/generated/button.png";
-pub const GENERATED_PROGRESS_ARROW: &str = "textures/generated/progress_arrow.png";
-pub const GENERATED_FLUID_TANK: &str = "textures/generated/fluid_tank.png";
-pub const GENERATED_ENERGY_BAR: &str = "textures/generated/energy_bar.png";
+pub const GENERATED_GUI_PANEL: &str = texture_pack::MINECRAFT_GUI_PANEL;
 
 fn default_panel_nine_slice() -> NineSlice {
-    NineSlice {
-        left: 8,
-        right: 4,
-        top: 8,
-        bottom: 4,
-        edge_mode: NineSliceMode::Tile,
-        center_mode: NineSliceMode::Tile,
-    }
+    texture_pack::nine_slice(4, 4, 4, 4)
 }
 
 fn panel_supports_nine_slice(width: u32, height: u32, nine_slice: &NineSlice) -> bool {
@@ -94,78 +83,18 @@ fn ensure_generated_asset_path(project: &mut Project, path: &str) {
     }
 }
 
-fn generated_panel_matches_size(bytes: &[u8], width: u32, height: u32) -> bool {
-    image::load_from_memory(bytes)
-        .map(|img| img.width() == width && img.height() == height)
-        .unwrap_or(false)
-}
-
-fn add_generated_panel_asset(project: &mut Project) -> Result<(), String> {
-    ensure_generated_asset_path(project, GENERATED_GUI_PANEL);
-    let default_nine_slice = default_panel_nine_slice();
-    let metadata = project
-        .asset_metadata
-        .entry(GENERATED_GUI_PANEL.to_string())
-        .or_default();
-    if panel_supports_nine_slice(
-        project.gui_size.width,
-        project.gui_size.height,
-        &default_nine_slice,
-    ) {
-        metadata.nine_slice.get_or_insert(default_nine_slice);
-    } else if metadata.nine_slice.as_ref() == Some(&default_nine_slice) {
-        metadata.nine_slice = None;
+fn add_generated_template_assets(project: &mut Project) {
+    for asset in texture_pack::minecraft_default_assets() {
+        ensure_generated_asset_path(project, asset.path);
+        project
+            .texture_data
+            .entry(asset.path.to_string())
+            .or_insert_with(|| asset.bytes.to_vec());
+        project
+            .asset_metadata
+            .entry(asset.path.to_string())
+            .or_insert(asset.metadata);
     }
-    let should_regenerate = project
-        .texture_data
-        .get(GENERATED_GUI_PANEL)
-        .map(|bytes| {
-            !generated_panel_matches_size(bytes, project.gui_size.width, project.gui_size.height)
-        })
-        .unwrap_or(true);
-
-    if should_regenerate {
-        project.texture_data.insert(
-            GENERATED_GUI_PANEL.to_string(),
-            crate::texture::generated_gui_panel(project.gui_size.width, project.gui_size.height)?,
-        );
-    }
-
-    Ok(())
-}
-
-fn add_static_generated_asset(project: &mut Project, path: &str, bytes: Vec<u8>) {
-    ensure_generated_asset_path(project, path);
-    project
-        .texture_data
-        .entry(path.to_string())
-        .or_insert(bytes);
-}
-
-fn add_generated_template_assets(project: &mut Project) -> Result<(), String> {
-    add_generated_panel_asset(project)?;
-    add_static_generated_asset(project, GENERATED_SLOT, crate::texture::generated_slot()?);
-    add_static_generated_asset(
-        project,
-        GENERATED_BUTTON,
-        crate::texture::generated_button()?,
-    );
-    add_static_generated_asset(
-        project,
-        GENERATED_PROGRESS_ARROW,
-        crate::texture::generated_progress_arrow()?,
-    );
-    add_static_generated_asset(
-        project,
-        GENERATED_FLUID_TANK,
-        crate::texture::generated_fluid_tank()?,
-    );
-    add_static_generated_asset(
-        project,
-        GENERATED_ENERGY_BAR,
-        crate::texture::generated_energy_bar()?,
-    );
-    Ok(())
 }
 
 fn base_element(id: &str, element_type: ElementType, x: i32, y: i32) -> Element {
@@ -237,7 +166,8 @@ fn ensure_generated_background_element(project: &mut Project) {
 
 pub fn apply_generated_defaults(project: &mut Project) -> Result<(), String> {
     ensure_generated_background_element(project);
-    add_generated_template_assets(project)
+    add_generated_template_assets(project);
+    Ok(())
 }
 
 fn slot_grid(
@@ -2516,7 +2446,9 @@ pub fn apply_template(project: &mut Project, template_name: &str) -> Result<(), 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::project::{ElementType, ModTarget, Project, SemanticGroupKind, SlotRole};
+    use crate::project::{
+        ElementType, ModTarget, NineSliceMode, Project, SemanticGroupKind, SlotRole,
+    };
     use std::collections::HashSet;
 
     fn slot_right(element: &crate::project::Element) -> i32 {
@@ -2892,7 +2824,7 @@ mod tests {
     }
 
     #[test]
-    fn applying_template_inserts_generated_default_assets() {
+    fn applying_template_inserts_bundled_default_assets() {
         let mut project = Project::new("Generated", 1, 1, ModTarget::Forge);
 
         apply_template(&mut project, "furnace").expect("template applies");
@@ -2902,8 +2834,13 @@ mod tests {
             .iter()
             .any(|asset| asset == GENERATED_GUI_PANEL));
         assert!(project.texture_data.contains_key(GENERATED_GUI_PANEL));
-        assert!(project.assets.iter().any(|asset| asset == GENERATED_BUTTON));
-        assert!(project.texture_data.contains_key(GENERATED_BUTTON));
+        assert!(project
+            .assets
+            .iter()
+            .any(|asset| asset == texture_pack::MINECRAFT_BUTTON));
+        assert!(project
+            .texture_data
+            .contains_key(texture_pack::MINECRAFT_BUTTON));
 
         let background = project
             .elements
@@ -2917,17 +2854,17 @@ mod tests {
             .asset_metadata
             .get(GENERATED_GUI_PANEL)
             .and_then(|metadata| metadata.nine_slice.as_ref())
-            .expect("generated panel has nine-slice metadata");
-        assert_eq!(guides.left, 8);
+            .expect("default panel has nine-slice metadata");
+        assert_eq!(guides.left, 4);
         assert_eq!(guides.right, 4);
-        assert_eq!(guides.top, 8);
+        assert_eq!(guides.top, 4);
         assert_eq!(guides.bottom, 4);
         assert_eq!(guides.edge_mode, NineSliceMode::Tile);
         assert_eq!(guides.center_mode, NineSliceMode::Tile);
     }
 
     #[test]
-    fn generated_panel_metadata_omits_nine_slice_for_unsupported_sizes() {
+    fn default_background_uses_plain_render_mode_for_unsupported_target_sizes() {
         let mut project = Project::new("Tiny Generated", 1, 1, ModTarget::Forge);
 
         apply_generated_defaults(&mut project).expect("defaults apply");
@@ -2942,7 +2879,7 @@ mod tests {
             .asset_metadata
             .get(GENERATED_GUI_PANEL)
             .and_then(|metadata| metadata.nine_slice.as_ref())
-            .is_none());
+            .is_some());
     }
 
     #[test]
@@ -3007,24 +2944,28 @@ mod tests {
     }
 
     #[test]
-    fn applying_different_sized_templates_regenerates_generated_background_asset() {
+    fn applying_different_sized_templates_preserves_bundled_background_asset() {
         let mut project = Project::new("Generated", 1, 1, ModTarget::Forge);
 
         apply_template(&mut project, "chest_9x3").expect("template applies");
         let first_panel = project
             .texture_data
             .get(GENERATED_GUI_PANEL)
-            .expect("generated panel exists");
-        let first_decoded = image::load_from_memory(first_panel).unwrap().to_rgba8();
-        assert_eq!(first_decoded.height(), 166);
+            .expect("default panel exists")
+            .clone();
+        let first_decoded = image::load_from_memory(&first_panel).unwrap().to_rgba8();
+        assert_eq!(first_decoded.width(), 25);
+        assert_eq!(first_decoded.height(), 25);
 
         apply_template(&mut project, "chest_9x6").expect("template applies");
         let second_panel = project
             .texture_data
             .get(GENERATED_GUI_PANEL)
-            .expect("generated panel exists");
+            .expect("default panel exists");
         let second_decoded = image::load_from_memory(second_panel).unwrap().to_rgba8();
-        assert_eq!(second_decoded.height(), 222);
+        assert_eq!(second_decoded.width(), 25);
+        assert_eq!(second_decoded.height(), 25);
+        assert_eq!(&first_panel, second_panel);
 
         assert_eq!(
             project
@@ -3037,7 +2978,7 @@ mod tests {
     }
 
     #[test]
-    fn applying_same_sized_template_preserves_existing_generated_background_asset() {
+    fn applying_same_sized_template_preserves_existing_default_background_asset() {
         let mut project = Project::new("Generated", 176, 166, ModTarget::Forge);
         let edited_panel =
             image::RgbaImage::from_pixel(176, 166, image::Rgba([0x42, 0x42, 0x42, 0xff]));
