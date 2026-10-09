@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+  <rect x="2" y="2" width="60" height="60" rx="12" fill="#1c2129"/>
+  <g transform="translate(12 12)">
+    <path transform="translate(0 0)" d="M2 0H10V1H11V2H12V10H11V11H10V12H2V11H1V10H0V2H1V1H2Z" fill="#65faa5"/>
+    <path transform="translate(14 0)" d="M2 0H10V1H11V2H12V10H11V11H10V12H2V11H1V10H0V2H1V1H2Z" fill="#65faa5"/>
+    <path transform="translate(28 0)" d="M2 0H10V1H11V2H12V10H11V11H10V12H2V11H1V10H0V2H1V1H2Z" fill="#feac23"/>
+    <path transform="translate(0 14)" d="M2 0H10V1H11V2H12V10H11V11H10V12H2V11H1V10H0V2H1V1H2Z" fill="#65faa5"/>
+    <path transform="translate(0 28)" d="M2 0H10V1H11V2H12V10H11V11H10V12H2V11H1V10H0V2H1V1H2Z" fill="#65faa5"/>
+    <path transform="translate(14 28)" d="M2 0H10V1H11V2H12V10H11V11H10V12H2V11H1V10H0V2H1V1H2Z" fill="#65faa5"/>
+    <path transform="translate(28 28)" d="M2 0H10V1H11V2H12V10H11V11H10V12H2V11H1V10H0V2H1V1H2Z" fill="#65faa5"/>
+  </g>
+</svg>

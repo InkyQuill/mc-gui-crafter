@@ -1,4 +1,5 @@
 <script lang="ts">
+  import appIcon from "../../../assets/branding/app-icon.svg";
   import * as api from "../api";
   import { editor } from "../stores/editor.svelte";
   import { project, ProjectStore } from "../stores/project.svelte";
@@ -97,9 +98,12 @@
 <section class="start-panel" aria-labelledby="start-panel-title">
   <div class="launcher">
     <div class="header">
-      <div>
-        <h1 id="start-panel-title">Start</h1>
-        <p>Open an existing GUI project or create a focused workspace.</p>
+      <div class="brand-heading">
+        <img src={appIcon} alt="" width="48" height="48" />
+        <div>
+          <h1 id="start-panel-title">MCGUI Crafter</h1>
+          <p>Open an existing GUI project or create a focused workspace.</p>
+        </div>
       </div>
 
       <div class="mcp-status" aria-label={`MCP status: ${mcpLabel}`}>
@@ -213,6 +217,16 @@
     align-items: flex-start;
     justify-content: space-between;
     gap: 18px;
+  }
+
+  .brand-heading {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .brand-heading img {
+    flex-shrink: 0;
   }
 
   h1,
