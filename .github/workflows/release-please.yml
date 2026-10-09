@@ -1,0 +1,66 @@
+name: Release please
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: release-please
+  cancel-in-progress: false
+jobs:
+  release-pr:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      actions: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - id: release
+        uses: googleapis/release-please-action@8b8fd2cc23b2e18957157a9d923d75aa0c6f6ad5 # v4
+        with:
+          skip-github-release: true
+          target-branch: main
+      # PRs created with GITHUB_TOKEN do not trigger pull_request workflows.
+      - name: Explicitly check the release PR
+        if: steps.release.outputs.pr != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_PR: ${{ steps.release.outputs.pr }}
+        run: |
+          number=$(jq -er '.number' <<< "$RELEASE_PR")
+          head=$(gh pr view "$number" --json headRefName --jq .headRefName)
+          [[ "$head" == release-please--branches--main* ]]
+          gh auth setup-git
+          git fetch origin "$head"
+          git switch -C "$head" "origin/$head"
+          python3 scripts/release/check-version.py --sync-lock
+          git add src-tauri/Cargo.lock
+          if ! git diff --cached --quiet; then
+            git config user.name 'Pavel Obruchnikov'
+            git config user.email 'me@inkyquill.net'
+            git commit -m 'chore(release): synchronize Cargo lock version'
+            git push origin "$head"
+          fi
+          gh workflow run linux.yml --ref "$head"
+  release:
+    needs: release-pr
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      actions: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Tag merged release PR and dispatch packaging
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash scripts/release/prepare.sh

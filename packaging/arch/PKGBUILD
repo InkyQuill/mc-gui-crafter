@@ -1,0 +1,16 @@
+# Repackage the exact payload produced by Tauri's Debian bundler.
+pkgname=mc-gui-crafter
+pkgver=${RELEASE_VERSION:?Missing RELEASE_VERSION}
+pkgrel=1
+pkgdesc='Desktop GUI editor for Minecraft machine screens'
+arch=('x86_64')
+url='https://github.com/InkyQuill/mc-gui-crafter'
+license=('MIT')
+depends=('webkit2gtk-4.1' 'gtk3' 'glib2' 'gcc-libs' 'glibc' 'openssl')
+options=('!strip' '!debug')
+PKGEXT='.pkg.tar.zst'
+
+package() {
+  cp -a "$startdir/payload/usr" "$pkgdir/"
+  chmod 755 "$pkgdir/usr"
+}

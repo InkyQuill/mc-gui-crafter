@@ -28,3 +28,9 @@ Thumbs.db
 # Environment
 .env
 .env.local
+
+# Release installers
+release-assets/
+
+# Python release-check cache
+__pycache__/
