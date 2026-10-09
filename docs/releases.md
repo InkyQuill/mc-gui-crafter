@@ -16,8 +16,8 @@ Verify downloaded files with `sha256sum --check --ignore-missing SHA256SUMS`.
 Use your package manager so runtime dependencies are installed:
 
 ```sh
-sudo apt install ./MCGUI*.deb          # Debian/Ubuntu
-sudo dnf install ./MCGUI*.rpm          # Fedora
+sudo apt install ./mc-gui-crafter_*.deb          # Debian/Ubuntu
+sudo dnf install ./mc-gui-crafter-*.rpm          # Fedora
 sudo pacman -U ./mc-gui-crafter-*.pkg.tar.zst  # Arch
 ```
 

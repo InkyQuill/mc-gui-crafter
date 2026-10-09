@@ -42,6 +42,25 @@ jobs:
           rpm -qip release-assets/*.rpm
           dpkg-deb --contents release-assets/*.deb
           rpm -qlp release-assets/*.rpm
+      - name: Install and remove Debian package
+        run: |
+          sudo apt-get install -y ./release-assets/*.deb
+          package=$(dpkg-deb -f release-assets/*.deb Package)
+          dpkg --verify "$package"
+          test -x /usr/bin/mc-gui-crafter
+          if ldd /usr/bin/mc-gui-crafter | grep 'not found'; then exit 1; fi
+          sudo apt-get remove -y "$package"
+      - name: Install and remove RPM in Fedora
+        run: |
+          docker run --rm -v "$PWD/release-assets:/packages:ro" fedora:43 bash -euo pipefail -c '
+            dnf install -y /packages/*.rpm
+            package=$(rpm -qp --queryformat "%{NAME}" /packages/*.rpm)
+            rpm --verify "$package"
+            test -x /usr/bin/mc-gui-crafter
+            if ldd /usr/bin/mc-gui-crafter | grep "not found"; then exit 1; fi
+            dnf remove -y "$package"
+          '
+
       - name: Build and install Arch package in a disposable container
         run: scripts/release/package-arch.sh
       - name: Record source identity and checksums
