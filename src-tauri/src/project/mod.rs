@@ -639,19 +639,55 @@ pub struct VisualBounds {
     pub height: u32,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, Hash)]
 pub struct GlyphInfo {
     pub x: u32,
     pub y: u32,
     pub width: u32,
     pub height: u32,
     pub ascent: i32,
-    #[serde(default)]
     pub advance: u32,
-    #[serde(default)]
     pub bearing_x: i32,
-    #[serde(default)]
     pub bearing_y: i32,
+}
+
+impl<'de> Deserialize<'de> for GlyphInfo {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        struct StoredGlyph {
+            x: u32,
+            y: u32,
+            width: u32,
+            height: u32,
+            ascent: i32,
+            #[serde(default)]
+            advance: Option<u32>,
+            #[serde(default)]
+            bearing_x: i32,
+            #[serde(default)]
+            bearing_y: i32,
+        }
+
+        let glyph = StoredGlyph::deserialize(deserializer)?;
+        // Legacy maps omitted advance; explicit zero remains a zero-width glyph.
+        let advance = glyph
+            .advance
+            .unwrap_or(if glyph.width == 0 || glyph.height == 0 {
+                4
+            } else {
+                glyph.width
+            });
+        Ok(Self {
+            x: glyph.x,
+            y: glyph.y,
+            width: glyph.width,
+            height: glyph.height,
+            ascent: glyph.ascent,
+            advance,
+            bearing_x: glyph.bearing_x,
+            bearing_y: glyph.bearing_y,
+        })
+    }
 }
 
 pub type GlyphMap = HashMap<char, GlyphInfo>;
@@ -2294,7 +2330,7 @@ mod tests {
 
         let glyph: GlyphInfo = serde_json::from_value(value).unwrap();
 
-        assert_eq!(glyph.advance, 0);
+        assert_eq!(glyph.advance, 3);
         assert_eq!(glyph.bearing_x, 0);
         assert_eq!(glyph.bearing_y, 0);
     }

@@ -1,9 +1,10 @@
 import { Application, Assets, Container, Graphics, Rectangle, Text, TextStyle, Sprite, Texture, TilingSprite } from "pixi.js";
-import type { AttachedRegion, Element, FontRenderData, GlyphInfo, MinecraftFontProviderRenderData, Layer, NineSlice } from "../types";
+import type { AttachedRegion, Element, FontRenderData, GlyphInfo, Layer, NineSlice } from "../types";
 import { assetDimensions, project } from "../stores/project.svelte";
 import { editor } from "../stores/editor.svelte";
 import { preferences } from "../stores/preferences.svelte";
 import { appendSessionLog } from "../api";
+import { FontProviderCache } from "./font-provider-cache";
 
 const SELECTED_TINT = 0xffff00;
 const LEGACY_BACKGROUND_TEXTURE = "textures/background.png";
@@ -98,6 +99,7 @@ export class GuiRenderer {
   private resizeObserver: ResizeObserver | null = null;
   private cleanupFns: (() => void)[] = [];
   private dragStartPositions = new Map<string, { x: number; y: number }>();
+  private fontProviderCache = new FontProviderCache();
   private glyphTextureCache = new Map<string, Texture>();
   private fontSourceTextureCache = new Map<string, Texture>();
   private textTextureCache = new Map<string, Texture>();
@@ -1640,7 +1642,7 @@ export class GuiRenderer {
 
   private glyphScale(renderData: FontRenderData, ch: string, glyph: GlyphInfo): number {
     if (renderData.source_type !== "minecraft" || glyph.height === 0) return 1;
-    const provider = this.providerForGlyph(renderData.providers, ch);
+    const provider = this.fontProviderCache.get(renderData, ch);
     return (provider?.height ?? 8) / glyph.height;
   }
 
@@ -1728,16 +1730,12 @@ export class GuiRenderer {
     return null;
   }
 
-  private providerForGlyph(providers: MinecraftFontProviderRenderData[], ch: string): MinecraftFontProviderRenderData | undefined {
-    return providers.find(provider => provider.chars.some(row => Array.from(row).includes(ch)));
-  }
-
   private glyphSource(renderData: FontRenderData, ch: string): { dataUrl: string; identity: string } | null {
     if (renderData.source_type === "ttf") {
       return { dataUrl: renderData.atlas_data_url, identity: renderData.atlas_data_url };
     }
 
-    const provider = this.providerForGlyph(renderData.providers, ch);
+    const provider = this.fontProviderCache.get(renderData, ch);
     if (!provider) return null;
     return {
       dataUrl: provider.image_data_url,
