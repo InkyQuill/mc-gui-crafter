@@ -6,9 +6,8 @@
   "packages": {
     ".": {
       "release-type": "node",
-      "versioning": "prerelease",
-      "prerelease": true,
-      "prerelease-type": "alpha",
+      "versioning": "default",
+      "prerelease": false,
       "bump-minor-pre-major": true,
       "extra-files": [
         "src-tauri/tauri.conf.json",

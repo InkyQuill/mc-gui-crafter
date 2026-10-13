@@ -2,8 +2,12 @@
 
 The baseline is GitHub tag `v0.0.1-alpha` at
 `7cc113672b75b8ec1f966e4fee13bb814acf5a71`. The existing tag is never rewritten.
-Release Please considers subsequent Conventional Commits and keeps the alpha
-suffix (`fix` increments the alpha counter; `feat` can advance the minor version).
+Starting with `0.1.1`, releases use plain SemVer without an alpha suffix.
+Release Please uses the default strategy: `fix` increments patch, `feat`
+increments minor, and breaking changes increment minor while the major is zero.
+The transition commit carries `Release-As: 0.1.1` once; subsequent releases are
+automatic. Keep that footer when squash-merging the transition PR, because the
+default strategy otherwise preserves the previous prerelease suffix.
 Version metadata in package.json, Tauri config, Cargo.toml, Cargo.lock and the
 release manifest must agree. The workflow synchronizes Cargo.lock in the release
 PR before dispatching its checks.
@@ -23,7 +27,8 @@ sudo pacman -U ./mc-gui-crafter-*.pkg.tar.zst  # Arch
 
 Packages target x86_64. The CI build uses Ubuntu 24.04 and system WebKitGTK 4.1;
 older distributions are not implicitly supported. Arch pkgver removes the SemVer
-hyphen (`0.1.0-alpha.1` → `0.1.0alpha.1`); it remains an alpha release.
+hyphen for historical alpha tags (`0.1.0-alpha.1` → `0.1.0alpha.1`).
+Plain versions such as `0.1.1` need no conversion.
 
 ## Maintainer workflow
 
@@ -36,11 +41,28 @@ hyphen (`0.1.0-alpha.1` → `0.1.0alpha.1`); it remains an alpha release.
    commit and dispatches `Publish Linux release` on the tag.
 5. All three installers are built and checked before a draft GitHub release is
    created. Checksums and `SOURCE_COMMIT` accompany the packages. The draft is
-   published as a prerelease only after uploads succeed.
+   published only after uploads succeed. Plain versions are normal releases and
+   become Latest; historical alpha tags remain prereleases.
 
 Repository Settings → Actions → General must allow GitHub Actions to create
 pull requests. The workflow requests explicit write permissions for release
 management; package build jobs use read-only repository permissions.
+
+### Bot-created PR approval
+
+Since June 2026, GitHub creates approval-gated `pull_request` runs for PRs
+created or updated with `GITHUB_TOKEN`. Approve them in the PR's Checks tab
+before merging. If approval expires, GitHub shows a red run without jobs or
+build logs: "This workflow run required approval but was not approved before
+it expired." This is separate from the explicitly dispatched `Linux packages`
+run, which must pass on the release PR's latest commit.
+
+A maintainer can rerun an expired check with `gh run rerun RUN_ID`; inspect the
+new attempt before relying on it. Recheck only the final synchronized commit,
+not an intermediate commit whose Cargo.lock has not been updated yet.
+The workflow token cannot approve its own gated runs. Unattended PR-triggered
+checks require a separately configured GitHub App or PAT; the current workflow
+uses no such long-lived credential and keeps explicit dispatch for validation.
 
 If tagging/dispatch fails, rerun the failed release-please job. If packaging or
 upload fails, rerun `Publish Linux release` on the same tag:
