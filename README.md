@@ -28,7 +28,8 @@ Built with **Tauri 2 + Svelte 5 + Rust**.
 
 Linux x86_64 packages are published on [GitHub Releases](https://github.com/InkyQuill/mc-gui-crafter/releases):
 `.deb`, `.rpm`, and `.pkg.tar.zst` for pacman, with `SHA256SUMS`.
-The release line remains alpha, starting from `v0.0.1-alpha`.
+Starting with `0.1.1`, releases use plain `0.x.y` versions without an alpha suffix.
+The `0.x` series is still under active development.
 See [release instructions](docs/releases.md) for installation and maintainer workflows.
 
 ## Documentation

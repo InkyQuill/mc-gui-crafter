@@ -25,7 +25,8 @@ jobs:
         with:
           skip-github-release: true
           target-branch: main
-      # PRs created with GITHUB_TOKEN do not trigger pull_request workflows.
+      # Bot-created PR workflows require maintainer approval. Dispatch a separate
+      # check so release validation does not depend on that approval.
       - name: Explicitly check the release PR
         if: steps.release.outputs.pr != ''
         env:

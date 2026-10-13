@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 python3 scripts/release/check-version.py "$GITHUB_REF_NAME"
+# Historical alpha tags remain prereleases; plain SemVer releases become latest.
+prerelease=false
+latest=true
+if [[ "$GITHUB_REF_NAME" == *-* ]]; then
+  prerelease=true
+  latest=false
+fi
 cd release-assets
 test "$(cat SOURCE_COMMIT)" = "$GITHUB_SHA"
 sha256sum --check SHA256SUMS
@@ -17,7 +24,7 @@ if [[ -n "$existing" ]]; then
   fi
 else
   gh release create "$GITHUB_REF_NAME" --verify-tag --target "$GITHUB_SHA" \
-    --draft --prerelease --title "MCGUI Crafter $GITHUB_REF_NAME" --generate-notes
+    --draft --prerelease="$prerelease" --title "MCGUI Crafter $GITHUB_REF_NAME" --generate-notes
 fi
 gh release upload "$GITHUB_REF_NAME" ./*.deb ./*.rpm ./*.pkg.tar.zst SOURCE_COMMIT SHA256SUMS --clobber
-gh release edit "$GITHUB_REF_NAME" --draft=false --prerelease --latest=false
+gh release edit "$GITHUB_REF_NAME" --draft=false --prerelease="$prerelease" --latest="$latest"
