@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.1.0-alpha.1](https://github.com/InkyQuill/mc-gui-crafter/compare/v0.1.0-alpha...v0.1.0-alpha.1) (2026-10-13)
+
+
+### Bug Fixes
+
+* match Minecraft bitmap font metrics and resolve Clippy diagnostics ([a54f03e](https://github.com/InkyQuill/mc-gui-crafter/commit/a54f03e98fed25c06d45052d6963996313be4241))
+* match Minecraft bitmap font rendering and clean up Clippy ([4da2167](https://github.com/InkyQuill/mc-gui-crafter/commit/4da21673cb541e06fee6d07812255b4b055e6856))
+* preserve legacy glyph advances and cache font providers ([abfdd84](https://github.com/InkyQuill/mc-gui-crafter/commit/abfdd84bf8c38dcdc0d06cae4fdb06603e355dcc))
+
 ## [0.1.0-alpha](https://github.com/InkyQuill/mc-gui-crafter/compare/v0.0.1-alpha...v0.1.0-alpha) (2026-10-09)
 
 
