@@ -274,7 +274,7 @@ pub fn project_resize(
 
     let mut sessions = state.sessions.lock().unwrap();
     let session = sessions.resolve(project_id.as_deref())?;
-    let old_size = session.project.gui_size.clone();
+    let old_size = session.project.gui_size;
     let new_size = crate::project::Size { width, height };
     if old_size == new_size {
         return session_summary(&sessions, &session.id);
@@ -786,6 +786,10 @@ pub fn texture_pack_load(
 }
 
 #[tauri::command(rename_all = "snake_case")]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Tauri command parameters preserve the existing flat IPC export payload"
+)]
 pub fn project_export_preview(
     state: State<AppState>,
     target: String,
@@ -823,6 +827,10 @@ pub fn project_export_preview(
 }
 
 #[tauri::command(rename_all = "snake_case")]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Tauri command parameters preserve the existing flat IPC export payload"
+)]
 pub fn project_export(
     state: State<AppState>,
     target: String,
@@ -968,6 +976,7 @@ fn font_render_data_json(font: &crate::project::FontAsset) -> serde_json::Value 
                 serde_json::json!({
                     "file": provider.file,
                     "ascent": provider.ascent,
+                    "height": provider.height,
                     "chars": provider.chars,
                     "image_width": provider.image_width,
                     "image_height": provider.image_height,

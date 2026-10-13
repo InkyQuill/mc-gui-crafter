@@ -370,6 +370,63 @@ mod tests {
     }
 
     #[test]
+    fn legacy_font_advances_are_restored_on_archive_load_and_round_trip() {
+        let path = temp_project_path();
+        let glyph = serde_json::json!({"x":0,"y":0,"width":6,"height":8,"ascent":7});
+        let mut glyphs = serde_json::json!({"A":glyph,"Z":glyph,"N":glyph," ":glyph,"E":glyph});
+        glyphs["Z"]["advance"] = serde_json::json!(0);
+        glyphs["N"]["advance"] = serde_json::json!(9);
+        glyphs[" "]["height"] = serde_json::json!(0);
+        glyphs["E"]["width"] = serde_json::json!(0);
+        let fonts = serde_json::json!({"fonts":[
+            {"id":"legacy-ttf", "source":{
+                "type":"ttf", "atlas_png":[], "font_size":8, "glyph_map":glyphs
+            }},
+            {"id":"legacy-bitmap", "source":{
+                "type":"minecraft", "providers":[], "glyph_map":glyphs
+            }}
+        ]});
+        {
+            let mut zip = zip::ZipWriter::new(std::fs::File::create(&path).unwrap());
+            for (name, value) in [
+                ("manifest.json", serde_json::json!({"name":"Legacy fonts"})),
+                ("layout.json", serde_json::json!({})),
+                ("fonts.json", fonts),
+            ] {
+                zip.start_file(name, zip::write::SimpleFileOptions::default())
+                    .unwrap();
+                zip.write_all(value.to_string().as_bytes()).unwrap();
+            }
+            zip.finish().unwrap();
+        }
+        let loaded = load_from_mcgui(&path).unwrap();
+        assert_eq!(loaded.fonts.len(), 2);
+        assert_eq!(loaded.fonts[0].id, "legacy-ttf");
+        assert!(matches!(loaded.fonts[0].source, FontSource::Ttf { .. }));
+        assert_eq!(loaded.fonts[1].id, "legacy-bitmap");
+        assert!(matches!(
+            loaded.fonts[1].source,
+            FontSource::Minecraft { .. }
+        ));
+        for font in &loaded.fonts {
+            let glyphs = match &font.source {
+                FontSource::Minecraft { glyph_map, .. } | FontSource::Ttf { glyph_map, .. } => {
+                    glyph_map
+                }
+            };
+            assert_eq!(glyphs[&'A'].advance, 6);
+            assert_eq!(glyphs[&'Z'].advance, 0);
+            assert_eq!(glyphs[&'N'].advance, 9);
+            assert_eq!(glyphs[&' '].advance, 4);
+            assert_eq!(glyphs[&'E'].advance, 4);
+        }
+        save_to_mcgui(&loaded).unwrap();
+        let reloaded = load_from_mcgui(&path).unwrap();
+        assert_eq!(reloaded.fonts, loaded.fonts);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
     fn mcgui_round_trip_preserves_ttf_fonts() {
         let path = temp_project_path();
         let mut project = Project::new("Fonts", 176, 166, ModTarget::Forge);

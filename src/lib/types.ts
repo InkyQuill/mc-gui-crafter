@@ -304,6 +304,7 @@ export interface FontAsset {
 
 export interface MinecraftFontProviderRenderData {
   file: string;
+  height?: number;
   ascent: number;
   chars: string[];
   image_width: number;

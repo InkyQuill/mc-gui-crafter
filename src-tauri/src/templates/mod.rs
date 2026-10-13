@@ -172,8 +172,7 @@ pub fn apply_generated_defaults(project: &mut Project) -> Result<(), String> {
 
 fn slot_grid(
     id_prefix: &str,
-    x: i32,
-    y: i32,
+    (x, y): (i32, i32),
     columns: u32,
     rows: u32,
     slot_role: SlotRole,
@@ -204,8 +203,7 @@ fn slot_grid(
 fn player_inventory_grid() -> Vec<Element> {
     slot_grid(
         PLAYER_INVENTORY_ID,
-        PLAYER_INVENTORY_X,
-        PLAYER_INVENTORY_Y,
+        (PLAYER_INVENTORY_X, PLAYER_INVENTORY_Y),
         9,
         3,
         SlotRole::PlayerInventory,
@@ -217,8 +215,7 @@ fn player_inventory_grid() -> Vec<Element> {
 fn hotbar_grid() -> Vec<Element> {
     slot_grid(
         HOTBAR_ID,
-        HOTBAR_X,
-        HOTBAR_Y,
+        (HOTBAR_X, HOTBAR_Y),
         9,
         1,
         SlotRole::Hotbar,

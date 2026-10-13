@@ -1,9 +1,10 @@
 import { Application, Assets, Container, Graphics, Rectangle, Text, TextStyle, Sprite, Texture, TilingSprite } from "pixi.js";
-import type { AttachedRegion, Element, FontRenderData, GlyphInfo, MinecraftFontProviderRenderData, Layer, NineSlice } from "../types";
+import type { AttachedRegion, Element, FontRenderData, GlyphInfo, Layer, NineSlice } from "../types";
 import { assetDimensions, project } from "../stores/project.svelte";
 import { editor } from "../stores/editor.svelte";
 import { preferences } from "../stores/preferences.svelte";
 import { appendSessionLog } from "../api";
+import { FontProviderCache } from "./font-provider-cache";
 
 const SELECTED_TINT = 0xffff00;
 const LEGACY_BACKGROUND_TEXTURE = "textures/background.png";
@@ -98,6 +99,7 @@ export class GuiRenderer {
   private resizeObserver: ResizeObserver | null = null;
   private cleanupFns: (() => void)[] = [];
   private dragStartPositions = new Map<string, { x: number; y: number }>();
+  private fontProviderCache = new FontProviderCache();
   private glyphTextureCache = new Map<string, Texture>();
   private fontSourceTextureCache = new Map<string, Texture>();
   private textTextureCache = new Map<string, Texture>();
@@ -1454,8 +1456,9 @@ export class GuiRenderer {
         const y = this.glyphYOffset(renderData, glyph, lineAscent);
         minX = Math.min(minX, x);
         minY = Math.min(minY, y);
-        maxX = Math.max(maxX, x + glyph.width);
-        maxY = Math.max(maxY, y + glyph.height);
+        const scale = this.glyphScale(renderData, ch, glyph);
+        maxX = Math.max(maxX, x + glyph.width * scale);
+        maxY = Math.max(maxY, y + glyph.height * scale);
       }
       cursorX += advance;
     }
@@ -1625,6 +1628,7 @@ export class GuiRenderer {
       if (!texture) return null;
 
       const sprite = new Sprite(texture);
+      sprite.scale.set(this.glyphScale(renderData, ch, glyph));
       sprite.x = cursorX + (glyph.bearing_x ?? 0);
       sprite.y = y + this.glyphYOffset(renderData, glyph, lineAscent);
       sprite.tint = tint;
@@ -1636,11 +1640,17 @@ export class GuiRenderer {
     return container;
   }
 
+  private glyphScale(renderData: FontRenderData, ch: string, glyph: GlyphInfo): number {
+    if (renderData.source_type !== "minecraft" || glyph.height === 0) return 1;
+    const provider = this.fontProviderCache.get(renderData, ch);
+    return (provider?.height ?? 8) / glyph.height;
+  }
+
   private glyphAdvance(glyph: GlyphInfo): number {
     if (glyph.width <= 0 || glyph.height <= 0) {
-      return glyph.advance && glyph.advance > 0 ? glyph.advance : 4;
+      return glyph.advance ?? 4;
     }
-    return glyph.advance && glyph.advance > 0 ? glyph.advance : Math.max(glyph.width, 1);
+    return glyph.advance ?? Math.max(glyph.width, 1);
   }
 
   private glyphTexture(renderData: FontRenderData, ch: string, glyph: GlyphInfo): Texture | null {
@@ -1689,6 +1699,7 @@ export class GuiRenderer {
     if (Assets.cache.has(dataUrl)) {
       const texture = Assets.get<Texture>(dataUrl);
       if (texture.source.width > 0 && texture.source.height > 0) {
+        texture.source.scaleMode = "nearest";
         this.fontSourceTextureCache.set(identity, texture);
         this.enforceTextureCacheLimit(this.fontSourceTextureCache, "external-source");
         return texture;
@@ -1702,6 +1713,7 @@ export class GuiRenderer {
           if (this.disposed || !this.ready || !this.loadingFontSources.has(identity)) return;
           if (loaded.source.width <= 0 || loaded.source.height <= 0) return;
 
+          loaded.source.scaleMode = "nearest";
           this.fontSourceTextureCache.set(identity, loaded);
           this.enforceTextureCacheLimit(this.fontSourceTextureCache, "external-source");
           this.clearTextureCache(this.glyphTextureCache, "shared-source");
@@ -1718,16 +1730,12 @@ export class GuiRenderer {
     return null;
   }
 
-  private providerForGlyph(providers: MinecraftFontProviderRenderData[], ch: string): MinecraftFontProviderRenderData | undefined {
-    return providers.find(provider => provider.chars.some(row => Array.from(row).includes(ch)));
-  }
-
   private glyphSource(renderData: FontRenderData, ch: string): { dataUrl: string; identity: string } | null {
     if (renderData.source_type === "ttf") {
       return { dataUrl: renderData.atlas_data_url, identity: renderData.atlas_data_url };
     }
 
-    const provider = this.providerForGlyph(renderData.providers, ch);
+    const provider = this.fontProviderCache.get(renderData, ch);
     if (!provider) return null;
     return {
       dataUrl: provider.image_data_url,
