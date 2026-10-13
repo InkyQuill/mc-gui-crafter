@@ -12,9 +12,9 @@ use crate::project::{
     AssetMetadata, AttachedRegion, AttachedRegionAnchor, AttachedRegionState,
     AttachedRegionStateOverridePatch, CodegenMode, EditScope, Element,
     ElementAttachedRegionStateOverride, ElementStateOverridePatch, ElementType, FillDirection,
-    GroupStateOverride, Layer, ModTarget, NineSliceMode, Project, ProjectExportSettings,
-    ProjectSessionManager, ProjectState, SemanticGroup, SemanticGroupKind, SlotRole,
-    StateOverrideTarget, TextureRenderMode,
+    Layer, ModTarget, NineSliceMode, Project, ProjectExportSettings, ProjectSessionManager,
+    ProjectState, SemanticGroup, SemanticGroupKind, SlotRole, StateOverrideTarget,
+    TextureRenderMode,
 };
 use crate::session_log::{SessionLogEntry, SessionLogLevel};
 use crate::{templates, AppState};
@@ -2133,7 +2133,7 @@ fn project_resize(
     }
 
     let session = sessions.resolve(project_id)?;
-    let old_size = session.project.gui_size.clone();
+    let old_size = session.project.gui_size;
     let new_size = crate::project::Size { width, height };
     if old_size == new_size {
         return Ok(serde_json::json!({
@@ -2146,7 +2146,7 @@ fn project_resize(
 
     sessions.record_history(project_id)?;
     let session = sessions.resolve_mut(project_id)?;
-    session.project.gui_size = new_size.clone();
+    session.project.gui_size = new_size;
     let session_id = session.id.clone();
     sessions.mark_changed(project_id)?;
 
@@ -3173,7 +3173,7 @@ fn apply_group_state_override(
         .or_default()
         .groups
         .entry(group_id.to_string())
-        .or_insert_with(GroupStateOverride::default);
+        .or_default();
     if let Some(value) = visible {
         override_value.visible = value;
     }
@@ -6642,7 +6642,7 @@ mod tests {
 
         let sessions = state.sessions.lock().unwrap();
         let session = sessions.resolve(Some(&project_id)).unwrap();
-        assert!(session.project.asset_metadata.get(asset_name).is_none());
+        assert!(!session.project.asset_metadata.contains_key(asset_name));
         assert!(session.revision > before_revision);
     }
 

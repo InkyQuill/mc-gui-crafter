@@ -1454,8 +1454,9 @@ export class GuiRenderer {
         const y = this.glyphYOffset(renderData, glyph, lineAscent);
         minX = Math.min(minX, x);
         minY = Math.min(minY, y);
-        maxX = Math.max(maxX, x + glyph.width);
-        maxY = Math.max(maxY, y + glyph.height);
+        const scale = this.glyphScale(renderData, ch, glyph);
+        maxX = Math.max(maxX, x + glyph.width * scale);
+        maxY = Math.max(maxY, y + glyph.height * scale);
       }
       cursorX += advance;
     }
@@ -1625,6 +1626,7 @@ export class GuiRenderer {
       if (!texture) return null;
 
       const sprite = new Sprite(texture);
+      sprite.scale.set(this.glyphScale(renderData, ch, glyph));
       sprite.x = cursorX + (glyph.bearing_x ?? 0);
       sprite.y = y + this.glyphYOffset(renderData, glyph, lineAscent);
       sprite.tint = tint;
@@ -1636,11 +1638,17 @@ export class GuiRenderer {
     return container;
   }
 
+  private glyphScale(renderData: FontRenderData, ch: string, glyph: GlyphInfo): number {
+    if (renderData.source_type !== "minecraft" || glyph.height === 0) return 1;
+    const provider = this.providerForGlyph(renderData.providers, ch);
+    return (provider?.height ?? 8) / glyph.height;
+  }
+
   private glyphAdvance(glyph: GlyphInfo): number {
     if (glyph.width <= 0 || glyph.height <= 0) {
-      return glyph.advance && glyph.advance > 0 ? glyph.advance : 4;
+      return glyph.advance ?? 4;
     }
-    return glyph.advance && glyph.advance > 0 ? glyph.advance : Math.max(glyph.width, 1);
+    return glyph.advance ?? Math.max(glyph.width, 1);
   }
 
   private glyphTexture(renderData: FontRenderData, ch: string, glyph: GlyphInfo): Texture | null {
@@ -1689,6 +1697,7 @@ export class GuiRenderer {
     if (Assets.cache.has(dataUrl)) {
       const texture = Assets.get<Texture>(dataUrl);
       if (texture.source.width > 0 && texture.source.height > 0) {
+        texture.source.scaleMode = "nearest";
         this.fontSourceTextureCache.set(identity, texture);
         this.enforceTextureCacheLimit(this.fontSourceTextureCache, "external-source");
         return texture;
@@ -1702,6 +1711,7 @@ export class GuiRenderer {
           if (this.disposed || !this.ready || !this.loadingFontSources.has(identity)) return;
           if (loaded.source.width <= 0 || loaded.source.height <= 0) return;
 
+          loaded.source.scaleMode = "nearest";
           this.fontSourceTextureCache.set(identity, loaded);
           this.enforceTextureCacheLimit(this.fontSourceTextureCache, "external-source");
           this.clearTextureCache(this.glyphTextureCache, "shared-source");

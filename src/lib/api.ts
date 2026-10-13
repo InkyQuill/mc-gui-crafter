@@ -1977,6 +1977,7 @@ async function mockInvoke(cmd: string, args?: Record<string, unknown>): Promise<
         source_type: "minecraft",
         providers: [{
           file: "minecraft:font/ascii.png",
+          height: 1,
           ascent: 7,
           chars: [mockChars],
           image_width: 1,

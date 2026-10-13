@@ -2800,7 +2800,7 @@ mod tests {
         let mut img = RgbaImage::from_pixel(8, 8, Rgba([0, 255, 0, 255]));
         for x in 0..8 {
             for y in 0..8 {
-                if x < 2 || x >= 6 || y < 2 || y >= 6 {
+                if !(2..6).contains(&x) || !(2..6).contains(&y) {
                     img.put_pixel(x, y, Rgba([255, 0, 0, 255]));
                 }
             }

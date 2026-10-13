@@ -656,9 +656,15 @@ pub struct GlyphInfo {
 
 pub type GlyphMap = HashMap<char, GlyphInfo>;
 
+fn default_bitmap_height() -> u32 {
+    8
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct BitmapProvider {
     pub file: String,
+    #[serde(default = "default_bitmap_height")]
+    pub height: u32,
     pub ascent: i32,
     pub chars: Vec<String>,
     #[serde(skip)]
@@ -895,17 +901,12 @@ impl ProjectSession {
     }
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum EditScope {
+    #[default]
     Base,
     State,
-}
-
-impl Default for EditScope {
-    fn default() -> Self {
-        Self::Base
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
